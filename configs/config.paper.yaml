@@ -1,0 +1,14 @@
+# configs/config.paper.yaml
+profile: paper
+lang: ru-RU
+server:
+  host: 127.0.0.1
+  port: 8000
+risk:
+  max_day_drawdown_bps: 300
+  kill_caps:
+    enabled: true
+    flatten_on_breach: true
+obs:
+  metrics_interval_sec: 5
+status_thresholds_file: configs/status_thresholds.yaml

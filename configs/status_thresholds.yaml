@@ -1,0 +1,21 @@
+# configs/status_thresholds.yaml
+slo:
+  ws_gap_ms_p95:
+    local_ok: 400
+    vps_ok: 600
+  order_cycle_ms_p95:
+    local_ok: 200
+    vps_ok: 300
+  reject_rate:
+    ok: 0.5
+  cancel_fail_rate:
+    ok: 0.3
+  recon_mismatch:
+    ok: 0
+  max_day_drawdown_bps:
+    ok: 300
+status:
+  P0_ok_min: 0.8
+  P1_ok_min: 0.7
+  P2_ok_min: 0.6
+  P3_ok_min: 0.5
