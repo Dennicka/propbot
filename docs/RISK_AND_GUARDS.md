@@ -20,14 +20,14 @@
 | `maintenance_calendar` | Текущее время попадает в окно | HOLD до окончания окна |
 
 ## Two-Man Rule
-- `state.two_man_rule=true` → для live-исполнения нужны ≥2 approvals (`/api/ui/approvals`).
+- `control.two_man_rule=true` → для live-исполнения нужны ≥2 approvals (`/api/ui/approvals`).
 - Approvals фиксируются в runtime (`register_approval`).
 
 ## SAFE_MODE
 - По умолчанию `true`, `/api/arb/execute` только dry-run.
 - Для live: изменить конфиг/ENV, выполнить preflight, собрать approvals.
 - `/live-readiness` отражает статус (READY/HOLD) в зависимости от SAFE_MODE и approvals.
-- `/api/ui/state` → раздел `flags` показывает активные значения `SAFE_MODE`, `POST_ONLY`, `REDUCE_ONLY`, `MODE`.
+- `/api/ui/state` → `flags.*` отражают активные значения `SAFE_MODE`, `POST_ONLY`, `REDUCE_ONLY`, `MODE`; блок `control.*` хранит Two-Man Rule и approvals.
 
 ## Incident Handling
 1. Идентифицировать гард (`/api/ui/status/components`).

@@ -42,6 +42,8 @@ def test_smoke_endpoints(client) -> None:
     state_payload = client.get("/api/ui/state").json()
     assert state_payload["flags"]["safe_mode"] is True
     assert state_payload["flags"]["mode"] == "testnet"
+    assert state_payload["control"]["two_man_rule"] is True
+    assert "guards" in state_payload and isinstance(state_payload["guards"], dict)
 
     recon_run = client.post("/api/ui/recon/run")
     assert recon_run.status_code == 200
