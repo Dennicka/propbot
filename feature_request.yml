@@ -1,0 +1,17 @@
+name: Feature request
+description: Предложить улучшение
+title: "[FEAT] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Контекст и цель
+  - type: textarea
+    id: plan
+    attributes:
+      label: Что нужно сделать
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance (как поймём, что готово)

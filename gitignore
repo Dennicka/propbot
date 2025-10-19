@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+.AppleDouble
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+.env
+.env.*
+pip-wheel-metadata/
+
+# Build & Dist
+build/
+dist/
+*.egg-info/
+
+# Editors/IDE
+.vscode/
+.idea/
+*.iml
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Misc
+*.swp
