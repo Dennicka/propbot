@@ -68,10 +68,10 @@ class ControlState:
     def flags(self) -> Dict[str, object]:
         """Expose environment execution flags for UI schemas."""
         return {
-            "mode": self.environment,
-            "safe_mode": self.safe_mode,
-            "post_only": self.post_only,
-            "reduce_only": self.reduce_only,
+            "MODE": self.environment,
+            "SAFE_MODE": self.safe_mode,
+            "POST_ONLY": self.post_only,
+            "REDUCE_ONLY": self.reduce_only,
         }
 
 

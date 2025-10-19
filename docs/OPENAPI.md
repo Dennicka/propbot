@@ -8,7 +8,7 @@
 
 ## UI / Control
 - `GET /api/ui/status/overview|components|slo` — агрегаторы System Status.
-- `GET /api/ui/state` — возвращает `flags.mode|safe_mode|post_only|reduce_only`, блок `control.two_man_rule|approvals`, статусы гардов и действующие SLO/инциденты.
+- `GET /api/ui/state` — возвращает `flags.MODE|SAFE_MODE|POST_ONLY|REDUCE_ONLY`, блок `control.two_man_rule|approvals`, статусы гардов и действующие SLO/инциденты.
 - `GET /api/ui/pnl`, `/api/ui/exposure`, `/api/ui/limits`, `/api/ui/universe`, `/api/ui/execution` — дашборды (бумажные данные).
 - `GET /api/ui/approvals` — список подтверждений.
 - `POST /api/ui/config/{validate,apply,rollback}` — конфиг-пайплайн.

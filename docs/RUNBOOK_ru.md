@@ -16,7 +16,7 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
 
 ## 3. Префлайт и исполнение
 - `POST /api/arb/preview` — обязательный префлайт, проверяются connectivity, фильтры, edge (после комиссий и с учётом slippage).
-- SAFE_MODE `true` ⇒ `/api/arb/execute` возвращает dry-run план с шагами state-machine и rescue-сценарием; проверяйте `flags.safe_mode` и `control.two_man_rule` в `/api/ui/state`.
+- SAFE_MODE `true` ⇒ `/api/arb/execute` возвращает dry-run план с шагами state-machine и rescue-сценарием; проверяйте `flags.SAFE_MODE` и `control.two_man_rule` в `/api/ui/state`.
 - Для реального исполнения (testnet/live):
   1. Два оператора подтверждают запуск через UI `/api/ui/approvals` (Two-Man Rule).
   2. Перезапускаем сервис с `SAFE_MODE=false` (или применяем конфиг) только после зелёного префлайта.
