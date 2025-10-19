@@ -27,6 +27,8 @@ def test_guardrails_toggle_updates_status(client) -> None:
         state_after = _overview(client)
         assert state_after in {"WARN", "HOLD"} or state_after != base
         ctrl = client.get("/api/ui/state").json()
+        assert ctrl["flags"]["safe_mode"] is True
+        assert ctrl["flags"]["mode"] == ctrl["environment"]
         assert ctrl["guards"][guard] == "WARN"
         update_guard(guard, "OK", "reset")
     restored = _overview(client)

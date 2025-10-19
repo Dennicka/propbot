@@ -9,6 +9,7 @@ router = APIRouter()
 @router.get("/state")
 def ui_state() -> dict:
     state = get_state()
+    flags = state.control.flags
     guard_details = {
         name: {
             "status": guard.status,
@@ -19,11 +20,12 @@ def ui_state() -> dict:
         for name, guard in state.guards.items()
     }
     return {
+        "flags": flags,
         "mode": state.control.mode,
-        "safe_mode": state.control.safe_mode,
-        "environment": state.control.environment,
-        "post_only": state.control.post_only,
-        "reduce_only": state.control.reduce_only,
+        "safe_mode": flags["safe_mode"],
+        "environment": flags["mode"],
+        "post_only": flags["post_only"],
+        "reduce_only": flags["reduce_only"],
         "two_man_rule": state.control.two_man_rule,
         "approvals": state.control.approvals,
         "preflight_passed": state.control.preflight_passed,

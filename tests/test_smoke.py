@@ -39,6 +39,10 @@ def test_smoke_endpoints(client) -> None:
     assert preview.status_code == 200
     assert "preflight" in preview.json()
 
+    state_payload = client.get("/api/ui/state").json()
+    assert state_payload["flags"]["safe_mode"] is True
+    assert state_payload["flags"]["mode"] == "testnet"
+
     recon_run = client.post("/api/ui/recon/run")
     assert recon_run.status_code == 200
     assert recon_run.json()["ok"] is True

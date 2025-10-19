@@ -64,6 +64,16 @@ class ControlState:
     last_preflight_ts: str | None = None
     environment: str = "testnet"
 
+    @property
+    def flags(self) -> Dict[str, object]:
+        """Expose environment execution flags for UI schemas."""
+        return {
+            "mode": self.environment,
+            "safe_mode": self.safe_mode,
+            "post_only": self.post_only,
+            "reduce_only": self.reduce_only,
+        }
+
 
 @dataclass
 class MetricsState:

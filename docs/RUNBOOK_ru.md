@@ -5,7 +5,7 @@
 2. Подтянуть переменные (опционально): `export $(grep -v '^#' .env | xargs)` — приложение подгружает `.env` автоматически.
 3. Убедиться в зависимостях: `pip install -r requirements.txt`.
 4. Запустить `PYTHONPATH=. uvicorn app.server_ws:app --host 0.0.0.0 --port 8000`.
-5. Проверить `/api/health`, `/live-readiness`, `/api/status/slo`, `/api/ui/status/overview`, `/api/deriv/status`, `/api/ui/limits`.
+5. Проверить `/api/health`, `/live-readiness`, `/api/status/slo`, `/api/ui/status/overview`, `/api/deriv/status`, `/api/ui/state`, `/api/ui/limits`.
 
 ## 2. Smoke-check
 ```bash
@@ -16,7 +16,7 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
 
 ## 3. Префлайт и исполнение
 - `POST /api/arb/preview` — обязательный префлайт, проверяются connectivity, фильтры, edge (после комиссий и с учётом slippage).
-- SAFE_MODE `true` ⇒ `/api/arb/execute` возвращает dry-run план с шагами state-machine и rescue-сценарием.
+- SAFE_MODE `true` ⇒ `/api/arb/execute` возвращает dry-run план с шагами state-machine и rescue-сценарием; проверяйте `flags.safe_mode` в `/api/ui/state`.
 - Для реального исполнения (testnet/live):
   1. Два оператора подтверждают запуск через UI `/api/ui/approvals` (Two-Man Rule).
   2. Перезапускаем сервис с `SAFE_MODE=false` (или применяем конфиг) только после зелёного префлайта.

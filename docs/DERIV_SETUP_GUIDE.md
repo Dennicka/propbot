@@ -49,7 +49,7 @@ OKX_API_PASSPHRASE_TESTNET=...
 1. Активируйте виртуальное окружение и зависимости (`pip install -r requirements.txt`).
 2. Убедитесь, что профиль `testnet` выбран через `.env` (значение `MODE`).
 3. Запустите сервис: `PYTHONPATH=. uvicorn app.server_ws:app --host 0.0.0.0 --port 8000`.
-4. Проверьте доступность: `/api/health`, `/api/ui/status/overview`, `/api/deriv/status`, `/api/status/slo`.
+4. Проверьте доступность: `/api/health`, `/api/ui/status/overview`, `/api/deriv/status`, `/api/status/slo`, `/api/ui/state` (убедитесь, что `flags.safe_mode=true`).
 
 ## 5. Префлайт и выполнение
 

@@ -8,7 +8,7 @@
 
 ## UI / Control
 - `GET /api/ui/status/overview|components|slo` — агрегаторы System Status.
-- `GET /api/ui/state` — SAFE_MODE, Two-Man Rule, статусы гардов и текущие SLO.
+- `GET /api/ui/state` — SAFE_MODE, Two-Man Rule, статусы гардов и текущие SLO (в т.ч. `flags.mode|safe_mode|post_only|reduce_only`).
 - `GET /api/ui/pnl`, `/api/ui/exposure`, `/api/ui/limits`, `/api/ui/universe`, `/api/ui/execution` — дашборды (бумажные данные).
 - `GET /api/ui/approvals` — список подтверждений.
 - `POST /api/ui/config/{validate,apply,rollback}` — конфиг-пайплайн.
