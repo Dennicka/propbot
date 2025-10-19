@@ -1,35 +1,26 @@
-profile: paper
+profile: testnet
 api:
   base_url: http://127.0.0.1:8000
 guards:
   cancel_on_disconnect: true
-  rate_limit:
-    place_per_min: 300
-    cancel_per_min: 600
-  clock_skew_guard_ms: 200
+  rate_limit: { place_per_min: 300, cancel_per_min: 600 }
+  clock_skew_guard_ms: 150
   snapshot_diff_check: true
-  kill_caps:
-    enabled: true
-    flatten_on_breach: true
-  runaway_breaker:
-    place_per_min: 300
-    cancel_per_min: 600
+  kill_caps: { enabled: true, flatten_on_breach: true }
+  runaway_breaker: { place_per_min: 300, cancel_per_min: 600 }
   maintenance_calendar: []
 risk:
-  max_day_drawdown_bps: 300
   notional_caps:
-    per_symbol_usd: 1000
+    per_symbol_usd: 2000
     per_venue_usd: 5000
     total_usd: 8000
   cross_venue_delta_abs_max_usd: 200
-obs:
-  metrics_interval_sec: 5
 status_thresholds_file: status_thresholds.yaml
 derivatives:
   venues:
     - id: binance_um
       symbols: ["BTCUSDT", "ETHUSDT"]
-      leverage: 5
+      leverage: 10
       margin_type: isolated
       position_mode: hedge
       routing:
@@ -37,7 +28,7 @@ derivatives:
         ws: "wss://stream.binancefuture.com"
     - id: okx_perp
       symbols: ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
-      leverage: 5
+      leverage: 10
       margin_type: isolated
       position_mode: hedge
       routing:
@@ -57,7 +48,9 @@ derivatives:
     partial_fill_policy: reject_if_unhedged
   fees:
     source: "auto"
-    manual: {}
+    manual:
+      binance_um: { maker_bps: 1.8, taker_bps: 3.6 }
+      okx_perp: { maker_bps: 2.0, taker_bps: 5.0 }
   funding:
     include_next_window: true
     avoid_window_minutes: 5
