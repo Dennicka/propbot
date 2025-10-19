@@ -1,0 +1,58 @@
+name: Testnet Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      MODE: testnet
+      SAFE_MODE: "true"
+      POST_ONLY: "true"
+      REDUCE_ONLY: "true"
+      BINANCE_UM_API_KEY_TESTNET: ${{ secrets.BINANCE_UM_API_KEY_TESTNET }}
+      BINANCE_UM_API_SECRET_TESTNET: ${{ secrets.BINANCE_UM_API_SECRET_TESTNET }}
+      OKX_API_KEY_TESTNET: ${{ secrets.OKX_API_KEY_TESTNET }}
+      OKX_API_SECRET_TESTNET: ${{ secrets.OKX_API_SECRET_TESTNET }}
+      OKX_API_PASSPHRASE_TESTNET: ${{ secrets.OKX_API_PASSPHRASE_TESTNET }}
+      ENABLE_PLACE_TEST_ORDERS: ${{ secrets.ENABLE_PLACE_TEST_ORDERS || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run testnet smoke
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          uvicorn app.server_ws:app --host 127.0.0.1 --port 8000 > logs/uvicorn.log 2>&1 &
+          UVICORN_PID=$!
+          trap 'kill "$UVICORN_PID"' EXIT
+          sleep 5
+          python - <<'PY'
+import httpx
+urls = [
+    "http://127.0.0.1:8000/api/status/slo",
+    "http://127.0.0.1:8000/api/status/components",
+    "http://127.0.0.1:8000/api/ui/limits",
+    "http://127.0.0.1:8000/api/ui/control-state",
+]
+for url in urls:
+    resp = httpx.get(url, timeout=5.0)
+    resp.raise_for_status()
+PY
+          python scripts/testnet_smoke.py --log logs/testnet_smoke.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-smoke-logs
+          path: logs/

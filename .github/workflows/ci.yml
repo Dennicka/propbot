@@ -1,26 +1,23 @@
 name: CI
 on:
-  workflow_dispatch:        # кнопка "Run workflow"
-  push:
-    branches: ["main","epic/**","feature/**"]
   pull_request:
-    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Create venv
-        run: python -m venv .venv
+          cache: "pip"
+
       - name: Install dependencies
-        run: |
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+        run: pip install -r requirements.txt
+
       - name: Run tests
-        run: . .venv/bin/activate && pytest -q || true
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q

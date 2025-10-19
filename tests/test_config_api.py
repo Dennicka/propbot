@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from app.services.runtime import get_state
+
+
+def _config_path() -> Path:
+    return Path(get_state().config.path)
+
+
+def test_config_validate_apply_rollback(client) -> None:
+    config_path = _config_path()
+    original = config_path.read_text(encoding="utf-8")
+
+    # positive validation
+    resp = client.post("/api/ui/config/validate", json={"yaml_text": original})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    # negative validation (missing profile)
+    bad_resp = client.post("/api/ui/config/validate", json={"yaml_text": "{}"})
+    assert bad_resp.status_code == 400
+
+    data = yaml.safe_load(original)
+    data["risk"]["max_day_drawdown_bps"] = 123
+    new_yaml = yaml.safe_dump(data)
+
+    apply_resp = client.post("/api/ui/config/apply", json={"yaml_text": new_yaml})
+    assert apply_resp.status_code == 200
+    token = apply_resp.json()["rollback_token"]
+    assert config_path.read_text(encoding="utf-8") == new_yaml
+
+    rollback_resp = client.post("/api/ui/config/rollback", json={"token": token})
+    assert rollback_resp.status_code == 200
+    assert config_path.read_text(encoding="utf-8") == original
