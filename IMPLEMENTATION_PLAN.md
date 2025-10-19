@@ -9,7 +9,7 @@
 
 ## 2) API/контракты
 - health: GET /api/health (200, build/version), GET /live-readiness.
-- UI: /api/ui/{execution,pnl,exposure,control-state}.
+- UI: /api/ui/{execution,pnl,exposure,state}.
 - Recon: /api/ui/recon/{status,run,history}.
 - Stream: WS /api/ui/stream (события) + /api/ui/status/stream.
 - Config: /api/ui/config/{validate,apply,rollback}.

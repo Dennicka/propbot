@@ -22,7 +22,7 @@
    - `GET /api/health`, `GET /live-readiness`, `GET /metrics`, `GET /metrics/latency`, `GET /api/opportunities`
    - `GET /api/ui/status/{overview,components,slo}`
    - `POST /api/ui/config/{validate,apply,rollback}`
-   - `GET /api/ui/{execution,pnl,exposure,control-state,limits,universe,approvals}`
+   - `GET /api/ui/{execution,pnl,exposure,state,limits,universe,approvals}`
    - `GET /api/ui/recon/*` (at least stubs)
    - `WS /api/ui/stream`
 2. **P0 guardrails wired** (config‑driven; mocks accepted): cancel‑on‑disconnect, rate‑limit governor, clock‑skew guard, snapshot+diff continuity, kill‑caps, runaway breaker, maintenance calendar, key‑escrow/two‑man placeholders.
@@ -54,7 +54,7 @@
 3. **Add missing configs** — create files from templates in §6.
 4. **Routers** — ensure all endpoints exist; fill stubs to return valid shapes from §3; wire into `app/server_ws.py`.
 5. **System Status backend** — implement aggregator in `app/services/status.py`; read SLO thresholds; expose ≥20 components; tie guardrail signals.
-6. **Guardrails** — implement toggles and state flags; propagate to status + `control-state`; acceptance in §5.
+6. **Guardrails** — implement toggles and state flags; propagate to status + `/api/ui/state`; acceptance in §5.
 7. **Metrics** — ensure `/metrics` (Prometheus) and add `/metrics/latency` histogram endpoints.
 8. **Docs** — generate/update from §7.
 9. **Tests** — add tests from §8; run `pytest -q`; increase coverage ≥60%.
@@ -116,7 +116,7 @@
 
 ## 4) Guardrails (P0) — behavior & acceptance
 
-- **cancel_on_disconnect**: if enabled and a simulated disconnect is triggered, set `overall="HOLD"`, raise component `connection` to WARN/ERROR; acceptance: toggling changes overview + control-state.
+- **cancel_on_disconnect**: if enabled and a simulated disconnect is triggered, set `overall="HOLD"`, raise component `connection` to WARN/ERROR; acceptance: toggling changes overview + `/api/ui/state`.
 - **rate_limit**: counters per minute (`place_per_min`, `cancel_per_min`); if threshold exceeded ⇒ component WARN and refuse simulated action; acceptance: unit test flips status.
 - **clock_skew_guard_ms**: if skew > threshold ⇒ component ERROR + HOLD; acceptance: inject skew in test.
 - **snapshot_diff_check**: if gap detected ⇒ component WARN + “reinit required”; acceptance: mock gap.
@@ -316,7 +316,7 @@ echo "[OK] Rolled back to $PREV"
 ## 13) Definition of Done (must be true)
 - ✅ Все эндпоинты отвечают 200 и соответствуют схемам.
 - ✅ System Status ≥20 компонент; SLO-панель читает пороги из YAML; WS-стрим тикает.
-- ✅ P0‑гарды переключаются и видны в статусе; HOLD отражается в `control-state`.
+- ✅ P0‑гарды переключаются и видны в статусе; HOLD отражается в `/api/ui/state`.
 - ✅ Все тесты зелёные; coverage ≥60%; CI блокирует merge до зелёного.
 - ✅ `deploy/release.sh`/`rollback.sh` присутствуют; сервис‑юниты валидны.
 - ✅ PR mergeable (нет конфликтов); есть CHANGELOG и REPORT.

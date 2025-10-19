@@ -20,7 +20,7 @@ def test_smoke_endpoints(client) -> None:
         "/api/ui/status/overview",
         "/api/ui/status/components",
         "/api/ui/status/slo",
-        "/api/ui/control-state",
+        "/api/ui/state",
         "/api/ui/execution",
         "/api/ui/pnl",
         "/api/ui/exposure",

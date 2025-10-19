@@ -20,7 +20,7 @@
 | `maintenance_calendar` | Текущее время попадает в окно | HOLD до окончания окна |
 
 ## Two-Man Rule
-- `control-state.two_man_rule=true` → для live-исполнения нужны ≥2 approvals (`/api/ui/approvals`).
+- `state.two_man_rule=true` → для live-исполнения нужны ≥2 approvals (`/api/ui/approvals`).
 - Approvals фиксируются в runtime (`register_approval`).
 
 ## SAFE_MODE

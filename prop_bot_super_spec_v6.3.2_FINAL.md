@@ -31,7 +31,7 @@ PYTHONPATH="$PROJECT${PYTHONPATH:+:$PYTHONPATH}"
 
 ## §2. API / эндпоинты (минимум, совместимые)
 - `/api/health`, `/live-readiness`, `/openapi.json`
-- `/api/ui/control-state`, `/api/ui/{execution,pnl,exposure}`
+- `/api/ui/state`, `/api/ui/{execution,pnl,exposure}`
 - `/api/ui/recon/*`, `/api/ui/stream`, `/api/ui/approvals`, `/api/ui/limits`, `/api/ui/universe`
 - `/api/ui/config/{validate,apply,rollback}`
 - `/api/ui/status/{overview,components,slo}` и WS `/api/ui/status/stream`

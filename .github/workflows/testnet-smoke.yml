@@ -2,6 +2,8 @@ name: Testnet Smoke
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
 
 jobs:
   smoke:
@@ -42,7 +44,7 @@ urls = [
     "http://127.0.0.1:8000/api/status/slo",
     "http://127.0.0.1:8000/api/status/components",
     "http://127.0.0.1:8000/api/ui/limits",
-    "http://127.0.0.1:8000/api/ui/control-state",
+    "http://127.0.0.1:8000/api/ui/state",
 ]
 for url in urls:
     resp = httpx.get(url, timeout=5.0)
