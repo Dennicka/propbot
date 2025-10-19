@@ -8,9 +8,26 @@ from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
 from .util.logging import setup_logging
 from .services.status import get_status_overview, get_status_components, get_status_slo
-from .routers import health, ui_config, opportunities, ui_status, ui_stream, ui_recon, ui_exec
-from .routers import ui_pnl, ui_exposure, ui_control_state, live, metrics_latency
-from .routers import ui_approvals, ui_limits, ui_universe
+from .routers import (
+    health,
+    ui_config,
+    opportunities,
+    ui_status,
+    ui_stream,
+    ui_recon,
+    ui_exec,
+    ui_pnl,
+    ui_exposure,
+    ui_control_state,
+    live,
+    metrics_latency,
+    ui_approvals,
+    ui_limits,
+    ui_universe,
+    arb,
+    deriv,
+    hedge,
+)
 
 setup_logging()
 
@@ -37,6 +54,9 @@ app.include_router(ui_pnl.router, prefix="/api/ui")
 app.include_router(ui_exposure.router, prefix="/api/ui")
 app.include_router(ui_control_state.router, prefix="/api/ui")
 app.include_router(metrics_latency.router, prefix="/metrics")
+app.include_router(arb.router, prefix="/api/arb")
+app.include_router(deriv.router, prefix="/api/deriv")
+app.include_router(hedge.router, prefix="/api/hedge")
 
 # Prometheus metrics endpoint
 @app.get("/metrics")

@@ -1,10 +1,10 @@
 name: CI
 on:
-  workflow_dispatch:        # кнопка "Run workflow"
   push:
-    branches: ["main","epic/**","feature/**"]
+    branches: ["main", "epic/**", "feature/**"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -20,7 +20,9 @@ jobs:
         run: |
           . .venv/bin/activate
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-      - name: Run tests
-        run: . .venv/bin/activate && pytest -q || true
+          pip install -r requirements.txt
+      - name: Run tests with coverage
+        run: |
+          . .venv/bin/activate
+          coverage run -m pytest -q
+          coverage report --fail-under=60
