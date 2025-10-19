@@ -8,7 +8,8 @@
 ## Основные компоненты
 - `app/services/arbitrage.py` — расчёт edge, state-machine (IDLE → PREFLIGHT → LEG_A → LEG_B → HEDGED → DONE, rescue).
 - `app/services/derivatives.py` — runtime адаптеров и бумажных позиций.
-- `app/exchanges/binance_um.py` / `okx_perp.py` — in-memory клиенты (расширяемые до реальных REST/WS).
+- `app/exchanges/binance_um.py` — реальный REST-клиент Binance testnet с SAFE_MODE fallback.
+- `app/exchanges/okx_perp.py` — реальный REST-клиент OKX demo (подпись, tdMode, posSide, reduceOnly).
 
 ## API
 | Endpoint | Описание |
@@ -24,6 +25,7 @@
 ## Эджи и риски
 - Edge = `(short_bid - long_ask)/mid * 10_000 - fees - slippage`.
 - `configs/config.<profile>.yaml` задаёт `min_edge_bps`, `max_leg_slippage_bps`, notional caps и delta limits.
+- По умолчанию используется `IOC` режим (чтобы не оставлять незахеджированные хвосты); при `post_only_maker=true` ордера выставляются `LIMIT`/Post Only на уровнях `bid/ask`.
 - В SAFE_MODE исполнение не открывает позиций, но журналирует план.
 
 ## Rescue / Incidents
@@ -33,3 +35,11 @@
 ## Метрики
 - `/api/ui/status/components` отображает компоненты `arb_engine`, `deriv_*` и `Incident Journal`.
 - `metrics.counters` содержит `dry_runs`, `executions`, `rescues` (доступно через `/api/ui/status/components`).
+
+## Быстрый чеклист testnet
+
+1. Подготовьте `.env` (см. `docs/DERIV_SETUP_GUIDE.md`) и запустите сервис с `EXCHANGE_PROFILE=testnet`.
+2. Убедитесь, что `/api/deriv/status` отображает `connected=true` по обоим venue.
+3. Выполните `POST /api/arb/preview` — префлайт и расчёт edge после комиссий.
+4. Для реального исполнения снимите SAFE_MODE (после двух approvals) и вызовите `POST /api/arb/execute`.
+5. В завершение дня вызовите `POST /api/hedge/flatten` для закрытия позиций на обеих биржах.

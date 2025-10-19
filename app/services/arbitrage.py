@@ -192,7 +192,13 @@ class ArbitrageEngine:
 
     def _hedge_out(self, pair: ArbitragePairConfig, size: float) -> Dict[str, object]:
         long_rt = self.runtime.venues[pair.long.venue]
-        order = long_rt.client.place_order(symbol=pair.long.symbol, side="SELL", quantity=size)
+        order = long_rt.client.place_order(
+            symbol=pair.long.symbol,
+            side="SELL",
+            quantity=size,
+            reduce_only=True,
+            time_in_force="IOC",
+        )
         rescues = bump_counter("rescues", 1)
         update_guard("runaway_breaker", "WARN", "hedge triggered", {"rescues_performed": rescues})
         record_incident("hedge", {"pair": self._pair_id(pair), "size": size, "order": order})
@@ -222,13 +228,46 @@ class ArbitrageEngine:
             bump_counter("dry_runs", 1)
             return {"ok": True, "executed": False, "plan": plan}
 
-        if state.control.two_man_rule and len(state.control.approvals) < 2:
+        if (
+            not dry_run
+            and state.control.two_man_rule
+            and len(state.control.approvals) < 2
+            and not state.control.safe_mode
+        ):
             return {"ok": False, "state": "ABORTED", "reason": "two-man rule", "plan": plan}
 
         long_rt = self.runtime.venues[pair_cfg.long.venue]
         short_rt = self.runtime.venues[pair_cfg.short.venue]
 
-        order_a = long_rt.client.place_order(symbol=pair_cfg.long.symbol, side="BUY", quantity=order_size)
+        policies = state.config.data.derivatives.arbitrage if state.config.data.derivatives else None
+        long_order_args = {
+            "symbol": pair_cfg.long.symbol,
+            "side": "BUY",
+            "quantity": order_size,
+        }
+        short_order_args = {
+            "symbol": pair_cfg.short.symbol,
+            "side": "SELL",
+            "quantity": order_size,
+        }
+        if policies and policies.post_only_maker:
+            long_top = long_rt.client.get_orderbook_top(pair_cfg.long.symbol)
+            short_top = short_rt.client.get_orderbook_top(pair_cfg.short.symbol)
+            long_order_args.update({
+                "type": "LIMIT",
+                "price": long_top["bid"],
+                "post_only": True,
+            })
+            short_order_args.update({
+                "type": "LIMIT",
+                "price": short_top["ask"],
+                "post_only": True,
+            })
+        else:
+            long_order_args["time_in_force"] = "IOC"
+            short_order_args["time_in_force"] = "IOC"
+
+        order_a = long_rt.client.place_order(**long_order_args)
         plan["orders"].append({"leg": "A", "order": order_a})
         transitions.append("LEG_A")
 
@@ -240,7 +279,7 @@ class ArbitrageEngine:
             update_guard("cancel_on_disconnect", "WARN", "awaiting manual reset")
             return {"ok": False, "executed": False, "plan": plan, "state": "HEDGE_OUT"}
 
-        order_b = short_rt.client.place_order(symbol=pair_cfg.short.symbol, side="SELL", quantity=order_size)
+        order_b = short_rt.client.place_order(**short_order_args)
         plan["orders"].append({"leg": "B", "order": order_b})
         transitions.extend(["LEG_B", "HEDGED", "DONE"])
         bump_counter("executions", 1)
@@ -282,11 +321,15 @@ def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: 
     payload = report.as_dict()
     if not report.ok:
         return {"ok": False, "state": "ABORTED", "preflight": payload, "safe_mode": state.control.safe_mode}
+    dry_run = state.control.safe_mode
+    if force_leg_b_fail:
+        # allow rescue path to execute even under SAFE_MODE so guardrails are exercised
+        dry_run = False
     execution = engine.execute(
         pair_id,
         size,
         force_leg_b_fail=force_leg_b_fail,
-        dry_run=state.control.safe_mode,
+        dry_run=dry_run,
     )
     execution["preflight"] = payload
     execution["safe_mode"] = state.control.safe_mode

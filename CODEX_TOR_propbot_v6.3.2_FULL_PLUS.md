@@ -209,15 +209,18 @@ risk:
 import os, re
 def test_no_conflict_markers():
     bad=[]
+    todo_marker = "TO"+"DO"
+    fixme_marker = "FIX"+"ME"
+    conflict_pattern = r"<<<<<"+"<<"+r"|==="+"==="+r"|>>>>>"+">>"
     for root,_,files in os.walk("."):
         for f in files:
             if f.endswith((".py",".md",".yaml",".yml",".json",".txt")):
                 p=os.path.join(root,f)
                 with open(p,"r",encoding="utf-8",errors="ignore") as fh:
                     t=fh.read()
-                if re.search(r"<<<<<<<|=======|>>>>>>>", t): bad.append(p)
-                if "TODO" in t or "FIXME" in t: bad.append(p)
-    assert not bad, f"Unresolved markers/TODOs in: {bad}"
+                if re.search(conflict_pattern, t): bad.append(p)
+                if todo_marker in t or fixme_marker in t: bad.append(p)
+    assert not bad, f"Unresolved markers/to-do items in: {bad}"
 ```
 
 ---

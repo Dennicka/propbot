@@ -4,14 +4,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 from ..core.config import DerivVenueConfig, LoadedConfig
-from ..exchanges import InMemoryDerivClient
+from ..exchanges import DerivClient, InMemoryDerivClient
 from ..exchanges import binance_um, okx_perp
 
 
 @dataclass
 class VenueRuntime:
     config: DerivVenueConfig
-    client: InMemoryDerivClient
+    client: DerivClient
 
 
 @dataclass
@@ -27,15 +27,16 @@ class DerivativesRuntime:
         self.venues = {}
         for venue_cfg in cfg.derivatives.venues:
             if venue_cfg.id == "binance_um":
-                client = binance_um.create_client(venue_cfg.symbols, safe_mode=safe_mode)
+                client = binance_um.create_client(venue_cfg, safe_mode=safe_mode)
             elif venue_cfg.id == "okx_perp":
-                client = okx_perp.create_client(venue_cfg.symbols, safe_mode=safe_mode)
+                client = okx_perp.create_client(venue_cfg, safe_mode=safe_mode)
             else:
                 client = InMemoryDerivClient(venue=venue_cfg.id, symbols={})
             runtime = VenueRuntime(config=venue_cfg, client=client)
+            client.set_position_mode(venue_cfg.position_mode)
             for symbol in venue_cfg.symbols:
-                client.margin_type.setdefault(symbol, venue_cfg.margin_type)
-                client.leverage.setdefault(symbol, venue_cfg.leverage)
+                client.set_margin_type(symbol, venue_cfg.margin_type)
+                client.set_leverage(symbol, venue_cfg.leverage)
             self.venues[venue_cfg.id] = runtime
 
     def status_payload(self) -> Dict[str, object]:
