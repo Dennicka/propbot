@@ -31,3 +31,15 @@ def test_config_validate_apply_rollback(client) -> None:
     rollback_resp = client.post("/api/ui/config/rollback", json={"token": token})
     assert rollback_resp.status_code == 200
     assert CONFIG_PATH.read_text(encoding="utf-8") == original
+
+    state_resp = client.get("/api/ui/state")
+    assert state_resp.status_code == 200
+    payload = state_resp.json()
+    assert "flags" in payload
+    flags = payload["flags"]
+    assert set(flags.keys()) == {"MODE", "SAFE_MODE", "POST_ONLY", "REDUCE_ONLY", "ENV"}
+    assert isinstance(flags["MODE"], str)
+    assert isinstance(flags["ENV"], str)
+    assert isinstance(flags["SAFE_MODE"], bool)
+    assert isinstance(flags["POST_ONLY"], bool)
+    assert isinstance(flags["REDUCE_ONLY"], bool)

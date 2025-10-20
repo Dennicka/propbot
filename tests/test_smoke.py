@@ -21,6 +21,7 @@ def test_smoke_endpoints(client) -> None:
         "/api/ui/status/components",
         "/api/ui/status/slo",
         "/api/ui/control-state",
+        "/api/ui/state",
         "/api/ui/execution",
         "/api/ui/pnl",
         "/api/ui/exposure",
@@ -34,6 +35,11 @@ def test_smoke_endpoints(client) -> None:
         "/api/arb/edge",
     ]
     _assert_all_ok(client, get_endpoints)
+
+    ui_state = client.get("/api/ui/state").json()
+    assert "flags" in ui_state
+    for key in ["MODE", "SAFE_MODE", "POST_ONLY", "REDUCE_ONLY", "ENV"]:
+        assert key in ui_state["flags"]
 
     preview = client.post("/api/arb/preview", json={})
     assert preview.status_code == 200
