@@ -38,3 +38,4 @@ curl -s http://127.0.0.1:8000/api/ui/status/overview | jq
 pytest -q
 ```
 Workflow `.github/workflows/ci.yml` запускает pytest + coverage (≥60%) и блокирует merge до зелёного статуса.
+
