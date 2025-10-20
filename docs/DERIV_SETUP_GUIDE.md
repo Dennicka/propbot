@@ -51,6 +51,20 @@ OKX_API_PASSPHRASE_TESTNET=...
 2. Убедитесь, что профиль `testnet` выбран через `.env`.
 3. Запустите сервис: `uvicorn app.server_ws:app --host 0.0.0.0 --port 8000`.
 4. Проверьте доступность: `/api/health`, `/api/ui/status/overview`, `/api/deriv/status`.
+5. Просмотрите флаги исполнения:
+   ```bash
+   curl -s http://127.0.0.1:8000/api/ui/state | jq '.flags'
+   ```
+   Пример ответа:
+   ```json
+   {
+     "MODE": "testnet",
+     "SAFE_MODE": true,
+     "POST_ONLY": true,
+     "REDUCE_ONLY": false,
+     "ENV": "testnet"
+   }
+   ```
 
 ## 5. Префлайт и выполнение
 

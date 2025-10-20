@@ -49,6 +49,20 @@ class ControlState:
     approvals: Dict[str, str] = field(default_factory=dict)
     preflight_passed: bool = False
     last_preflight_ts: str | None = None
+    deployment_mode: str = "paper"
+    post_only: bool = True
+    reduce_only: bool = False
+    environment: str = "paper"
+
+    @property
+    def flags(self) -> Dict[str, object]:
+        return {
+            "MODE": self.deployment_mode,
+            "SAFE_MODE": self.safe_mode,
+            "POST_ONLY": self.post_only,
+            "REDUCE_ONLY": self.reduce_only,
+            "ENV": self.environment,
+        }
 
 
 @dataclass
@@ -111,7 +125,16 @@ def _bootstrap_runtime() -> RuntimeState:
     config_path = _resolve_config_path()
     loaded = load_app_config(config_path)
     safe_mode = _env_flag("SAFE_MODE", True)
-    control = ControlState(mode="HOLD" if safe_mode else "RUN", safe_mode=safe_mode)
+    profile = os.environ.get("EXCHANGE_PROFILE", "paper").lower()
+    environment = os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
+    control = ControlState(
+        mode="HOLD" if safe_mode else "RUN",
+        safe_mode=safe_mode,
+        deployment_mode=profile,
+        post_only=_env_flag("POST_ONLY", True),
+        reduce_only=_env_flag("REDUCE_ONLY", False),
+        environment=environment,
+    )
     guards = _init_guards(loaded)
     metrics = MetricsState()
     derivatives = bootstrap_derivatives(loaded, safe_mode=safe_mode)

@@ -6,6 +6,7 @@
 3. Убедиться в зависимостях: `pip install -r requirements.txt`.
 4. Запустить `uvicorn app.server_ws:app --host 0.0.0.0 --port 8000`.
 5. Проверить `/api/health`, `/live-readiness`, `/api/ui/status/overview`, `/api/deriv/status`.
+6. Зафиксировать `/api/ui/state` → блок `flags` показывает `MODE`, `SAFE_MODE`, `POST_ONLY`, `REDUCE_ONLY`, `ENV`.
 
 ## 2. Smoke-check
 ```bash
