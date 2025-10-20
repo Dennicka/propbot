@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Literal, Tuple
 
 from ..core.config import ArbitragePairConfig
 from .derivatives import DerivativesRuntime
@@ -34,6 +34,57 @@ class PreflightReport:
                 for check in self.checks
             ],
         }
+
+
+@dataclass
+class PlanLeg:
+    exchange: str
+    symbol: str
+    side: Literal["buy", "sell"]
+    qty: float
+    price: float | None = None
+
+
+@dataclass
+class Plan:
+    legs: List[PlanLeg]
+    notes: List[str] = field(default_factory=list)
+
+
+def build_plan(payload: Dict[str, Any]) -> Plan:
+    symbol_raw = payload.get("symbol") or payload.get("pair") or "UNKNOWN"
+    symbol = str(symbol_raw)
+    qty_value = payload.get("qty")
+    if qty_value is None:
+        qty_value = payload.get("size", 0.0)
+    try:
+        qty = float(qty_value)
+    except (TypeError, ValueError):
+        qty = 0.0
+    legs = [
+        PlanLeg(exchange="sim-long", symbol=symbol, side="buy", qty=qty, price=None),
+        PlanLeg(exchange="sim-short", symbol=symbol, side="sell", qty=qty, price=None),
+    ]
+    notes = [f"simulated plan for {symbol}"]
+    return Plan(legs=legs, notes=notes)
+
+
+def plan_as_dict(plan: Plan) -> Dict[str, Any]:
+    return asdict(plan)
+
+
+def execute_plan(
+    plan: Plan, *, safe_mode: bool, two_man_ok: bool, dry_run: bool
+) -> Dict[str, Any]:
+    if safe_mode:
+        blocked_by = "safe_mode"
+    elif dry_run:
+        blocked_by = "dry_run"
+    elif not two_man_ok:
+        blocked_by = "two_man_rule"
+    else:
+        blocked_by = "not_implemented"
+    return {"executed": False, "blocked_by": blocked_by, "plan": plan_as_dict(plan)}
 
 
 class ArbitrageEngine:
