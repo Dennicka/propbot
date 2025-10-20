@@ -51,3 +51,11 @@ def test_rescue_triggers_guard_and_incident(client) -> None:
     assert ctrl["guards"]["runaway_breaker"] in {"WARN", "HOLD"}
     incidents = get_state().incidents
     assert any(item["kind"] == "hedge" for item in incidents)
+
+
+def test_execute_endpoint_blocked_by_safe_mode(client) -> None:
+    response = client.post("/api/arb/execute", json={"symbol": "BTCUSDT", "qty": 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["executed"] is False
+    assert data["blocked_by"] == "safe_mode"
