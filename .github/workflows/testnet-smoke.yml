@@ -1,0 +1,13 @@
+name: Testnet Smoke
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'   # раз в сутки, 03:00 UTC
+
+jobs:
+  smoke:
+    if: github.ref_name == 'main'   # на PR не бежит
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Smoke runs only on main or manual dispatch (secrets required)."
