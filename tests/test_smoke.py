@@ -1,28 +1,50 @@
-import asyncio
-import pytest
-from httpx import AsyncClient
-from app.server_ws import app
+from __future__ import annotations
 
-@pytest.mark.asyncio
-async def test_health_and_openapi():
-    async with AsyncClient(app=app, base_url='http://test') as ac:
-        r = await ac.get('/api/health')
-        assert r.status_code == 200
-        r2 = await ac.get('/openapi.json')
-        assert r2.status_code == 200
+from typing import Iterable
 
-@pytest.mark.asyncio
-async def test_ui_endpoints():
-    async with AsyncClient(app=app, base_url='http://test') as ac:
-        for path in ['/api/ui/execution','/api/ui/pnl','/api/ui/exposure','/api/ui/control-state','/api/ui/approvals','/api/ui/limits','/api/ui/universe']:
-            r = await ac.get(path)
-            assert r.status_code == 200
-        r = await ac.get('/api/opportunities')
-        assert r.status_code == 200
 
-@pytest.mark.asyncio
-async def test_status_endpoints():
-    async with AsyncClient(app=app, base_url='http://test') as ac:
-        for path in ['/api/ui/status/overview','/api/ui/status/components','/api/ui/status/slo']:
-            r = await ac.get(path)
-            assert r.status_code == 200
+def _assert_all_ok(client, endpoints: Iterable[str]) -> None:
+    for endpoint in endpoints:
+        response = client.get(endpoint)
+        assert response.status_code == 200, endpoint
+
+
+def test_smoke_endpoints(client) -> None:
+    get_endpoints = [
+        "/api/health",
+        "/openapi.json",
+        "/metrics",
+        "/metrics/latency",
+        "/live-readiness",
+        "/api/opportunities",
+        "/api/ui/status/overview",
+        "/api/ui/status/components",
+        "/api/ui/status/slo",
+        "/api/ui/state",
+        "/api/ui/execution",
+        "/api/ui/pnl",
+        "/api/ui/exposure",
+        "/api/ui/limits",
+        "/api/ui/universe",
+        "/api/ui/approvals",
+        "/api/ui/recon/status",
+        "/api/ui/recon/history",
+        "/api/deriv/status",
+        "/api/deriv/positions",
+        "/api/arb/edge",
+    ]
+    _assert_all_ok(client, get_endpoints)
+
+    preview = client.post("/api/arb/preview", json={})
+    assert preview.status_code == 200
+    assert "preflight" in preview.json()
+
+    state_payload = client.get("/api/ui/state").json()
+    assert state_payload["flags"]["SAFE_MODE"] is True
+    assert state_payload["flags"]["MODE"] == "testnet"
+    assert state_payload["control"]["two_man_rule"] is True
+    assert "guards" in state_payload and isinstance(state_payload["guards"], dict)
+
+    recon_run = client.post("/api/ui/recon/run")
+    assert recon_run.status_code == 200
+    assert recon_run.json()["ok"] is True
