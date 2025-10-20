@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [ main ]
   push:
-    branches-ignore: [ main ]   # чтобы не дублить прогон на пушах в main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:

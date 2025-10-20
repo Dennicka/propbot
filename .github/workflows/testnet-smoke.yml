@@ -1,14 +1,14 @@
 name: Testnet Smoke
-
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 3 * * *'
+  push:
+    branches: [ main ]
 
 jobs:
   smoke:
-    if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "placeholder: smoke бежит только на main или вручную, т.к. нужны секреты"
+      - run: echo "Placeholder smoke run"
