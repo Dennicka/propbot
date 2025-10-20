@@ -71,3 +71,7 @@ OKX_API_PASSPHRASE_TESTNET=...
 - `include_next_window=true` — учитывает ставку следующего расчётного окна.
 - `avoid_window_minutes` блокирует запуск арбитража вблизи расчёта funding.
 - `min_edge_bps`, `max_leg_slippage_bps`, `post_only_maker` и `prefer_maker` задают требования к спреду и режиму исполнения (IOC или Post Only).
+
+## Testnet smoke
+
+Для наблюдения за автоматической проверкой тестнета откройте GitHub Actions → **Testnet Smoke** → **Run workflow**. Этот джоб запускается вручную или по ночному расписанию и требует секретов, поэтому триггер по pull request отключён. Если smoke упал, нажмите "Run workflow" на ветке `main`, убедившись, что секреты заданы.
