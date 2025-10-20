@@ -30,7 +30,7 @@ PYTHONPATH="$PROJECT${PYTHONPATH:+:$PYTHONPATH}"
 ---
 
 ## 2) API/Эндпоинты (минимум, не ломая текущие)
-- `/api/health`, `/live-readiness`, `/api/ui/control-state`, `/api/ui/{execution,pnl,exposure}`  
+- `/api/health`, `/live-readiness`, `/api/ui/state`, `/api/ui/{execution,pnl,exposure}`
 - `/api/ui/recon/*`, `/api/ui/stream`, `/api/ui/config/{validate,apply,rollback}`  
 - `/api/opportunities`, `/metrics`, `/metrics/latency`
 

@@ -14,6 +14,8 @@ slo:
     ok: 0
   max_day_drawdown_bps:
     ok: 300
+  budget_remaining:
+    min: 0
 status:
   P0_ok_min: 0.8
   P1_ok_min: 0.7

@@ -8,11 +8,12 @@ mkdir -p "$NEW"
 rsync -a --delete ./ "$NEW/"
 python3 -m venv "$NEW/.venv"
 . "$NEW/.venv/bin/activate"
-pip install -r "$NEW/requirements.txt" || true
+pip install -r "$NEW/requirements.txt"
 ( uvicorn app.server_ws:app --host 127.0.0.1 --port 8000 & echo $! > "$NEW/uv.pid"; )
 sleep 2
-curl -fsS http://127.0.0.1:8000/api/health >/dev/null || { echo "[ERR] health failed"; exit 1; }
-curl -fsS http://127.0.0.1:8000/live-readiness >/dev/null || { echo "[ERR] live-readiness failed"; exit 1; }
+curl -fsS http://127.0.0.1:8000/api/health >/dev/null
+curl -fsS http://127.0.0.1:8000/live-readiness >/dev/null
 kill "$(cat "$NEW/uv.pid")"
 ln -sfn "$NEW" "$BASE/current"
-echo "[OK] Release staged at $NEW"
+systemctl restart crypto-bot
+echo "[OK] Release switched to $NEW"

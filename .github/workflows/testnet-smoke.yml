@@ -1,0 +1,23 @@
+name: Testnet smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  smoke:
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare placeholder log
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          echo "Smoke placeholder – requires secrets on main" | tee logs/testnet_smoke.log
+      - name: Upload placeholder log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-smoke-log
+          path: logs/testnet_smoke.log
