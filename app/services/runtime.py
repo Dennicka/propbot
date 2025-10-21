@@ -78,6 +78,8 @@ class ControlState:
     max_slippage_bps: int = 2
     taker_fee_bps_binance: int = 2
     taker_fee_bps_okx: int = 2
+    poll_interval_sec: int = 5
+    min_spread_bps: float = 0.0
 
     @property
     def flags(self) -> Dict[str, object]:
@@ -93,6 +95,8 @@ class ControlState:
             "MAX_SLIPPAGE_BPS": self.max_slippage_bps,
             "TAKER_FEE_BPS_BINANCE": self.taker_fee_bps_binance,
             "TAKER_FEE_BPS_OKX": self.taker_fee_bps_okx,
+            "POLL_INTERVAL_SEC": self.poll_interval_sec,
+            "MIN_SPREAD_BPS": self.min_spread_bps,
         }
 
 
@@ -119,6 +123,21 @@ class RuntimeState:
     metrics: MetricsState
     incidents: List[Dict[str, object]] = field(default_factory=list)
     derivatives: DerivativesRuntime | None = None
+    dryrun: "DryRunState" | None = None
+
+
+@dataclass
+class DryRunState:
+    last_cycle_ts: str | None = None
+    last_plan: Dict[str, object] | None = None
+    last_execution: Dict[str, object] | None = None
+    last_error: str | None = None
+    last_spread_bps: float | None = None
+    last_spread_usdt: float | None = None
+    last_fees_usdt: float | None = None
+    cycles_completed: int = 0
+    poll_interval_sec: int = 5
+    min_spread_bps: float = 0.0
 
 
 def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
@@ -161,6 +180,8 @@ def _bootstrap_runtime() -> RuntimeState:
     slippage_bps = _env_int("MAX_SLIPPAGE_BPS", 2)
     fee_binance = _env_int("TAKER_FEE_BPS_BINANCE", 2)
     fee_okx = _env_int("TAKER_FEE_BPS_OKX", 2)
+    poll_interval = _env_int("POLL_INTERVAL_SEC", 5)
+    min_spread_bps = _env_float("MIN_SPREAD_BPS", 0.0)
     profile = os.environ.get("EXCHANGE_PROFILE", "paper").lower()
     environment = os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
     control = ControlState(
@@ -175,11 +196,25 @@ def _bootstrap_runtime() -> RuntimeState:
         max_slippage_bps=slippage_bps,
         taker_fee_bps_binance=fee_binance,
         taker_fee_bps_okx=fee_okx,
+        poll_interval_sec=poll_interval,
+        min_spread_bps=min_spread_bps,
     )
     guards = _init_guards(loaded)
     metrics = MetricsState()
     derivatives = bootstrap_derivatives(loaded, safe_mode=safe_mode)
-    return RuntimeState(config=loaded, guards=guards, control=control, metrics=metrics, derivatives=derivatives)
+    dryrun_state = DryRunState(
+        poll_interval_sec=poll_interval,
+        min_spread_bps=min_spread_bps,
+    )
+    return RuntimeState(
+        config=loaded,
+        guards=guards,
+        control=control,
+        metrics=metrics,
+        incidents=[],
+        derivatives=derivatives,
+        dryrun=dryrun_state,
+    )
 
 
 _STATE = _bootstrap_runtime()

@@ -28,9 +28,29 @@ def runtime_state() -> dict:
     guards = {name: asdict(guard) for name, guard in state.guards.items()}
     slo = dict(state.metrics.slo)
     incidents = list(state.incidents)
+    metrics = {
+        "counters": dict(state.metrics.counters),
+        "latency_samples_ms": list(state.metrics.latency_samples_ms),
+    }
+    dryrun = None
+    if state.dryrun:
+        dryrun = {
+            "last_cycle_ts": state.dryrun.last_cycle_ts,
+            "last_plan": state.dryrun.last_plan,
+            "last_execution": state.dryrun.last_execution,
+            "last_error": state.dryrun.last_error,
+            "last_spread_bps": state.dryrun.last_spread_bps,
+            "last_spread_usdt": state.dryrun.last_spread_usdt,
+            "last_fees_usdt": state.dryrun.last_fees_usdt,
+            "cycles_completed": state.dryrun.cycles_completed,
+            "poll_interval_sec": state.dryrun.poll_interval_sec,
+            "min_spread_bps": state.dryrun.min_spread_bps,
+        }
     return {
         "guards": guards,
         "slo": slo,
         "incidents": incidents,
         "flags": state.control.flags,
+        "metrics": metrics,
+        "dry_run": dryrun,
     }
