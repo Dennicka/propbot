@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Tuple
 
 from ..core.config import ArbitragePairConfig
+from ..exchanges import binance_um, okx_perp
 from .derivatives import DerivativesRuntime
 from .runtime import (
     bump_counter,
@@ -12,6 +14,9 @@ from .runtime import (
     set_preflight_result,
     update_guard,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,7 +42,7 @@ class PreflightReport:
 
 
 @dataclass
-class PlanLeg:
+class LegacyPlanLeg:
     exchange: str
     symbol: str
     side: Literal["buy", "sell"]
@@ -46,12 +51,12 @@ class PlanLeg:
 
 
 @dataclass
-class Plan:
-    legs: List[PlanLeg]
+class LegacyPlan:
+    legs: List[LegacyPlanLeg]
     notes: List[str] = field(default_factory=list)
 
 
-def build_plan(payload: Dict[str, Any]) -> Plan:
+def build_legacy_plan(payload: Dict[str, Any]) -> LegacyPlan:
     symbol_raw = payload.get("symbol") or payload.get("pair") or "UNKNOWN"
     symbol = str(symbol_raw)
     qty_value = payload.get("qty")
@@ -62,19 +67,19 @@ def build_plan(payload: Dict[str, Any]) -> Plan:
     except (TypeError, ValueError):
         qty = 0.0
     legs = [
-        PlanLeg(exchange="sim-long", symbol=symbol, side="buy", qty=qty, price=None),
-        PlanLeg(exchange="sim-short", symbol=symbol, side="sell", qty=qty, price=None),
+        LegacyPlanLeg(exchange="sim-long", symbol=symbol, side="buy", qty=qty, price=None),
+        LegacyPlanLeg(exchange="sim-short", symbol=symbol, side="sell", qty=qty, price=None),
     ]
     notes = [f"simulated plan for {symbol}"]
-    return Plan(legs=legs, notes=notes)
+    return LegacyPlan(legs=legs, notes=notes)
 
 
-def plan_as_dict(plan: Plan) -> Dict[str, Any]:
+def legacy_plan_as_dict(plan: LegacyPlan) -> Dict[str, Any]:
     return asdict(plan)
 
 
-def execute_plan(
-    plan: Plan, *, safe_mode: bool, two_man_ok: bool, dry_run: bool
+def execute_legacy_plan(
+    plan: LegacyPlan, *, safe_mode: bool, two_man_ok: bool, dry_run: bool
 ) -> Dict[str, Any]:
     if safe_mode:
         blocked_by = "safe_mode"
@@ -84,7 +89,256 @@ def execute_plan(
         blocked_by = "two_man_rule"
     else:
         blocked_by = "not_implemented"
-    return {"executed": False, "blocked_by": blocked_by, "plan": plan_as_dict(plan)}
+    return {"executed": False, "blocked_by": blocked_by, "plan": legacy_plan_as_dict(plan)}
+
+
+SUPPORTED_SYMBOLS = {"BTCUSDT", "ETHUSDT"}
+
+
+@dataclass
+class PlanLeg:
+    exchange: str
+    side: Literal["buy", "sell"]
+    price: float
+    qty: float
+    fee_usdt: float
+
+    def as_dict(self) -> Dict[str, float]:
+        return {
+            "ex": self.exchange,
+            "side": self.side,
+            "px": self.price,
+            "qty": self.qty,
+            "fee_usdt": self.fee_usdt,
+        }
+
+
+@dataclass
+class Plan:
+    symbol: str
+    notional: float
+    used_slippage_bps: int
+    used_fees_bps: Dict[str, int]
+    viable: bool
+    legs: List[PlanLeg] = field(default_factory=list)
+    est_pnl_usdt: float = 0.0
+    est_pnl_bps: float = 0.0
+    reason: str | None = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "symbol": self.symbol,
+            "notional": self.notional,
+            "viable": self.viable,
+            "legs": [leg.as_dict() for leg in self.legs],
+            "est_pnl_usdt": self.est_pnl_usdt,
+            "est_pnl_bps": self.est_pnl_bps,
+            "used_fees_bps": self.used_fees_bps,
+            "used_slippage_bps": self.used_slippage_bps,
+        }
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
+
+
+@dataclass
+class ExecutionReport:
+    symbol: str
+    simulated: bool
+    pnl_usdt: float
+    pnl_bps: float
+    legs: List[PlanLeg]
+    plan_viable: bool
+    safe_mode: bool
+    dry_run: bool
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "simulated": self.simulated,
+            "pnl_usdt": self.pnl_usdt,
+            "pnl_bps": self.pnl_bps,
+            "plan_viable": self.plan_viable,
+            "safe_mode": self.safe_mode,
+            "dry_run": self.dry_run,
+            "legs": [leg.as_dict() for leg in self.legs],
+        }
+
+
+def _slippage_multiplier(slippage_bps: int, *, side: Literal["buy", "sell"]) -> float:
+    adjustment = slippage_bps / 10_000.0
+    if side == "buy":
+        return 1 + adjustment
+    return max(0.0, 1 - adjustment)
+
+
+def _compute_leg(
+    *,
+    buy_exchange: str,
+    buy_price: float,
+    sell_exchange: str,
+    sell_price: float,
+    notional: float,
+    fees: Dict[str, int],
+) -> tuple[float, List[PlanLeg]]:
+    if buy_price <= 0 or sell_price <= 0 or notional <= 0:
+        return 0.0, []
+    qty = notional / buy_price
+    buy_fee = buy_price * qty * fees[buy_exchange] / 10_000.0
+    sell_fee = sell_price * qty * fees[sell_exchange] / 10_000.0
+    pnl = sell_price * qty - buy_price * qty - buy_fee - sell_fee
+    legs = [
+        PlanLeg(exchange=buy_exchange, side="buy", price=buy_price, qty=qty, fee_usdt=buy_fee),
+        PlanLeg(exchange=sell_exchange, side="sell", price=sell_price, qty=qty, fee_usdt=sell_fee),
+    ]
+    return pnl, legs
+
+
+def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
+    state = get_state()
+    symbol_normalised = (symbol or "").upper()
+    notional_value = float(notional)
+    fees = {
+        "binance": state.control.taker_fee_bps_binance,
+        "okx": state.control.taker_fee_bps_okx,
+    }
+    plan = Plan(
+        symbol=symbol_normalised,
+        notional=notional_value,
+        used_slippage_bps=slippage_bps,
+        used_fees_bps=fees,
+        viable=False,
+    )
+    if symbol_normalised not in SUPPORTED_SYMBOLS:
+        plan.reason = f"unsupported symbol {symbol_normalised}"
+        return plan
+    if notional_value <= 0:
+        plan.reason = "notional must be positive"
+        return plan
+    try:
+        binance_book = binance_um.get_book(symbol_normalised)
+        okx_book = okx_perp.get_book(symbol_normalised)
+    except Exception as exc:  # pragma: no cover - network errors are logged
+        logger.exception("failed to fetch books for %s", symbol_normalised)
+        plan.reason = f"failed to fetch books: {exc}"
+        return plan
+
+    okx_buy = okx_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
+    binance_sell = binance_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
+    spread_a, legs_a = _compute_leg(
+        buy_exchange="okx",
+        buy_price=okx_buy,
+        sell_exchange="binance",
+        sell_price=binance_sell,
+        notional=notional_value,
+        fees=fees,
+    )
+
+    binance_buy = binance_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
+    okx_sell = okx_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
+    spread_b, legs_b = _compute_leg(
+        buy_exchange="binance",
+        buy_price=binance_buy,
+        sell_exchange="okx",
+        sell_price=okx_sell,
+        notional=notional_value,
+        fees=fees,
+    )
+
+    if spread_a <= 0 and spread_b <= 0:
+        plan.reason = "spread non-positive after fees"
+        return plan
+
+    if spread_a >= spread_b:
+        pnl = spread_a
+        legs = legs_a
+    else:
+        pnl = spread_b
+        legs = legs_b
+
+    plan.viable = True
+    plan.legs = legs
+    plan.est_pnl_usdt = pnl
+    if notional_value > 0:
+        plan.est_pnl_bps = (pnl / notional_value) * 10_000
+    logger.info(
+        "arbitrage plan built",
+        extra={
+            "symbol": symbol_normalised,
+            "pnl_usdt": plan.est_pnl_usdt,
+            "pnl_bps": plan.est_pnl_bps,
+            "direction": legs[0].exchange + "->" + legs[1].exchange if legs else "none",
+        },
+    )
+    return plan
+
+
+def plan_from_payload(payload: Dict[str, Any]) -> Plan:
+    symbol = payload.get("symbol", "").upper()
+    notional = float(payload.get("notional", 0.0))
+    slippage = int(payload.get("used_slippage_bps", payload.get("slippage_bps", 0)))
+    fees_input = payload.get("used_fees_bps") or {}
+    state = get_state()
+    fees = {
+        "binance": int(fees_input.get("binance", state.control.taker_fee_bps_binance)),
+        "okx": int(fees_input.get("okx", state.control.taker_fee_bps_okx)),
+    }
+    legs_payload = payload.get("legs") or []
+    legs: List[PlanLeg] = []
+    for leg in legs_payload:
+        try:
+            legs.append(
+                PlanLeg(
+                    exchange=str(leg["ex"]).lower(),
+                    side=str(leg["side"]).lower(),
+                    price=float(leg["px"]),
+                    qty=float(leg["qty"]),
+                    fee_usdt=float(leg.get("fee_usdt", 0.0)),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    viable = bool(payload.get("viable"))
+    plan = Plan(
+        symbol=symbol,
+        notional=notional,
+        used_slippage_bps=slippage,
+        used_fees_bps=fees,
+        viable=viable,
+        legs=legs,
+        est_pnl_usdt=float(payload.get("est_pnl_usdt", 0.0)),
+        est_pnl_bps=float(payload.get("est_pnl_bps", 0.0)),
+        reason=payload.get("reason"),
+    )
+    return plan
+
+
+def execute_plan(plan: Plan) -> ExecutionReport:
+    state = get_state()
+    safe_mode = state.control.safe_mode
+    dry_run = state.control.dry_run
+    simulated = True
+    pnl_usdt = plan.est_pnl_usdt if plan.viable else 0.0
+    pnl_bps = plan.est_pnl_bps if plan.viable else 0.0
+    logger.info(
+        "arbitrage plan executed (simulated)",
+        extra={
+            "symbol": plan.symbol,
+            "safe_mode": safe_mode,
+            "dry_run": dry_run,
+            "pnl_usdt": pnl_usdt,
+        },
+    )
+    return ExecutionReport(
+        symbol=plan.symbol,
+        simulated=simulated,
+        pnl_usdt=pnl_usdt,
+        pnl_bps=pnl_bps,
+        legs=plan.legs,
+        plan_viable=plan.viable,
+        safe_mode=safe_mode,
+        dry_run=dry_run,
+    )
 
 
 class ArbitrageEngine:

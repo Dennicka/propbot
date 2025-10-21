@@ -54,8 +54,19 @@ def test_rescue_triggers_guard_and_incident(client) -> None:
 
 
 def test_execute_endpoint_blocked_by_safe_mode(client) -> None:
-    response = client.post("/api/arb/execute", json={"symbol": "BTCUSDT", "qty": 1})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["executed"] is False
-    assert data["blocked_by"] == "safe_mode"
+    payload = {
+        "symbol": "BTCUSDT",
+        "notional": 50,
+        "viable": True,
+        "legs": [
+            {"ex": "okx", "side": "buy", "px": 1.0, "qty": 1.0, "fee_usdt": 0.0},
+            {"ex": "binance", "side": "sell", "px": 1.0, "qty": 1.0, "fee_usdt": 0.0},
+        ],
+        "est_pnl_usdt": 0.0,
+        "est_pnl_bps": 0.0,
+        "used_fees_bps": {"binance": 2, "okx": 2},
+        "used_slippage_bps": 2,
+    }
+    response = client.post("/api/arb/execute", json=payload)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "SAFE_MODE blocks execution"

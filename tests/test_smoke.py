@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from app.exchanges import binance_um, okx_perp
+
 
 def _assert_all_ok(client, endpoints: Iterable[str]) -> None:
     for endpoint in endpoints:
@@ -9,7 +11,7 @@ def _assert_all_ok(client, endpoints: Iterable[str]) -> None:
         assert response.status_code == 200, endpoint
 
 
-def test_smoke_endpoints(client) -> None:
+def test_smoke_endpoints(client, monkeypatch) -> None:
     get_endpoints = [
         "/api/health",
         "/openapi.json",
@@ -38,12 +40,37 @@ def test_smoke_endpoints(client) -> None:
 
     ui_state = client.get("/api/ui/state").json()
     assert "flags" in ui_state
-    for key in ["MODE", "SAFE_MODE", "POST_ONLY", "REDUCE_ONLY", "ENV"]:
+    for key in [
+        "MODE",
+        "SAFE_MODE",
+        "POST_ONLY",
+        "REDUCE_ONLY",
+        "ENV",
+        "DRY_RUN",
+        "ORDER_NOTIONAL_USDT",
+        "MAX_SLIPPAGE_BPS",
+    ]:
         assert key in ui_state["flags"]
 
-    preview = client.post("/api/arb/preview", json={})
+    monkeypatch.setattr(
+        binance_um,
+        "get_book",
+        lambda symbol: {"bid": 20150.0, "ask": 20160.0, "ts": 1},
+    )
+    monkeypatch.setattr(
+        okx_perp,
+        "get_book",
+        lambda symbol: {"bid": 20180.0, "ask": 20190.0, "ts": 1},
+    )
+
+    preview = client.get(
+        "/api/arb/preview",
+        params={"symbol": "BTCUSDT", "notional": 50, "slippage_bps": 2},
+    )
     assert preview.status_code == 200
-    assert "preflight" in preview.json()
+    preview_payload = preview.json()
+    assert preview_payload["symbol"] == "BTCUSDT"
+    assert "viable" in preview_payload
 
     recon_run = client.post("/api/ui/recon/run")
     assert recon_run.status_code == 200
