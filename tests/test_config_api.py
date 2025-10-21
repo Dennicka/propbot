@@ -49,6 +49,8 @@ def test_config_validate_apply_rollback(client) -> None:
         "TAKER_FEE_BPS_BINANCE",
         "TAKER_FEE_BPS_OKX",
         "TWO_MAN_RULE",
+        "POLL_INTERVAL_SEC",
+        "MIN_SPREAD_BPS",
     }
     assert expected_keys.issubset(flags.keys())
     assert isinstance(flags["MODE"], str)
@@ -62,3 +64,5 @@ def test_config_validate_apply_rollback(client) -> None:
     assert isinstance(flags["MAX_SLIPPAGE_BPS"], int)
     assert isinstance(flags["TAKER_FEE_BPS_BINANCE"], int)
     assert isinstance(flags["TAKER_FEE_BPS_OKX"], int)
+    assert isinstance(flags["POLL_INTERVAL_SEC"], int)
+    assert isinstance(flags["MIN_SPREAD_BPS"], float)

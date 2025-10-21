@@ -49,6 +49,8 @@ def test_smoke_endpoints(client, monkeypatch) -> None:
         "DRY_RUN",
         "ORDER_NOTIONAL_USDT",
         "MAX_SLIPPAGE_BPS",
+        "POLL_INTERVAL_SEC",
+        "MIN_SPREAD_BPS",
     ]:
         assert key in ui_state["flags"]
 
