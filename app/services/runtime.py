@@ -17,8 +17,15 @@ DEFAULT_CONFIG_PATHS = {
 
 
 def _resolve_config_path() -> str:
-    profile = os.environ.get("EXCHANGE_PROFILE", "paper").lower()
-    return DEFAULT_CONFIG_PATHS.get(profile, DEFAULT_CONFIG_PATHS["paper"])
+    profile = (
+        os.environ.get("PROFILE")
+        or os.environ.get("EXCHANGE_PROFILE")
+        or os.environ.get("ENVIRONMENT")
+        or os.environ.get("ENV")
+        or "paper"
+    )
+    profile_normalised = str(profile).lower()
+    return DEFAULT_CONFIG_PATHS.get(profile_normalised, DEFAULT_CONFIG_PATHS["paper"])
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
@@ -174,24 +181,32 @@ def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
 def _bootstrap_runtime() -> RuntimeState:
     config_path = _resolve_config_path()
     loaded = load_app_config(config_path)
-    safe_mode = _env_flag("SAFE_MODE", True)
-    dry_run = _env_flag("DRY_RUN", True)
+    control_cfg = loaded.data.control
+    safe_mode = _env_flag("SAFE_MODE", control_cfg.safe_mode if control_cfg else True)
+    dry_run_only = _env_flag("DRY_RUN_ONLY", control_cfg.dry_run if control_cfg else False)
     order_notional = _env_float("ORDER_NOTIONAL_USDT", 50.0)
     slippage_bps = _env_int("MAX_SLIPPAGE_BPS", 2)
     fee_binance = _env_int("TAKER_FEE_BPS_BINANCE", 2)
     fee_okx = _env_int("TAKER_FEE_BPS_OKX", 2)
     poll_interval = _env_int("POLL_INTERVAL_SEC", 5)
     min_spread_bps = _env_float("MIN_SPREAD_BPS", 0.0)
-    profile = os.environ.get("EXCHANGE_PROFILE", "paper").lower()
-    environment = os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
+    profile = (
+        os.environ.get("PROFILE")
+        or os.environ.get("EXCHANGE_PROFILE")
+        or os.environ.get("ENVIRONMENT")
+        or os.environ.get("ENV")
+        or "paper"
+    ).lower()
+    environment = os.environ.get("MODE") or os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
     control = ControlState(
         mode="HOLD" if safe_mode else "RUN",
         safe_mode=safe_mode,
+        two_man_rule=_env_flag("TWO_MAN_RULE", control_cfg.two_man_rule if control_cfg else True),
         deployment_mode=profile,
-        post_only=_env_flag("POST_ONLY", True),
-        reduce_only=_env_flag("REDUCE_ONLY", False),
+        post_only=_env_flag("POST_ONLY", control_cfg.post_only if control_cfg else True),
+        reduce_only=_env_flag("REDUCE_ONLY", control_cfg.reduce_only if control_cfg else False),
         environment=environment,
-        dry_run=dry_run,
+        dry_run=dry_run_only,
         order_notional_usdt=order_notional,
         max_slippage_bps=slippage_bps,
         taker_fee_bps_binance=fee_binance,
@@ -224,6 +239,12 @@ def get_state() -> RuntimeState:
     return _STATE
 
 
+def ensure_dryrun_state() -> DryRunState:
+    if _STATE.dryrun is None:
+        _STATE.dryrun = DryRunState()
+    return _STATE.dryrun
+
+
 def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:
     guard = _STATE.guards.setdefault(name, GuardState())
     guard.status = status
@@ -254,6 +275,31 @@ def register_approval(actor: str, value: str) -> None:
 def bump_counter(name: str, delta: float = 1.0) -> float:
     _STATE.metrics.counters[name] = _STATE.metrics.counters.get(name, 0.0) + delta
     return _STATE.metrics.counters[name]
+
+
+def set_mode(mode: str) -> None:
+    normalised = mode.upper()
+    if normalised not in {"RUN", "HOLD"}:
+        raise ValueError(f"unsupported mode {mode}")
+    _STATE.control.mode = normalised
+
+
+def set_last_plan(plan: Dict[str, object]) -> None:
+    dryrun_state = ensure_dryrun_state()
+    dryrun_state.last_plan = plan
+    dryrun_state.last_cycle_ts = _ts()
+
+
+def set_last_execution(payload: Dict[str, object]) -> None:
+    dryrun_state = ensure_dryrun_state()
+    dryrun_state.last_execution = payload
+    dryrun_state.last_cycle_ts = _ts()
+
+
+def get_last_plan() -> Dict[str, object] | None:
+    if _STATE.dryrun:
+        return _STATE.dryrun.last_plan
+    return None
 
 
 def reset_for_tests() -> None:

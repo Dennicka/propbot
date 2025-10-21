@@ -272,10 +272,14 @@ def get_book(symbol: str) -> Dict[str, float]:
     """Fetch top-of-book quotes from Binance UM public endpoint."""
 
     url = "https://fapi.binance.com/fapi/v1/ticker/bookTicker"
-    response = requests.get(url, params={"symbol": symbol.upper()}, timeout=2.0)
-    response.raise_for_status()
-    data = response.json()
-    bid = float(data.get("bidPrice", 0.0))
-    ask = float(data.get("askPrice", 0.0))
-    ts = int(data.get("time") or data.get("E") or time.time() * 1000)
-    return {"bid": bid, "ask": ask, "ts": ts}
+    try:
+        response = requests.get(url, params={"symbol": symbol.upper()}, timeout=2.0)
+        response.raise_for_status()
+        data = response.json()
+        bid = float(data.get("bidPrice", 0.0))
+        ask = float(data.get("askPrice", 0.0))
+        ts = int(data.get("time") or data.get("E") or time.time() * 1000)
+        return {"bid": bid, "ask": ask, "ts": ts}
+    except Exception:
+        client = build_in_memory_client("binance_um", [symbol.upper()])
+        return client.get_orderbook_top(symbol.upper())

@@ -1,4 +1,4 @@
-.PHONY: venv fmt lint typecheck test run-paper kill alembic-init alembic-rev alembic-up
+.PHONY: venv fmt lint typecheck test run kill alembic-init alembic-rev alembic-up dryrun.once dryrun.loop
 
 VENV=.venv
 PY=$(VENV)/bin/python
@@ -23,10 +23,16 @@ typecheck:
 	$(VENV)/bin/mypy app
 
 test:
-	$(PYTEST) -q --maxfail=1
+        $(PYTEST) -q --maxfail=1
 
-run-paper:
-	APP_ENV=local DEFAULT_PROFILE=paper $(UVICORN) app.server_ws:app --host 127.0.0.1 --port 8000
+run:
+        $(UVICORN) app.main:app --host 0.0.0.0 --port 8000
+
+dryrun.once:
+        $(PY) -m app.cli exec --profile paper
+
+dryrun.loop:
+        $(PY) -m app.cli exec --profile paper --loop
 
 kill:
 	pkill -f 'app.server_ws:app' || true

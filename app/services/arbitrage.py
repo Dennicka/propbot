@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Tuple
 
 from ..core.config import ArbitragePairConfig
 from ..exchanges import binance_um, okx_perp
+from ..broker.router import ExecutionRouter
 from .derivatives import DerivativesRuntime
 from .runtime import (
     bump_counter,
@@ -151,6 +153,9 @@ class ExecutionReport:
     plan_viable: bool
     safe_mode: bool
     dry_run: bool
+    orders: List[Dict[str, object]] = field(default_factory=list)
+    exposures: List[Dict[str, object]] = field(default_factory=list)
+    pnl_summary: Dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -162,6 +167,9 @@ class ExecutionReport:
             "safe_mode": self.safe_mode,
             "dry_run": self.dry_run,
             "legs": [leg.as_dict() for leg in self.legs],
+            "orders": list(self.orders),
+            "exposures": list(self.exposures),
+            "pnl_summary": dict(self.pnl_summary),
         }
 
 
@@ -313,15 +321,19 @@ def plan_from_payload(payload: Dict[str, Any]) -> Plan:
     return plan
 
 
-def execute_plan(plan: Plan) -> ExecutionReport:
+async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> ExecutionReport:
     state = get_state()
     safe_mode = state.control.safe_mode
     dry_run = state.control.dry_run
-    simulated = True
-    pnl_usdt = plan.est_pnl_usdt if plan.viable else 0.0
-    pnl_bps = plan.est_pnl_bps if plan.viable else 0.0
+    router = ExecutionRouter()
+    result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
+    pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}
+    orders = result.get("orders", []) if isinstance(result, dict) else []
+    exposures = result.get("exposures", []) if isinstance(result, dict) else []
+    pnl_usdt = float(pnl_summary.get("total", plan.est_pnl_usdt if plan.viable else 0.0))
+    pnl_bps = (pnl_usdt / plan.notional) * 10_000 if plan.notional else 0.0
     logger.info(
-        "arbitrage plan executed (simulated)",
+        "arbitrage plan executed",
         extra={
             "symbol": plan.symbol,
             "safe_mode": safe_mode,
@@ -331,14 +343,22 @@ def execute_plan(plan: Plan) -> ExecutionReport:
     )
     return ExecutionReport(
         symbol=plan.symbol,
-        simulated=simulated,
+        simulated=dry_run or safe_mode,
         pnl_usdt=pnl_usdt,
         pnl_bps=pnl_bps,
         legs=plan.legs,
         plan_viable=plan.viable,
         safe_mode=safe_mode,
         dry_run=dry_run,
+        orders=orders,
+        exposures=exposures,
+        pnl_summary=pnl_summary,
     )
+
+
+def execute_plan(plan: Plan) -> ExecutionReport:
+    """Synchronous wrapper for CLI contexts."""
+    return asyncio.run(execute_plan_async(plan, allow_safe_mode=True))
 
 
 class ArbitrageEngine:
