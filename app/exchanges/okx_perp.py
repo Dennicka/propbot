@@ -9,6 +9,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import httpx
+try:  # pragma: no cover - shim used when requests is unavailable
+    import requests
+except ImportError:  # pragma: no cover
+    class _RequestsShim:
+        @staticmethod
+        def get(url: str, params: Dict[str, str] | None = None, timeout: float | None = None) -> httpx.Response:
+            return httpx.get(url, params=params, timeout=timeout)
+
+    requests = _RequestsShim()
 
 from . import InMemoryDerivClient, build_in_memory_client
 
@@ -295,3 +304,30 @@ class OKXPerpClient:
 
 def create_client(config: DerivVenueConfig, *, safe_mode: bool = True) -> OKXPerpClient:
     return OKXPerpClient(config, safe_mode=safe_mode)
+
+
+_SYMBOL_MAP = {
+    "BTCUSDT": "BTC-USDT-SWAP",
+    "ETHUSDT": "ETH-USDT-SWAP",
+}
+
+
+def get_book(symbol: str) -> Dict[str, float]:
+    """Fetch best bid/ask for supported instruments from OKX public API."""
+
+    inst_id = _SYMBOL_MAP.get(symbol.upper())
+    if not inst_id:
+        raise ValueError(f"unsupported symbol {symbol}")
+    url = "https://www.okx.com/api/v5/market/ticker"
+    response = requests.get(url, params={"instId": inst_id}, timeout=2.0)
+    response.raise_for_status()
+    payload = response.json()
+    data = payload.get("data") or []
+    if not data:
+        raise RuntimeError("empty ticker data")
+    entry = data[0]
+    bid = float(entry.get("bidPx") or entry.get("bidPrice") or 0.0)
+    ask = float(entry.get("askPx") or entry.get("askPrice") or 0.0)
+    ts_raw = entry.get("ts") or entry.get("tsPx") or payload.get("ts")
+    ts = int(ts_raw) if ts_raw is not None else 0
+    return {"bid": bid, "ask": ask, "ts": ts}

@@ -7,6 +7,15 @@ import time
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import httpx
+try:  # pragma: no cover - shim used when requests is unavailable
+    import requests
+except ImportError:  # pragma: no cover
+    class _RequestsShim:
+        @staticmethod
+        def get(url: str, params: Dict[str, str] | None = None, timeout: float | None = None) -> httpx.Response:
+            return httpx.get(url, params=params, timeout=timeout)
+
+    requests = _RequestsShim()
 
 from . import InMemoryDerivClient, build_in_memory_client
 
@@ -257,3 +266,16 @@ class BinanceUMClient:
 
 def create_client(config: DerivVenueConfig, *, safe_mode: bool = True) -> BinanceUMClient:
     return BinanceUMClient(config, safe_mode=safe_mode)
+
+
+def get_book(symbol: str) -> Dict[str, float]:
+    """Fetch top-of-book quotes from Binance UM public endpoint."""
+
+    url = "https://fapi.binance.com/fapi/v1/ticker/bookTicker"
+    response = requests.get(url, params={"symbol": symbol.upper()}, timeout=2.0)
+    response.raise_for_status()
+    data = response.json()
+    bid = float(data.get("bidPrice", 0.0))
+    ask = float(data.get("askPrice", 0.0))
+    ts = int(data.get("time") or data.get("E") or time.time() * 1000)
+    return {"bid": bid, "ask": ask, "ts": ts}

@@ -62,23 +62,25 @@ OKX_API_PASSPHRASE_TESTNET=...
      "SAFE_MODE": true,
      "POST_ONLY": true,
      "REDUCE_ONLY": false,
-     "ENV": "testnet"
+     "ENV": "testnet",
+     "DRY_RUN": true,
+     "ORDER_NOTIONAL_USDT": 50.0,
+     "MAX_SLIPPAGE_BPS": 2,
+     "TAKER_FEE_BPS_BINANCE": 2,
+     "TAKER_FEE_BPS_OKX": 2
    }
    ```
 
-## 5. Префлайт и выполнение
+## 5. Dry-run arbitrage
 
-1. Выполните префлайт:
+1. Получите превью арбитража, указав символ, нотионал и допуск по слиппеджу:
    ```bash
-   curl -s -X POST http://127.0.0.1:8000/api/arb/preview | jq
+   curl -s "http://127.0.0.1:8000/api/arb/preview?symbol=BTCUSDT&notional=50&slippage_bps=2" | jq
    ```
-   Вы получите отчёт с проверкой connectivity, режимов, фильтров и edge после комиссий.
-2. SAFE_MODE остаётся `true` — исполнение `/api/arb/execute` вернёт dry-run план с шагами state-machine.
-3. Для реальной тестовой пары сделок:
-   - Соберите два approvals в UI (`/api/ui/approvals`).
-   - Перезапустите сервис с `SAFE_MODE=false` (только после успешного префлайта).
-   - Запустите `curl -s -X POST http://127.0.0.1:8000/api/arb/execute | jq`.
-4. После сделки выполните `POST /api/hedge/flatten`, чтобы закрыть оставшиеся позиции.
+   Ответ содержит legs с рассчитанными ценами покупки/продажи, комиссией и оценкой PnL после вычета `used_fees_bps` и указанного `used_slippage_bps`.
+2. SAFE_MODE по умолчанию включён и блокирует исполнение: `POST /api/arb/execute` вернёт `403 SAFE_MODE blocks execution` даже при передаче валидного плана. Это защита от случайных запусков.
+3. Для симуляции в dry-run режиме (без реальных ордеров) временно отключите SAFE_MODE вручную, но оставьте `DRY_RUN=true`. В этом случае `POST /api/arb/execute` вернёт отчёт `simulated=true` и рассчитанный PnL.
+4. Полноценное исполнение двух ног разрешайте только после двойного одобрения (`/api/ui/approvals`) и перевода SAFE_MODE в `false`. После отработки не забудьте вызвать `POST /api/hedge/flatten` для закрытия позиций.
 
 ## 6. Funding / Edge Policy
 

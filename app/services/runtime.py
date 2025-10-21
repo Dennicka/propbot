@@ -28,6 +28,26 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(float(raw))
+    except ValueError:
+        return default
+
+
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -53,15 +73,26 @@ class ControlState:
     post_only: bool = True
     reduce_only: bool = False
     environment: str = "paper"
+    dry_run: bool = True
+    order_notional_usdt: float = 50.0
+    max_slippage_bps: int = 2
+    taker_fee_bps_binance: int = 2
+    taker_fee_bps_okx: int = 2
 
     @property
     def flags(self) -> Dict[str, object]:
         return {
             "MODE": self.deployment_mode,
             "SAFE_MODE": self.safe_mode,
+            "TWO_MAN_RULE": self.two_man_rule,
             "POST_ONLY": self.post_only,
             "REDUCE_ONLY": self.reduce_only,
             "ENV": self.environment,
+            "DRY_RUN": self.dry_run,
+            "ORDER_NOTIONAL_USDT": self.order_notional_usdt,
+            "MAX_SLIPPAGE_BPS": self.max_slippage_bps,
+            "TAKER_FEE_BPS_BINANCE": self.taker_fee_bps_binance,
+            "TAKER_FEE_BPS_OKX": self.taker_fee_bps_okx,
         }
 
 
@@ -125,6 +156,11 @@ def _bootstrap_runtime() -> RuntimeState:
     config_path = _resolve_config_path()
     loaded = load_app_config(config_path)
     safe_mode = _env_flag("SAFE_MODE", True)
+    dry_run = _env_flag("DRY_RUN", True)
+    order_notional = _env_float("ORDER_NOTIONAL_USDT", 50.0)
+    slippage_bps = _env_int("MAX_SLIPPAGE_BPS", 2)
+    fee_binance = _env_int("TAKER_FEE_BPS_BINANCE", 2)
+    fee_okx = _env_int("TAKER_FEE_BPS_OKX", 2)
     profile = os.environ.get("EXCHANGE_PROFILE", "paper").lower()
     environment = os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
     control = ControlState(
@@ -134,6 +170,11 @@ def _bootstrap_runtime() -> RuntimeState:
         post_only=_env_flag("POST_ONLY", True),
         reduce_only=_env_flag("REDUCE_ONLY", False),
         environment=environment,
+        dry_run=dry_run,
+        order_notional_usdt=order_notional,
+        max_slippage_bps=slippage_bps,
+        taker_fee_bps_binance=fee_binance,
+        taker_fee_bps_okx=fee_okx,
     )
     guards = _init_guards(loaded)
     metrics = MetricsState()
