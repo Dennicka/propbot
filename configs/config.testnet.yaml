@@ -1,4 +1,10 @@
 profile: testnet
+control:
+  safe_mode: true
+  dry_run: true
+  two_man_rule: true
+  post_only: true
+  reduce_only: false
 api:
   base_url: http://127.0.0.1:8000
 guards:

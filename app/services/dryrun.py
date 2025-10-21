@@ -12,7 +12,7 @@ from .arbitrage import Plan, SUPPORTED_SYMBOLS, build_plan, execute_plan
 from .runtime import DryRunState, bump_counter, get_state, record_incident
 
 LOGGER = logging.getLogger(__name__)
-ARTIFACT_PATH = Path("artifacts/last_dryrun_plan.json")
+ARTIFACT_PATH = Path("artifacts/last_plan.json")
 
 
 @dataclass
@@ -107,6 +107,7 @@ class DryRunScheduler:
     def run_once(self) -> Dict[str, Any]:
         ts = _ts()
         state = get_state()
+        state.control.dry_run = True
         dryrun_state = _ensure_dryrun_state()
         symbol = _select_symbol()
         notional = state.control.order_notional_usdt

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PropBot System Status</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #0f172a;
+        color: #f8fafc;
+      }
+      header {
+        padding: 1.5rem 2rem;
+        background: #1e293b;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      main {
+        padding: 1.5rem 2rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1.5rem;
+      }
+      .card {
+        background: #1e293b;
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.45);
+      }
+      h1, h2 {
+        margin: 0;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 0.35rem 0.25rem;
+      }
+      th {
+        border-bottom: 1px solid rgba(248, 250, 252, 0.2);
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      td {
+        font-size: 0.9rem;
+      }
+      button {
+        background: #38bdf8;
+        border: none;
+        color: #0f172a;
+        font-weight: bold;
+        padding: 0.6rem 1.2rem;
+        border-radius: 8px;
+        margin-right: 0.5rem;
+        cursor: pointer;
+        transition: transform 0.15s ease, opacity 0.2s ease;
+      }
+      button:hover {
+        transform: translateY(-1px);
+        opacity: 0.9;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .bad {
+        color: #f87171;
+      }
+      .good {
+        color: #4ade80;
+      }
+      pre {
+        background: rgba(15, 23, 42, 0.65);
+        padding: 0.75rem;
+        border-radius: 8px;
+        overflow: auto;
+        font-size: 0.85rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>PropBot System Status</h1>
+        <p id="mode">Loading...</p>
+      </div>
+      <div>
+        <button id="resumeBtn">Resume</button>
+        <button id="holdBtn">Hold</button>
+      </div>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Runtime Flags</h2>
+        <div id="flags"></div>
+      </section>
+      <section class="card">
+        <h2>Exposures</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Venue</th>
+              <th>Symbol</th>
+              <th>Qty</th>
+              <th>Notional</th>
+            </tr>
+          </thead>
+          <tbody id="exposures"></tbody>
+        </table>
+      </section>
+      <section class="card">
+        <h2>PnL</h2>
+        <div id="pnl"></div>
+      </section>
+      <section class="card">
+        <h2>Last Plan</h2>
+        <pre id="lastPlan">No plan recorded</pre>
+      </section>
+      <section class="card">
+        <h2>Events</h2>
+        <pre id="events"></pre>
+      </section>
+    </main>
+    <script>
+      const holdBtn = document.getElementById('holdBtn');
+      const resumeBtn = document.getElementById('resumeBtn');
+
+      async function fetchState() {
+        try {
+          const resp = await fetch('/api/ui/state');
+          if (!resp.ok) throw new Error('failed to load state');
+          const data = await resp.json();
+          document.getElementById('mode').textContent = `Mode: ${data.mode}`;
+          const flagLines = Object.entries(data.flags || {})
+            .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
+            .join('');
+          document.getElementById('flags').innerHTML = flagLines;
+          const exposures = data.exposures || [];
+          document.getElementById('exposures').innerHTML = exposures
+            .map(
+              (row) => `
+                <tr>
+                  <td>${row.venue}</td>
+                  <td>${row.symbol}</td>
+                  <td>${row.base_qty?.toFixed(4) ?? 0}</td>
+                  <td>${row.notional?.toFixed(2) ?? 0}</td>
+                </tr>`
+            )
+            .join('');
+          const pnl = data.pnl || {};
+          document.getElementById('pnl').innerHTML = `
+            <div>Total: <span class="${pnl.total >= 0 ? 'good' : 'bad'}">${(pnl.total ?? 0).toFixed(2)}</span> USDT</div>
+            <div>Realized: ${(pnl.realized ?? 0).toFixed(2)}</div>
+            <div>Unrealized: ${(pnl.unrealized ?? 0).toFixed(2)}</div>`;
+          const events = data.events || [];
+          document.getElementById('events').textContent = events
+            .map((event) => `${event.ts} [${event.level}] ${event.code}: ${JSON.stringify(event.payload)}`)
+            .join('\n');
+          if (data.last_plan) {
+            document.getElementById('lastPlan').textContent = JSON.stringify(data.last_plan, null, 2);
+          }
+          resumeBtn.disabled = data.safe_mode;
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      async function fetchLastPlan() {
+        const resp = await fetch('/api/ui/plan/last');
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.last_plan) {
+            document.getElementById('lastPlan').textContent = JSON.stringify(data.last_plan, null, 2);
+          }
+        }
+      }
+
+      async function postAction(path) {
+        const resp = await fetch(path, { method: 'POST' });
+        if (!resp.ok) {
+          const error = await resp.json().catch(() => ({}));
+          alert(error.detail || 'Action failed');
+        }
+        fetchState();
+      }
+
+      holdBtn.addEventListener('click', () => postAction('/api/ui/hold'));
+      resumeBtn.addEventListener('click', () => postAction('/api/ui/resume'));
+
+      fetchState();
+      fetchLastPlan();
+      setInterval(fetchState, 4000);
+    </script>
+  </body>
+</html>

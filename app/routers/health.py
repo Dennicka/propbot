@@ -8,6 +8,11 @@ class HealthOut(BaseModel):
     status: str
     version: str
 
-@router.get("/health", response_model=HealthOut)
+@router.get("/healthz", response_model=HealthOut)
 def health() -> HealthOut:
-    return HealthOut(status="ok", version="6.3.2-final")
+    return HealthOut(status="ok", version="test-bot-mvp")
+
+
+@router.get("/health", response_model=HealthOut)
+def health_alias() -> HealthOut:  # pragma: no cover - backwards compatibility
+    return health()

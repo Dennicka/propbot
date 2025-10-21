@@ -17,6 +17,7 @@ venv/
 .env.*
 !.env.example
 pip-wheel-metadata/
+data/
 
 # Build & Dist
 build/

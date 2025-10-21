@@ -319,15 +319,19 @@ def get_book(symbol: str) -> Dict[str, float]:
     if not inst_id:
         raise ValueError(f"unsupported symbol {symbol}")
     url = "https://www.okx.com/api/v5/market/ticker"
-    response = requests.get(url, params={"instId": inst_id}, timeout=2.0)
-    response.raise_for_status()
-    payload = response.json()
-    data = payload.get("data") or []
-    if not data:
-        raise RuntimeError("empty ticker data")
-    entry = data[0]
-    bid = float(entry.get("bidPx") or entry.get("bidPrice") or 0.0)
-    ask = float(entry.get("askPx") or entry.get("askPrice") or 0.0)
-    ts_raw = entry.get("ts") or entry.get("tsPx") or payload.get("ts")
-    ts = int(ts_raw) if ts_raw is not None else 0
-    return {"bid": bid, "ask": ask, "ts": ts}
+    try:
+        response = requests.get(url, params={"instId": inst_id}, timeout=2.0)
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data") or []
+        if not data:
+            raise RuntimeError("empty ticker data")
+        entry = data[0]
+        bid = float(entry.get("bidPx") or entry.get("bidPrice") or 0.0)
+        ask = float(entry.get("askPx") or entry.get("askPrice") or 0.0)
+        ts_raw = entry.get("ts") or entry.get("tsPx") or payload.get("ts")
+        ts = int(ts_raw) if ts_raw is not None else 0
+        return {"bid": bid, "ask": ask, "ts": ts}
+    except Exception:
+        client = build_in_memory_client("okx_perp", list(_SYMBOL_MAP.values()))
+        return client.get_orderbook_top(inst_id)

@@ -143,6 +143,14 @@ class FundingConfig(BaseModel):
     avoid_window_minutes: int = Field(5, ge=0)
 
 
+class ControlConfig(BaseModel):
+    safe_mode: bool = True
+    dry_run: bool = True
+    two_man_rule: bool = True
+    post_only: bool = True
+    reduce_only: bool = False
+
+
 class DerivativesConfig(BaseModel):
     venues: List[DerivVenueConfig]
     arbitrage: ArbitrageConfig
@@ -165,6 +173,7 @@ class AppConfig(BaseModel):
     server: Dict[str, object] | None = None
     risk: RiskConfig | None = None
     guards: GuardsConfig | None = None
+    control: ControlConfig | None = None
     derivatives: DerivativesConfig | None = None
     obs: Dict[str, object] | None = None
     status_thresholds_file: str | None = None

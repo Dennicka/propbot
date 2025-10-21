@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from typing import TYPE_CHECKING, Dict, List
+
+from .base import Broker
+from .paper import PaperBroker
+from .testnet import TestnetBroker
+from ..ledger import compute_exposures, compute_pnl
+from ..services.runtime import get_state
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..services.arbitrage import Plan
+
+
+VENUE_ALIASES: Dict[str, str] = {
+    "binance": "binance-um",
+    "binance-um": "binance-um",
+    "binance_um": "binance-um",
+    "okx": "okx-perp",
+    "okx-perp": "okx-perp",
+    "okx_perp": "okx-perp",
+    "paper": "paper",
+}
+
+
+class ExecutionRouter:
+    def __init__(self) -> None:
+        state = get_state()
+        self.safe_mode = state.control.safe_mode
+        self.dry_run_only = state.control.dry_run
+        self.two_man_rule = state.control.two_man_rule
+        self._brokers: Dict[str, Broker] = {
+            "paper": PaperBroker("paper"),
+            "binance-um": TestnetBroker(
+                "binance-um",
+                safe_mode=self.safe_mode or self.dry_run_only,
+                required_env=("BINANCE_UM_API_KEY_TESTNET", "BINANCE_UM_API_SECRET_TESTNET"),
+            ),
+            "okx-perp": TestnetBroker(
+                "okx-perp",
+                safe_mode=self.safe_mode or self.dry_run_only,
+                required_env=("OKX_API_KEY_TESTNET", "OKX_API_SECRET_TESTNET", "OKX_API_PASSPHRASE_TESTNET"),
+            ),
+        }
+
+    def _resolve_broker(self, exchange: str) -> Broker:
+        canonical = VENUE_ALIASES.get(exchange.lower(), exchange.lower())
+        if self.dry_run_only:
+            return self._brokers["paper"]
+        return self._brokers.get(canonical, self._brokers["paper"])
+
+    def _venue_for_exchange(self, exchange: str) -> str:
+        return VENUE_ALIASES.get(exchange.lower(), exchange.lower())
+
+    async def execute_plan(self, plan: "Plan", *, allow_safe_mode: bool = False) -> Dict[str, object]:
+        state = get_state()
+        if state.control.safe_mode:
+            if allow_safe_mode:
+                return await self._simulate_plan(plan)
+            if state.control.dry_run:
+                return await self._simulate_plan(plan)
+            raise PermissionError("SAFE_MODE blocks execution")
+        if state.control.dry_run:
+            return await self._simulate_plan(plan)
+        if state.control.two_man_rule and len(state.control.approvals) < 2:
+            raise PermissionError("TWO_MAN_RULE approvals missing")
+        return await self._dispatch_plan(plan)
+
+    async def _simulate_plan(self, plan: "Plan") -> Dict[str, object]:
+        return await self._dispatch_plan(plan)
+
+    async def _dispatch_plan(self, plan: "Plan") -> Dict[str, object]:
+        orders: List[Dict[str, object]] = []
+        plan_payload = plan.as_dict()
+        plan_key = hashlib.sha256(json.dumps(plan_payload, sort_keys=True).encode("utf-8")).hexdigest()
+        for index, leg in enumerate(plan.legs):
+            broker = self._resolve_broker(leg.exchange)
+            venue = self._venue_for_exchange(leg.exchange)
+            idemp_key = f"{plan_key}:{index}"
+            order = await broker.create_order(
+                venue=venue,
+                symbol=plan.symbol,
+                side=leg.side,
+                qty=leg.qty,
+                price=leg.price,
+                type="LIMIT",
+                post_only=True,
+                reduce_only=False,
+                fee=leg.fee_usdt,
+                idemp_key=idemp_key,
+            )
+            orders.append(order)
+        exposures = await asyncio.to_thread(compute_exposures)
+        pnl = await asyncio.to_thread(compute_pnl)
+        return {
+            "orders": orders,
+            "exposures": exposures,
+            "pnl": pnl,
+        }

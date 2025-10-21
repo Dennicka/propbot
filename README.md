@@ -1,17 +1,85 @@
-# PropBot (bootstrap)
+# PropBot — Test Bot MVP
 
-Этот репозиторий содержит стартовый набор файлов и ToR для Codex:
-- `CODEX_TOR_propbot_v6.3.2_FULL_PLUS.md` — базовая операционная готовность (paper/testnet).
-- `CODEX_TOR_propbot_v6.3.2_ARBITRAGE_FUTURES_ADDENDUM.md` — деривативный арбитраж Binance UM ↔ OKX Perps.
-- `prop_bot_super_spec_v6.3.2.md` — полная спецификация.
+Минимальная реализация paper/testnet арбитражного бота с FastAPI, бумажным брокером, SQLite-леджером и веб-интерфейсом «System Status». Сервис запускается локально, в SAFE_MODE реальные ордера заблокированы, а все исполнения проходят через симулятор.
 
-## Быстрый старт
-1) Создай ветку: `epic/indie-pro-upgrade-v2`.
-2) Передай Codex ссылку на репозиторий и попроси выполнить **FULL_PLUS** + **ARBITRAGE_FUTURES_ADDENDUM** (режим no-questions).
-3) Проверь PR, CI и **Merge**.
+## 1. Подготовка окружения
 
-## Переменные окружения
-Смотри `.env.example`. Реальные ключи не коммить.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-## Возобновление работы (лимиты Codex)
-Файл `RESUME_STATE.json` хранит чекпоинт. Codex обязан завершать шаги в зелёном состоянии и продолжать позже.
+Скопируйте `.env.example` в `.env` и заполните значения при необходимости:
+
+```bash
+cp .env.example .env
+```
+
+По умолчанию `SAFE_MODE=true`, `DRY_RUN_ONLY=false`. Для работы с тестнетами Binance UM / OKX заполните API-ключи. Переменная `PROFILE` переключает конфигурацию (`paper` / `testnet` / `live`).
+
+## 2. Запуск API и UI
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Доступные эндпоинты:
+
+- `GET /healthz` — проверка живости.
+- `POST /api/arb/preview` — расчёт плана (legs, комиссии, ожидаемый PnL).
+- `POST /api/arb/execute` — исполнение через брокер/маршрутизатор (в SAFE_MODE возвращает 403).
+- `POST /api/ui/hold` / `POST /api/ui/resume` — управление режимом.
+- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события.
+- `GET /api/ui/plan/last` — последний сохранённый план.
+
+Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также содержит кнопки HOLD/RESUME.
+
+## 3. CLI и планировщик
+
+Запуск одиночного цикла (создаёт артефакт `artifacts/last_plan.json`):
+
+```bash
+python -m app.cli exec --profile paper
+```
+
+Для непрерывного прогона добавьте `--loop`. CLI автоматически включает `SAFE_MODE` и dry-run в paper/testnet профилях.
+
+## 4. Леджер и журнал
+
+- Файл `data/ledger.db` создаётся автоматически (SQLite).
+- Таблицы: `orders`, `fills`, `positions`, `balances`, `events`.
+- После каждого исполнения обновляются экспозиции и PnL, которые отображаются в `/api/ui/state` и на дашборде.
+
+Для просмотра содержимого можно использовать `sqlite3 data/ledger.db` или сторонние инструменты.
+
+## 5. Тесты и качество
+
+```bash
+pytest -q
+```
+
+CI workflow `test` запускает тот же набор. Перед коммитом убедитесь, что рабочее дерево чистое и тесты зелёные.
+
+## 6. Особенности безопасности
+
+- `SAFE_MODE` блокирует исполнение ордеров. Для симуляции достаточно включить `DRY_RUN_ONLY=true` и оставить SAFE_MODE включённым.
+- `TWO_MAN_RULE=true` требует двух одобрений для реального запуска (в текущем MVP проверка реализована в роутере и отключает live-выполнение).
+- Параметры по умолчанию задаются в `.env` и `configs/config.*.yaml`.
+
+## 7. Полезные команды Makefile
+
+```
+make venv      # создание виртуального окружения
+make run       # запуск uvicorn app.main:app
+make test      # pytest
+make fmt       # форматирование (ruff + black)
+make lint      # линтеры
+make dryrun.once  # одиночный запуск CLI
+make dryrun.loop  # непрерывный dry-run
+```
+
+## 8. Документация
+
+- `docs/DERIV_SETUP_GUIDE.md` — обновлённая инструкция по настройке тестнета и проверке SAFE_MODE.
+- `CODEX_TASK_TEST_BOT_MVP.md` — исходная постановка задания.

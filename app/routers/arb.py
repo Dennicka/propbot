@@ -6,9 +6,15 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..services import arbitrage
-from ..services.runtime import get_state
+from ..services.runtime import get_state, set_last_execution, set_last_plan
 
 router = APIRouter()
+
+
+class PreviewRequest(BaseModel):
+    symbol: str
+    notional: float | None = None
+    slippage_bps: int | None = Field(default=None, alias="used_slippage_bps")
 
 
 class PlanLegModel(BaseModel):
@@ -31,22 +37,27 @@ class PlanModel(BaseModel):
     reason: str | None = None
 
 
-@router.get("/edge")
-def edge_view() -> dict:
-    return {"pairs": arbitrage.current_edges()}
-
-
-@router.get("/preview")
-def preview(symbol: str, notional: float | None = None, slippage_bps: int | None = None) -> dict:
+@router.post("/preview")
+async def preview(request: PreviewRequest) -> dict:
     state = get_state()
-    notional_value = float(notional) if notional is not None else state.control.order_notional_usdt
-    slippage_value = int(slippage_bps) if slippage_bps is not None else state.control.max_slippage_bps
-    plan = arbitrage.build_plan(symbol, notional_value, slippage_value)
-    return plan.as_dict()
+    notional_value = (
+        float(request.notional)
+        if request.notional is not None
+        else state.control.order_notional_usdt
+    )
+    slippage_value = (
+        int(request.slippage_bps)
+        if request.slippage_bps is not None
+        else state.control.max_slippage_bps
+    )
+    plan = arbitrage.build_plan(request.symbol, notional_value, slippage_value)
+    plan_dict = plan.as_dict()
+    set_last_plan(plan_dict)
+    return plan_dict
 
 
 @router.post("/execute")
-def execute(plan_body: PlanModel) -> dict:
+async def execute(plan_body: PlanModel) -> dict:
     state = get_state()
     if state.control.safe_mode:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
@@ -54,5 +65,10 @@ def execute(plan_body: PlanModel) -> dict:
     if not plan.viable:
         detail = plan.reason or "plan not viable"
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
-    report = arbitrage.execute_plan(plan)
-    return report.as_dict()
+    try:
+        report = await arbitrage.execute_plan_async(plan)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    report_dict = report.as_dict()
+    set_last_execution(report_dict)
+    return report_dict
