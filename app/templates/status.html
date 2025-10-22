@@ -175,6 +175,7 @@
       <section class="card">
         <h2>Orders &amp; Positions</h2>
         <div class="card-actions">
+          <button id="closeExposureBtn" class="secondary">Close Exposure</button>
           <button id="cancelAllBtn" class="danger">Cancel All</button>
         </div>
         <div class="table-wrapper">
@@ -191,6 +192,23 @@
               </tr>
             </thead>
             <tbody id="openOrders"></tbody>
+          </table>
+        </div>
+        <div class="table-wrapper">
+          <h3>Recent Fills</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Fee</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="recentFills"></tbody>
           </table>
         </div>
         <div class="table-wrapper">
@@ -226,12 +244,14 @@
       const resumeBtn = document.getElementById('resumeBtn');
       const stopBtn = document.getElementById('stopBtn');
       const cancelAllBtn = document.getElementById('cancelAllBtn');
+      const closeExposureBtn = document.getElementById('closeExposureBtn');
       const loopStatusEl = document.getElementById('loopStatus');
       const loopConfigEl = document.getElementById('loopConfig');
       const loopCountersEl = document.getElementById('loopCounters');
       const loopSummaryEl = document.getElementById('loopSummary');
       const openOrdersBody = document.getElementById('openOrders');
       const positionsBody = document.getElementById('positions');
+      const recentFillsBody = document.getElementById('recentFills');
 
       function renderLoopOverview(loopInfo, secret, env, ordersCount) {
         const running = Boolean(loopInfo?.running);
@@ -427,15 +447,20 @@
 
       async function fetchState() {
         try {
-          const [stateResp, secretResp] = await Promise.all([
+          const [stateResp, secretResp, ordersResp] = await Promise.all([
             fetch('/api/ui/state'),
             fetch('/api/ui/secret'),
+            fetch('/api/ui/orders'),
           ]);
           if (!stateResp.ok) throw new Error('failed to load state');
           const data = await stateResp.json();
           let secret = null;
           if (secretResp.ok) {
             secret = await secretResp.json();
+          }
+          let ordersData = { open_orders: [], positions: [], fills: [] };
+          if (ordersResp.ok) {
+            ordersData = await ordersResp.json();
           }
           document.getElementById('mode').textContent = `Mode: ${data.mode}`;
           const env = String((data.flags && (data.flags.ENV || data.flags.MODE)) || '').toLowerCase();
@@ -467,7 +492,7 @@
           document.getElementById('events').textContent = events
             .map((event) => `${event.ts} [${event.level}] ${event.code}: ${JSON.stringify(event.payload)}`)
             .join('\n');
-          const orders = data.open_orders || [];
+          const orders = ordersData.open_orders || [];
           openOrdersBody.innerHTML = orders.length
             ? orders
                 .map(
@@ -483,7 +508,24 @@
                 )
                 .join('')
             : '<tr><td colspan="6" class="muted">No open orders</td></tr>';
-          const positions = data.positions || [];
+          const fills = ordersData.fills || [];
+          recentFillsBody.innerHTML = fills.length
+            ? fills
+                .map(
+                  (fill) => `
+                    <tr>
+                      <td>${fill.venue ?? ''}</td>
+                      <td>${fill.symbol ?? ''}</td>
+                      <td>${String(fill.side ?? '').toUpperCase()}</td>
+                      <td>${Number(fill.qty ?? 0).toFixed(4)}</td>
+                      <td>${Number(fill.price ?? 0).toFixed(4)}</td>
+                      <td>${Number(fill.fee ?? 0).toFixed(4)}</td>
+                      <td>${fill.ts ? new Date(fill.ts).toLocaleString() : ''}</td>
+                    </tr>`
+                )
+                .join('')
+            : '<tr><td colspan="7" class="muted">No fills recorded</td></tr>';
+          const positions = ordersData.positions || [];
           positionsBody.innerHTML = positions.length
             ? positions
                 .map(
@@ -500,6 +542,9 @@
           renderLoopOverview(data.loop, secret, env, orders.length);
           renderLastPlan(data.last_plan, data.loop, secret);
           resumeBtn.disabled = data.safe_mode;
+          const allowCloseExposure = Array.isArray(exposures) && exposures.length > 0;
+          closeExposureBtn.disabled = !allowCloseExposure;
+          closeExposureBtn.title = allowCloseExposure ? '' : 'No exposure to close';
         } catch (error) {
           console.error(error);
         }
@@ -517,7 +562,8 @@
       holdBtn.addEventListener('click', () => postAction('/api/ui/hold'));
       resumeBtn.addEventListener('click', () => postAction('/api/ui/resume'));
       stopBtn.addEventListener('click', () => postAction('/api/ui/stop'));
-      cancelAllBtn.addEventListener('click', () => postAction('/api/ui/cancel-all'));
+      cancelAllBtn.addEventListener('click', () => postAction('/api/ui/cancel_all'));
+      closeExposureBtn.addEventListener('click', () => postAction('/api/ui/close_exposure'));
 
       fetchState();
       setInterval(fetchState, 4000);

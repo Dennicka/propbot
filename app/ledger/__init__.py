@@ -118,6 +118,36 @@ def record_order(
         with conn:
             existing = _fetch_order_by_key(conn, idemp_key)
             if existing:
+                conn.execute(
+                    """
+                    UPDATE orders
+                    SET venue = ?, symbol = ?, side = ?, qty = ?, price = ?, status = ?, client_ts = ?, exchange_ts = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        venue,
+                        symbol,
+                        side,
+                        qty,
+                        price,
+                        status,
+                        client_ts,
+                        exchange_ts,
+                        int(existing["id"]),
+                    ),
+                )
+                _record_event_locked(
+                    conn,
+                    level="INFO",
+                    code="order_upserted",
+                    payload={
+                        "order_id": int(existing["id"]),
+                        "venue": venue,
+                        "symbol": symbol,
+                        "status": status,
+                        "idemp_key": idemp_key,
+                    },
+                )
                 return int(existing["id"])
             cursor = conn.execute(
                 """
@@ -355,11 +385,25 @@ def fetch_open_orders() -> List[Dict[str, object]]:
     conn = _connect()
     rows = conn.execute(
         """
-        SELECT id, venue, symbol, side, qty, price, status, client_ts, exchange_ts
+        SELECT id, venue, symbol, side, qty, price, status, client_ts, exchange_ts, idemp_key
         FROM orders
         WHERE status NOT IN ('filled', 'cancelled')
         ORDER BY client_ts DESC
         """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_recent_fills(limit: int = 20) -> List[Dict[str, object]]:
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT id, order_id, venue, symbol, side, qty, price, fee, ts
+        FROM fills
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (int(limit),),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -446,6 +490,7 @@ __all__ = [
     "compute_exposures",
     "compute_pnl",
     "fetch_open_orders",
+    "fetch_recent_fills",
     "get_order",
     "fetch_balances",
     "fetch_events",

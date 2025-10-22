@@ -33,13 +33,16 @@
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-Проверьте `/api/ui/state` — в блоке `loop` отображается состояние авто-цикла (RUN/HOLD, последний план, ошибка).
+Проверьте `/api/ui/state` — в блоке `loop` отображается состояние авто-цикла (RUN/HOLD, последний план, ошибка). Страница `http://localhost:8000/` показывает флаги, экспозиции, PnL, журнал событий, а также таблицы открытых ордеров, позиций и последних fill'ов с кнопками `Cancel All` и `Close Exposure`.
 
 ### Управление циклом
 
 - `POST /api/ui/resume` — старт авто-loop (требует `SAFE_MODE=false`).
 - `POST /api/ui/hold` — остановка цикла.
 - `POST /api/ui/reset` — сброс счётчиков и очистка последнего плана/исполнения.
+- `GET /api/ui/orders` — снимок открытых ордеров/позиций/fill'ов.
+- `POST /api/ui/cancel_all` — отзыв всех активных ордеров (только `ENV=testnet`).
+- `POST /api/ui/close_exposure` — flatten позиций через `hedge`.
 
 ## 3. CLI auto-loop
 
@@ -72,6 +75,12 @@ curl -X POST http://127.0.0.1:8000/api/arb/preview \
 
 ```bash
 curl http://127.0.0.1:8000/api/ui/secret | jq
+```
+
+Отменить все ордера на тестнете (требует `SAFE_MODE=false` и `ENABLE_PLACE_TEST_ORDERS=true`):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/ui/cancel_all
 ```
 
 ## 4. Проверка позиций/балансов
