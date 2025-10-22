@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from .. import ledger
 from ..services.loop import hold_loop, loop_snapshot, reset_loop, resume_loop
@@ -14,6 +15,13 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class SecretUpdate(BaseModel):
+    auto_loop: bool | None = Field(default=None, description="Enable or disable auto loop")
+    pair: str | None = Field(default=None, description="Target symbol override")
+    venues: list[str] | None = Field(default=None, description="Venues participating in the loop")
+    notional_usdt: float | None = Field(default=None, description="Order notional in USDT")
 
 
 @router.get("/state")
@@ -43,6 +51,45 @@ async def runtime_state() -> dict:
         "events": ledger.fetch_events(20),
         "loop": loop_snapshot(),
     }
+
+
+def _secret_payload(state) -> dict:
+    loop_info = loop_snapshot()
+    pair = state.control.loop_pair
+    if not pair:
+        last_plan = loop_info.get("last_plan") if isinstance(loop_info, dict) else None
+        if isinstance(last_plan, dict):
+            pair = str(last_plan.get("symbol") or "").upper() or None
+    venues = list(state.control.loop_venues)
+    if not venues:
+        venues = ["binance-um", "okx-perp"]
+    return {
+        "auto_loop": bool(state.control.auto_loop),
+        "pair": pair or "BTCUSDT",
+        "venues": venues,
+        "notional_usdt": state.control.order_notional_usdt,
+        "loop": loop_info,
+    }
+
+
+@router.get("/secret")
+async def secret_state() -> dict:
+    state = get_state()
+    return _secret_payload(state)
+
+
+@router.post("/secret")
+async def update_secret(payload: SecretUpdate) -> dict:
+    state = get_state()
+    if payload.auto_loop is not None:
+        state.control.auto_loop = bool(payload.auto_loop)
+    if payload.pair is not None:
+        state.control.loop_pair = payload.pair.upper() if payload.pair else None
+    if payload.venues is not None:
+        state.control.loop_venues = [str(entry) for entry in payload.venues]
+    if payload.notional_usdt is not None:
+        state.control.order_notional_usdt = float(payload.notional_usdt)
+    return _secret_payload(state)
 
 
 @router.post("/hold")

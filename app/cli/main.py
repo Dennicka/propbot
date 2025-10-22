@@ -17,11 +17,24 @@ def _build_parser() -> argparse.ArgumentParser:
     exec_parser.add_argument("--artifact", help="path for storing last plan JSON artifact")
     loop_parser = sub.add_parser("loop", help="run automated preview/execute cycles")
     loop_parser.add_argument("--env", default="paper", choices=["paper", "testnet"], help="runtime profile to use")
+    loop_parser.add_argument("--pair", required=True, help="symbol to trade (e.g. BTCUSDT)")
+    loop_parser.add_argument(
+        "--venues",
+        nargs="+",
+        required=True,
+        help="venues participating in the loop (e.g. binance-um okx-perp)",
+    )
     loop_parser.add_argument(
         "--cycles",
         type=int,
         default=0,
         help="optional number of cycles to run before exiting (0 runs indefinitely)",
+    )
+    loop_parser.add_argument(
+        "--notional",
+        type=float,
+        required=True,
+        help="order notional in USDT",
     )
     return parser
 
@@ -57,9 +70,22 @@ def _run_loop(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
     from .. import ledger
     from ..services.loop import loop_forever
+    from ..services.runtime import get_state, set_mode
 
     ledger.init_db()
-    logging.info("starting auto-loop (env=%s, cycles=%s)", args.env, "infinite" if args.cycles <= 0 else args.cycles)
+    state = get_state()
+    state.control.loop_pair = str(args.pair).upper()
+    state.control.loop_venues = [str(venue) for venue in args.venues]
+    state.control.order_notional_usdt = float(args.notional)
+    logging.info(
+        "starting auto-loop (env=%s, pair=%s, venues=%s, notional=%s, cycles=%s)",
+        args.env,
+        state.control.loop_pair,
+        ",".join(state.control.loop_venues),
+        state.control.order_notional_usdt,
+        "infinite" if args.cycles <= 0 else args.cycles,
+    )
+    set_mode("RUN")
     cycles = args.cycles if args.cycles > 0 else None
     try:
         asyncio.run(loop_forever(cycles=cycles))

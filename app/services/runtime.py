@@ -87,6 +87,9 @@ class ControlState:
     taker_fee_bps_okx: int = 2
     poll_interval_sec: int = 5
     min_spread_bps: float = 0.0
+    auto_loop: bool = False
+    loop_pair: str | None = None
+    loop_venues: List[str] = field(default_factory=list)
 
     @property
     def flags(self) -> Dict[str, object]:
@@ -104,6 +107,9 @@ class ControlState:
             "TAKER_FEE_BPS_OKX": self.taker_fee_bps_okx,
             "POLL_INTERVAL_SEC": self.poll_interval_sec,
             "MIN_SPREAD_BPS": self.min_spread_bps,
+            "AUTO_LOOP": self.auto_loop,
+            "LOOP_PAIR": self.loop_pair or "",
+            "LOOP_VENUES": ",".join(self.loop_venues) if self.loop_venues else "",
         }
 
 
@@ -225,6 +231,11 @@ def _bootstrap_runtime() -> RuntimeState:
         or "paper"
     ).lower()
     environment = os.environ.get("MODE") or os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
+    loop_pair_env = os.environ.get("LOOP_PAIR")
+    loop_venues_env = os.environ.get("LOOP_VENUES")
+    loop_venues = []
+    if loop_venues_env:
+        loop_venues = [entry.strip() for entry in loop_venues_env.split(",") if entry.strip()]
     control = ControlState(
         mode="HOLD" if safe_mode else "RUN",
         safe_mode=safe_mode,
@@ -240,6 +251,9 @@ def _bootstrap_runtime() -> RuntimeState:
         taker_fee_bps_okx=fee_okx,
         poll_interval_sec=poll_interval,
         min_spread_bps=min_spread_bps,
+        auto_loop=False,
+        loop_pair=loop_pair_env.upper() if loop_pair_env else None,
+        loop_venues=loop_venues,
     )
     guards = _init_guards(loaded)
     metrics = MetricsState()

@@ -19,6 +19,13 @@ def test_ui_state_and_controls(client):
     assert "recon_status" in state_payload
     assert state_payload["loop"]["status"] == "HOLD"
 
+    secret_resp = client.get("/api/ui/secret")
+    assert secret_resp.status_code == 200
+    secret_payload = secret_resp.json()
+    assert str(secret_payload["pair"]).upper() in {"BTCUSDT", "ETHUSDT"}
+    assert secret_payload["auto_loop"] is False
+    assert "notional_usdt" in secret_payload
+
     hold_resp = client.post("/api/ui/hold")
     assert hold_resp.status_code == 200
     assert hold_resp.json()["mode"] == "HOLD"
@@ -37,6 +44,10 @@ def test_ui_state_and_controls(client):
     resume_resp = client.post("/api/ui/resume")
     assert resume_resp.status_code == 200
     assert resume_resp.json()["mode"] == "RUN"
+
+    secret_after_resume = client.get("/api/ui/secret")
+    assert secret_after_resume.status_code == 200
+    assert secret_after_resume.json()["auto_loop"] is True
 
     # stop background loop to avoid leaking tasks between tests
     client.post("/api/ui/hold")
