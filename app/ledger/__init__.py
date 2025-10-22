@@ -144,6 +144,19 @@ def record_order(
             return order_id
 
 
+def get_order(order_id: int) -> Dict[str, object] | None:
+    conn = _connect()
+    row = conn.execute(
+        """
+        SELECT id, venue, symbol, side, qty, price, status, client_ts, exchange_ts, idemp_key
+        FROM orders
+        WHERE id = ?
+        """,
+        (order_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def update_order_status(order_id: int, status: str) -> None:
     with _LEDGER_LOCK:
         conn = _connect()
@@ -419,6 +432,7 @@ __all__ = [
     "LEDGER_PATH",
     "compute_exposures",
     "compute_pnl",
+    "get_order",
     "fetch_balances",
     "fetch_events",
     "fetch_positions",

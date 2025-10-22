@@ -36,11 +36,13 @@ class ExecutionRouter:
             "paper": PaperBroker("paper"),
             "binance-um": TestnetBroker(
                 "binance-um",
+                "binance_um",
                 safe_mode=self.safe_mode or self.dry_run_only,
                 required_env=("BINANCE_UM_API_KEY_TESTNET", "BINANCE_UM_API_SECRET_TESTNET"),
             ),
             "okx-perp": TestnetBroker(
                 "okx-perp",
+                "okx_perp",
                 safe_mode=self.safe_mode or self.dry_run_only,
                 required_env=("OKX_API_KEY_TESTNET", "OKX_API_SECRET_TESTNET", "OKX_API_PASSPHRASE_TESTNET"),
             ),

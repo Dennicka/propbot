@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from .. import ledger
+from ..services.loop import hold_loop, loop_snapshot, reset_loop, resume_loop
 from ..services.runtime import get_last_plan, get_state, set_mode
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
@@ -40,11 +41,13 @@ async def runtime_state() -> dict:
         "last_plan": dryrun.last_plan if dryrun else None,
         "last_execution": dryrun.last_execution if dryrun else None,
         "events": ledger.fetch_events(20),
+        "loop": loop_snapshot(),
     }
 
 
 @router.post("/hold")
 async def hold() -> dict:
+    await hold_loop()
     set_mode("HOLD")
     ledger.record_event(level="INFO", code="mode_change", payload={"mode": "HOLD"})
     state = get_state()
@@ -56,10 +59,20 @@ async def resume() -> dict:
     state = get_state()
     if state.control.safe_mode:
         raise HTTPException(status_code=403, detail="SAFE_MODE enabled; disable before resume")
+    await resume_loop()
     set_mode("RUN")
     ledger.record_event(level="INFO", code="mode_change", payload={"mode": "RUN"})
     state = get_state()
     return {"mode": state.control.mode, "ts": _ts()}
+
+
+@router.post("/reset")
+async def reset() -> dict:
+    await hold_loop()
+    loop_state = await reset_loop()
+    set_mode("HOLD")
+    ledger.record_event(level="INFO", code="loop_reset", payload={"mode": "HOLD"})
+    return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
 @router.get("/plan/last")

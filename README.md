@@ -29,8 +29,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `GET /healthz` — проверка живости.
 - `POST /api/arb/preview` — расчёт плана (legs, комиссии, ожидаемый PnL).
 - `POST /api/arb/execute` — исполнение через брокер/маршрутизатор (в SAFE_MODE возвращает 403).
-- `POST /api/ui/hold` / `POST /api/ui/resume` — управление режимом.
-- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события.
+- `POST /api/ui/hold` / `POST /api/ui/resume` / `POST /api/ui/reset` — управление циклом.
+- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события, статус auto-loop.
 - `GET /api/ui/plan/last` — последний сохранённый план.
 
 Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также содержит кнопки HOLD/RESUME.
@@ -44,6 +44,14 @@ python -m app.cli exec --profile paper
 ```
 
 Для непрерывного прогона добавьте `--loop`. CLI автоматически включает `SAFE_MODE` и dry-run в paper/testnet профилях.
+
+Автоматический цикл превью/исполнения (paper/testnet профили, логирование в SQLite):
+
+```bash
+python -m app.cli loop --env paper --cycles 10
+```
+
+Без флага `--cycles` процесс работает бесконечно; события (`loop_cycle`, `loop_plan_unviable`) пишутся в `data/ledger.db`.
 
 ## 4. Леджер и журнал
 
@@ -82,4 +90,5 @@ make dryrun.loop  # непрерывный dry-run
 ## 8. Документация
 
 - `docs/DERIV_SETUP_GUIDE.md` — обновлённая инструкция по настройке тестнета и проверке SAFE_MODE.
+- `docs/TESTNET_QUICKSTART_RU.md` — быстрый запуск Binance UM / OKX testnet с флагом `ENABLE_PLACE_TEST_ORDERS`.
 - `CODEX_TASK_TEST_BOT_MVP.md` — исходная постановка задания.
