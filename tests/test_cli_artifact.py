@@ -22,3 +22,19 @@ def test_cli_generates_plan_artifact(tmp_path):
     payload = json.loads(artifact.read_text())
     assert payload["result"]["ok"] is True
     ledger.reset()
+
+
+def test_cli_loop_cycles(tmp_path):
+    ledger.reset()
+    env = {**dict(os.environ), "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    result = subprocess.run(
+        ["python", "-m", "app.cli", "loop", "--env", "paper", "--cycles", "1"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    events = ledger.fetch_events(5)
+    assert any(evt["code"] in {"loop_cycle", "loop_plan_unviable"} for evt in events)
+    ledger.reset()

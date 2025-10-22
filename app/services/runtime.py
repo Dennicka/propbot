@@ -123,17 +123,6 @@ class MetricsState:
 
 
 @dataclass
-class RuntimeState:
-    config: LoadedConfig
-    guards: Dict[str, GuardState]
-    control: ControlState
-    metrics: MetricsState
-    incidents: List[Dict[str, object]] = field(default_factory=list)
-    derivatives: DerivativesRuntime | None = None
-    dryrun: "DryRunState" | None = None
-
-
-@dataclass
 class DryRunState:
     last_cycle_ts: str | None = None
     last_plan: Dict[str, object] | None = None
@@ -145,6 +134,44 @@ class DryRunState:
     cycles_completed: int = 0
     poll_interval_sec: int = 5
     min_spread_bps: float = 0.0
+
+
+@dataclass
+class LoopState:
+    status: str = "HOLD"
+    running: bool = False
+    last_cycle_ts: str | None = None
+    last_plan: Dict[str, object] | None = None
+    last_execution: Dict[str, object] | None = None
+    last_error: str | None = None
+    cycles_completed: int = 0
+    last_spread_bps: float | None = None
+    last_spread_usdt: float | None = None
+
+    def as_dict(self) -> Dict[str, object | None]:
+        return {
+            "status": self.status,
+            "running": self.running,
+            "last_cycle_ts": self.last_cycle_ts,
+            "last_plan": self.last_plan,
+            "last_execution": self.last_execution,
+            "last_error": self.last_error,
+            "cycles_completed": self.cycles_completed,
+            "last_spread_bps": self.last_spread_bps,
+            "last_spread_usdt": self.last_spread_usdt,
+        }
+
+
+@dataclass
+class RuntimeState:
+    config: LoadedConfig
+    guards: Dict[str, GuardState]
+    control: ControlState
+    metrics: MetricsState
+    incidents: List[Dict[str, object]] = field(default_factory=list)
+    derivatives: DerivativesRuntime | None = None
+    dryrun: DryRunState | None = None
+    loop: LoopState = field(default_factory=LoopState)
 
 
 def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
@@ -229,6 +256,7 @@ def _bootstrap_runtime() -> RuntimeState:
         incidents=[],
         derivatives=derivatives,
         dryrun=dryrun_state,
+        loop=LoopState(),
     )
 
 
@@ -243,6 +271,10 @@ def ensure_dryrun_state() -> DryRunState:
     if _STATE.dryrun is None:
         _STATE.dryrun = DryRunState()
     return _STATE.dryrun
+
+
+def get_loop_state() -> LoopState:
+    return _STATE.loop
 
 
 def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:

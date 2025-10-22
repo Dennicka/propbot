@@ -17,10 +17,15 @@ def test_ui_state_and_controls(client):
     assert "exposures" in state_payload
     assert "pnl" in state_payload
     assert "recon_status" in state_payload
+    assert state_payload["loop"]["status"] == "HOLD"
 
     hold_resp = client.post("/api/ui/hold")
     assert hold_resp.status_code == 200
     assert hold_resp.json()["mode"] == "HOLD"
+
+    reset_resp = client.post("/api/ui/reset")
+    assert reset_resp.status_code == 200
+    assert reset_resp.json()["loop"]["status"] == "HOLD"
 
     resume_fail = client.post("/api/ui/resume")
     assert resume_fail.status_code == 403
@@ -32,3 +37,6 @@ def test_ui_state_and_controls(client):
     resume_resp = client.post("/api/ui/resume")
     assert resume_resp.status_code == 200
     assert resume_resp.json()["mode"] == "RUN"
+
+    # stop background loop to avoid leaking tasks between tests
+    client.post("/api/ui/hold")

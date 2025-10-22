@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -14,6 +15,14 @@ def _build_parser() -> argparse.ArgumentParser:
     exec_parser.add_argument("--profile", default="paper", choices=["paper", "testnet", "live"], help="runtime profile")
     exec_parser.add_argument("--loop", action="store_true", help="run continuously until interrupted")
     exec_parser.add_argument("--artifact", help="path for storing last plan JSON artifact")
+    loop_parser = sub.add_parser("loop", help="run automated preview/execute cycles")
+    loop_parser.add_argument("--env", default="paper", choices=["paper", "testnet"], help="runtime profile to use")
+    loop_parser.add_argument(
+        "--cycles",
+        type=int,
+        default=0,
+        help="optional number of cycles to run before exiting (0 runs indefinitely)",
+    )
     return parser
 
 
@@ -43,11 +52,29 @@ def _run_exec(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_loop(args: argparse.Namespace) -> int:
+    _configure_environment(args.env)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    from .. import ledger
+    from ..services.loop import loop_forever
+
+    ledger.init_db()
+    logging.info("starting auto-loop (env=%s, cycles=%s)", args.env, "infinite" if args.cycles <= 0 else args.cycles)
+    cycles = args.cycles if args.cycles > 0 else None
+    try:
+        asyncio.run(loop_forever(cycles=cycles))
+    except KeyboardInterrupt:
+        logging.info("loop interrupted by user")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "exec":
         return _run_exec(args)
+    if args.command == "loop":
+        return _run_loop(args)
     parser.error("unknown command")
     return 1
 

@@ -85,7 +85,7 @@ def _ensure_dryrun_state() -> DryRunState:
     return state.dryrun
 
 
-def _select_symbol() -> str:
+def select_cycle_symbol() -> str:
     state = get_state()
     cfg = state.config.data.derivatives
     if cfg and cfg.arbitrage and cfg.arbitrage.pairs:
@@ -109,7 +109,7 @@ class DryRunScheduler:
         state = get_state()
         state.control.dry_run = True
         dryrun_state = _ensure_dryrun_state()
-        symbol = _select_symbol()
+        symbol = select_cycle_symbol()
         notional = state.control.order_notional_usdt
         slippage = state.control.max_slippage_bps
         payload: Dict[str, Any] = {"ok": False, "ts": ts}
