@@ -46,10 +46,33 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 Для короткого теста используйте новый режим:
 
 ```bash
-python -m app.cli loop --env testnet --cycles 3
+python -m app.cli loop \
+  --env testnet \
+  --pair BTCUSDT \
+  --venues binance-um okx-perp \
+  --notional 25 \
+  --cycles 3
 ```
 
-Команда прогонит указанное число циклов `preview → execute`, запишет события (`loop_cycle`, `loop_plan_unviable`) в `data/ledger.db/events` и вернёт управление.
+Команда прогонит указанное число циклов `preview → execute`, запишет события (`loop_cycle`, `loop_plan_unviable`) в `data/ledger.db/events` и вернёт управление. Параметры `--pair`, `--venues`, `--notional` сохраняются в state и отображаются в UI (карточка **Last Plan**, `/api/ui/secret`).
+
+Для быстрого прогона без ограничений по числу повторов опустите `--cycles` (по умолчанию бесконечный режим до `Ctrl+C`).
+
+### HTTP-примеры
+
+Получить предпросмотр плана и одновременно записать его в UI:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/arb/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"pair": "BTCUSDT", "notional": 50}'
+```
+
+Проверить параметры авто-цикла и его статус:
+
+```bash
+curl http://127.0.0.1:8000/api/ui/secret | jq
+```
 
 ## 4. Проверка позиций/балансов
 

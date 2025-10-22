@@ -75,6 +75,24 @@
       .good {
         color: #4ade80;
       }
+      .plan-summary {
+        margin-top: 0.5rem;
+      }
+      .plan-spread {
+        margin-top: 0.5rem;
+        line-height: 1.4;
+      }
+      .plan-reason {
+        margin-top: 0.75rem;
+        font-size: 0.85rem;
+        color: rgba(248, 250, 252, 0.75);
+      }
+      .muted {
+        color: rgba(148, 163, 184, 0.85);
+      }
+      .plan-legs {
+        margin-top: 0.75rem;
+      }
       pre {
         background: rgba(15, 23, 42, 0.65);
         padding: 0.75rem;
@@ -120,7 +138,11 @@
       </section>
       <section class="card">
         <h2>Last Plan</h2>
-        <pre id="lastPlan">No plan recorded</pre>
+        <div id="loopState" class="muted">Auto-loop: --</div>
+        <div id="lastPlanSummary" class="plan-summary muted">No plan recorded</div>
+        <div id="lastPlanSpread" class="plan-spread"></div>
+        <table id="lastPlanLegs" class="plan-legs"></table>
+        <div id="lastPlanReason" class="plan-reason"></div>
       </section>
       <section class="card">
         <h2>Events</h2>
@@ -131,11 +153,126 @@
       const holdBtn = document.getElementById('holdBtn');
       const resumeBtn = document.getElementById('resumeBtn');
 
+      function renderLastPlan(plan, loopInfo, secret) {
+        const loopStateEl = document.getElementById('loopState');
+        const summaryEl = document.getElementById('lastPlanSummary');
+        const spreadEl = document.getElementById('lastPlanSpread');
+        const legsTable = document.getElementById('lastPlanLegs');
+        const reasonEl = document.getElementById('lastPlanReason');
+
+        const cycles = loopInfo?.cycles_completed ?? 0;
+        const running = loopInfo?.running ? 'ON' : 'OFF';
+        const targetPair = secret?.pair || plan?.symbol || 'N/A';
+        const targetNotional = secret?.notional_usdt ?? plan?.notional;
+        const venuesLabel = Array.isArray(secret?.venues) ? secret.venues.join(' ↔ ') : '';
+        const parts = [`Auto-loop: ${running} (cycles: ${cycles})`, `${targetPair}`];
+        const notionalLabel = Number(targetNotional);
+        if (Number.isFinite(notionalLabel)) {
+          parts.push(`${notionalLabel.toFixed(2)} USDT`);
+        }
+        if (venuesLabel) {
+          parts.push(venuesLabel);
+        }
+        loopStateEl.textContent = parts.join(' · ');
+
+        if (!plan) {
+          summaryEl.textContent = 'No plan recorded';
+          summaryEl.classList.add('muted');
+          spreadEl.innerHTML = '';
+          legsTable.innerHTML = '';
+          legsTable.style.display = 'none';
+          reasonEl.textContent = '';
+          return;
+        }
+
+        const symbol = plan.symbol || secret?.pair || 'UNKNOWN';
+        const legs = Array.isArray(plan.legs) ? plan.legs : [];
+        const formatVenue = (leg) => {
+          const venue = leg.ex ?? leg.exchange ?? '';
+          return typeof venue === 'string' ? venue.toUpperCase() : String(venue ?? '');
+        };
+        const formatAmount = (value, decimals = 2) => {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            return (0).toFixed(decimals);
+          }
+          return numeric.toFixed(decimals);
+        };
+        const buyLeg = legs.find((leg) => leg.side === 'buy');
+        const sellLeg = legs.find((leg) => leg.side === 'sell');
+        const qty = Number(buyLeg?.qty ?? sellLeg?.qty ?? 0);
+        const buyPrice = Number(buyLeg?.px ?? 0);
+        const sellPrice = Number(sellLeg?.px ?? 0);
+        const grossSpread = qty ? (sellPrice - buyPrice) * qty : 0;
+        const totalFees = legs.reduce((acc, leg) => acc + Number(leg.fee_usdt ?? 0), 0);
+        const planPnl = plan.est_pnl_usdt;
+        const netSpread =
+          planPnl === undefined || planPnl === null ? grossSpread - totalFees : Number(planPnl);
+        const notional = Number(plan.notional ?? secret?.notional_usdt ?? 0);
+        const planBps = plan.est_pnl_bps;
+        const grossBps = notional ? (grossSpread / notional) * 10_000 : 0;
+        const netBps = planBps === undefined || planBps === null ? (notional ? (netSpread / notional) * 10_000 : 0) : Number(planBps);
+
+        summaryEl.textContent = `${symbol} · ${plan.viable ? 'Viable' : 'Rejected'}`;
+        summaryEl.classList.remove('muted');
+        spreadEl.innerHTML = `
+          <div>Spread (gross): <strong>${formatAmount(grossSpread)}</strong> USDT (${formatAmount(grossBps, 2)} bps)</div>
+          <div>Spread (net): <strong>${formatAmount(netSpread)}</strong> USDT (${formatAmount(netBps, 2)} bps)</div>
+          <div>Fees: ${formatAmount(totalFees)} USDT</div>
+        `;
+
+        if (legs.length) {
+          legsTable.style.display = 'table';
+          legsTable.innerHTML = `
+            <thead>
+              <tr>
+                <th>Exchange</th>
+                <th>Side</th>
+                <th>Price</th>
+                <th>Qty</th>
+                <th>Fee (USDT)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${legs
+                .map(
+                  (leg) => `
+                    <tr>
+                      <td>${formatVenue(leg)}</td>
+                      <td>${leg.side?.toUpperCase() ?? ''}</td>
+                      <td>${formatAmount(leg.px ?? 0)}</td>
+                      <td>${formatAmount(leg.qty ?? 0, 4)}</td>
+                      <td>${formatAmount(leg.fee_usdt ?? 0, 4)}</td>
+                    </tr>`
+                )
+                .join('')}
+            </tbody>
+          `;
+        } else {
+          legsTable.innerHTML = '';
+          legsTable.style.display = 'none';
+        }
+
+        if (plan.viable) {
+          reasonEl.textContent = 'Decision: execute (plan viable)';
+        } else {
+          const reason = plan.reason || 'Plan not viable';
+          reasonEl.textContent = `Decision: skip · Reason: ${reason}`;
+        }
+      }
+
       async function fetchState() {
         try {
-          const resp = await fetch('/api/ui/state');
-          if (!resp.ok) throw new Error('failed to load state');
-          const data = await resp.json();
+          const [stateResp, secretResp] = await Promise.all([
+            fetch('/api/ui/state'),
+            fetch('/api/ui/secret'),
+          ]);
+          if (!stateResp.ok) throw new Error('failed to load state');
+          const data = await stateResp.json();
+          let secret = null;
+          if (secretResp.ok) {
+            secret = await secretResp.json();
+          }
           document.getElementById('mode').textContent = `Mode: ${data.mode}`;
           const flagLines = Object.entries(data.flags || {})
             .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
@@ -154,30 +291,21 @@
             )
             .join('');
           const pnl = data.pnl || {};
+          const totalPnl = Number(pnl.total ?? 0);
+          const realizedPnl = Number(pnl.realized ?? 0);
+          const unrealizedPnl = Number(pnl.unrealized ?? 0);
           document.getElementById('pnl').innerHTML = `
-            <div>Total: <span class="${pnl.total >= 0 ? 'good' : 'bad'}">${(pnl.total ?? 0).toFixed(2)}</span> USDT</div>
-            <div>Realized: ${(pnl.realized ?? 0).toFixed(2)}</div>
-            <div>Unrealized: ${(pnl.unrealized ?? 0).toFixed(2)}</div>`;
+            <div>Total: <span class="${totalPnl >= 0 ? 'good' : 'bad'}">${totalPnl.toFixed(2)}</span> USDT</div>
+            <div>Realized: ${realizedPnl.toFixed(2)}</div>
+            <div>Unrealized: ${unrealizedPnl.toFixed(2)}</div>`;
           const events = data.events || [];
           document.getElementById('events').textContent = events
             .map((event) => `${event.ts} [${event.level}] ${event.code}: ${JSON.stringify(event.payload)}`)
             .join('\n');
-          if (data.last_plan) {
-            document.getElementById('lastPlan').textContent = JSON.stringify(data.last_plan, null, 2);
-          }
+          renderLastPlan(data.last_plan, data.loop, secret);
           resumeBtn.disabled = data.safe_mode;
         } catch (error) {
           console.error(error);
-        }
-      }
-
-      async function fetchLastPlan() {
-        const resp = await fetch('/api/ui/plan/last');
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.last_plan) {
-            document.getElementById('lastPlan').textContent = JSON.stringify(data.last_plan, null, 2);
-          }
         }
       }
 
@@ -194,7 +322,6 @@
       resumeBtn.addEventListener('click', () => postAction('/api/ui/resume'));
 
       fetchState();
-      fetchLastPlan();
       setInterval(fetchState, 4000);
     </script>
   </body>

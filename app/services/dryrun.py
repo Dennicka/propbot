@@ -87,6 +87,9 @@ def _ensure_dryrun_state() -> DryRunState:
 
 def select_cycle_symbol() -> str:
     state = get_state()
+    override = _normalise_symbol(state.control.loop_pair)
+    if override:
+        return override
     cfg = state.config.data.derivatives
     if cfg and cfg.arbitrage and cfg.arbitrage.pairs:
         for pair in cfg.arbitrage.pairs:

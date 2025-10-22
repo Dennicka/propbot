@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, List, Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 from ..services import arbitrage
 from ..services.runtime import get_state, set_last_execution, set_last_plan
@@ -13,8 +13,21 @@ router = APIRouter()
 
 class PreviewRequest(BaseModel):
     symbol: str
+    pair: str | None = None
     notional: float | None = None
     slippage_bps: int | None = Field(default=None, alias="used_slippage_bps")
+
+    @root_validator(pre=True)
+    def _alias_pair(cls, values: Dict[str, object]) -> Dict[str, object]:
+        symbol = values.get("symbol")
+        pair = values.get("pair")
+        if symbol and pair and str(symbol).upper() != str(pair).upper():
+            raise ValueError("symbol and pair must match when both provided")
+        if not symbol and pair:
+            values["symbol"] = pair
+        if "symbol" not in values or not values.get("symbol"):
+            raise ValueError("symbol or pair is required")
+        return values
 
 
 class PlanLegModel(BaseModel):

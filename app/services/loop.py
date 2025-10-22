@@ -120,6 +120,8 @@ class LoopController:
             loop_state = get_loop_state()
             loop_state.status = "RUN"
             loop_state.running = True
+            state = get_state()
+            state.control.auto_loop = True
             if self._task and not self._task.done():
                 return loop_state
             loop = asyncio.get_running_loop()
@@ -132,6 +134,8 @@ class LoopController:
             loop_state = get_loop_state()
             loop_state.status = "HOLD"
             loop_state.running = False
+            state = get_state()
+            state.control.auto_loop = False
             return loop_state
 
     async def reset(self) -> LoopState:
@@ -139,6 +143,7 @@ class LoopController:
             await self._cancel_locked()
             state = get_state()
             state.loop = LoopState()
+            state.control.auto_loop = False
             return state.loop
 
     async def _cancel_locked(self) -> None:
@@ -202,6 +207,8 @@ async def loop_forever(cycles: int | None = None, allow_safe_mode: Optional[bool
     loop_state = get_loop_state()
     loop_state.status = "RUN"
     loop_state.running = True
+    state = get_state()
+    state.control.auto_loop = True
     try:
         while True:
             state = get_state()
@@ -215,6 +222,8 @@ async def loop_forever(cycles: int | None = None, allow_safe_mode: Optional[bool
             interval = max(1, int(state.control.poll_interval_sec))
             await asyncio.sleep(interval)
     finally:
+        state = get_state()
+        state.control.auto_loop = False
         loop_state.running = False
         if cycles is not None and cycles > 0:
             loop_state.status = "HOLD"

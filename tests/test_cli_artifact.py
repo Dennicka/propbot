@@ -28,7 +28,23 @@ def test_cli_loop_cycles(tmp_path):
     ledger.reset()
     env = {**dict(os.environ), "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
     result = subprocess.run(
-        ["python", "-m", "app.cli", "loop", "--env", "paper", "--cycles", "1"],
+        [
+            "python",
+            "-m",
+            "app.cli",
+            "loop",
+            "--env",
+            "paper",
+            "--pair",
+            "BTCUSDT",
+            "--venues",
+            "binance-um",
+            "okx-perp",
+            "--notional",
+            "25",
+            "--cycles",
+            "1",
+        ],
         env=env,
         check=True,
         capture_output=True,

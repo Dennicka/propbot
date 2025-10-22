@@ -28,3 +28,11 @@ def test_preview_and_execute_flow(client):
     assert isinstance(payload.get("exposures"), list)
     assert "pnl_summary" in payload
     assert payload["pnl_summary"].keys() >= {"realized", "unrealized", "total"}
+
+
+def test_preview_accepts_pair_alias(client):
+    payload = {"pair": "ETHUSDT", "notional": 200.0}
+    resp = client.post("/api/arb/preview", json=payload)
+    assert resp.status_code == 200
+    plan = resp.json()
+    assert plan["symbol"] == "ETHUSDT"
