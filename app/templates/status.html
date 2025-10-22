@@ -57,9 +57,15 @@
         font-weight: bold;
         padding: 0.6rem 1.2rem;
         border-radius: 8px;
-        margin-right: 0.5rem;
         cursor: pointer;
         transition: transform 0.15s ease, opacity 0.2s ease;
+      }
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+      button + button {
+        margin-left: 0.5rem;
       }
       button:hover {
         transform: translateY(-1px);
@@ -68,6 +74,14 @@
       button:disabled {
         opacity: 0.4;
         cursor: not-allowed;
+      }
+      button.secondary {
+        background: #fbbf24;
+        color: #1f2937;
+      }
+      button.danger {
+        background: #f87171;
+        color: #0f172a;
       }
       .bad {
         color: #f87171;
@@ -93,6 +107,20 @@
       .plan-legs {
         margin-top: 0.75rem;
       }
+      .card h3 {
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+        font-size: 1rem;
+        color: #e2e8f0;
+      }
+      .card-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.5rem;
+      }
+      .table-wrapper {
+        overflow-x: auto;
+      }
       pre {
         background: rgba(15, 23, 42, 0.65);
         padding: 0.75rem;
@@ -108,12 +136,20 @@
         <h1>PropBot System Status</h1>
         <p id="mode">Loading...</p>
       </div>
-      <div>
+      <div class="actions">
         <button id="resumeBtn">Resume</button>
         <button id="holdBtn">Hold</button>
+        <button id="stopBtn" class="secondary">Stop</button>
       </div>
     </header>
     <main>
+      <section class="card">
+        <h2>Auto Loop</h2>
+        <div id="loopStatus" class="plan-summary muted">Status: --</div>
+        <div id="loopConfig" class="plan-summary muted"></div>
+        <div id="loopCounters" class="plan-summary muted"></div>
+        <div id="loopSummary" class="plan-reason muted"></div>
+      </section>
       <section class="card">
         <h2>Runtime Flags</h2>
         <div id="flags"></div>
@@ -137,6 +173,42 @@
         <div id="pnl"></div>
       </section>
       <section class="card">
+        <h2>Orders &amp; Positions</h2>
+        <div class="card-actions">
+          <button id="cancelAllBtn" class="danger">Cancel All</button>
+        </div>
+        <div class="table-wrapper">
+          <h3>Open Orders</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="openOrders"></tbody>
+          </table>
+        </div>
+        <div class="table-wrapper">
+          <h3>Positions</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Avg Price</th>
+              </tr>
+            </thead>
+            <tbody id="positions"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card">
         <h2>Last Plan</h2>
         <div id="loopState" class="muted">Auto-loop: --</div>
         <div id="lastPlanSummary" class="plan-summary muted">No plan recorded</div>
@@ -152,6 +224,73 @@
     <script>
       const holdBtn = document.getElementById('holdBtn');
       const resumeBtn = document.getElementById('resumeBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const cancelAllBtn = document.getElementById('cancelAllBtn');
+      const loopStatusEl = document.getElementById('loopStatus');
+      const loopConfigEl = document.getElementById('loopConfig');
+      const loopCountersEl = document.getElementById('loopCounters');
+      const loopSummaryEl = document.getElementById('loopSummary');
+      const openOrdersBody = document.getElementById('openOrders');
+      const positionsBody = document.getElementById('positions');
+
+      function renderLoopOverview(loopInfo, secret, env, ordersCount) {
+        const running = Boolean(loopInfo?.running);
+        const statusLabel = running ? 'RUNNING' : String(loopInfo?.status || 'IDLE').toUpperCase();
+        loopStatusEl.textContent = `Status: ${statusLabel}`;
+
+        const pair = loopInfo?.pair || secret?.pair || 'N/A';
+        const venues = Array.isArray(loopInfo?.venues) && loopInfo.venues.length
+          ? loopInfo.venues.join(' ↔ ')
+          : (Array.isArray(secret?.venues) ? secret.venues.join(' ↔ ') : '');
+        const notionalValue = loopInfo?.notional_usdt ?? secret?.notional_usdt;
+        const parts = [`Pair: ${pair}`];
+        if (venues) {
+          parts.push(`Venues: ${venues}`);
+        }
+        if (Number.isFinite(Number(notionalValue))) {
+          parts.push(`Notional: ${Number(notionalValue).toFixed(2)} USDT`);
+        }
+        loopConfigEl.textContent = parts.join(' · ');
+
+        const cycles = loopInfo?.cycles_completed ?? 0;
+        const lastTs = loopInfo?.last_cycle_ts ? new Date(loopInfo.last_cycle_ts).toLocaleString() : null;
+        loopCountersEl.textContent = lastTs
+          ? `Cycles: ${cycles} · Last: ${lastTs}`
+          : `Cycles: ${cycles}`;
+
+        const summary = loopInfo?.last_summary;
+        if (summary) {
+          const pnlValue = Number(summary.est_pnl_usdt);
+          const statusText = String(summary.status || '').toUpperCase();
+          let summaryParts = [`Last cycle: ${statusText}`];
+          if (Number.isFinite(pnlValue)) {
+            summaryParts.push(`PnL: ${pnlValue.toFixed(4)} USDT`);
+          }
+          const spreadBps = Number(summary.spread_bps);
+          if (Number.isFinite(spreadBps)) {
+            summaryParts.push(`Spread: ${spreadBps.toFixed(2)} bps`);
+          }
+          if (summary.reason) {
+            summaryParts.push(`Reason: ${summary.reason}`);
+          }
+          loopSummaryEl.textContent = summaryParts.join(' · ');
+          loopSummaryEl.classList.remove('muted');
+        } else {
+          loopSummaryEl.textContent = 'No cycles yet';
+          loopSummaryEl.classList.add('muted');
+        }
+
+        stopBtn.disabled = !running;
+        const envIsTestnet = env === 'testnet';
+        cancelAllBtn.dataset.env = env;
+        const allowCancel = envIsTestnet && ordersCount > 0;
+        cancelAllBtn.disabled = !allowCancel;
+        cancelAllBtn.title = allowCancel
+          ? ''
+          : envIsTestnet
+            ? 'No open orders to cancel'
+            : 'Cancel-all requires testnet environment';
+      }
 
       function renderLastPlan(plan, loopInfo, secret) {
         const loopStateEl = document.getElementById('loopState');
@@ -161,11 +300,13 @@
         const reasonEl = document.getElementById('lastPlanReason');
 
         const cycles = loopInfo?.cycles_completed ?? 0;
-        const running = loopInfo?.running ? 'ON' : 'OFF';
-        const targetPair = secret?.pair || plan?.symbol || 'N/A';
-        const targetNotional = secret?.notional_usdt ?? plan?.notional;
-        const venuesLabel = Array.isArray(secret?.venues) ? secret.venues.join(' ↔ ') : '';
-        const parts = [`Auto-loop: ${running} (cycles: ${cycles})`, `${targetPair}`];
+        const runningLabel = loopInfo?.running ? 'RUNNING' : String(loopInfo?.status || 'IDLE');
+        const targetPair = loopInfo?.pair || secret?.pair || plan?.symbol || 'N/A';
+        const targetNotional = loopInfo?.notional_usdt ?? secret?.notional_usdt ?? plan?.notional;
+        const venuesLabel = Array.isArray(loopInfo?.venues) && loopInfo.venues.length
+          ? loopInfo.venues.join(' ↔ ')
+          : (Array.isArray(secret?.venues) ? secret.venues.join(' ↔ ') : '');
+        const parts = [`Auto-loop: ${runningLabel}`, `Cycles: ${cycles}`, `${targetPair}`];
         const notionalLabel = Number(targetNotional);
         if (Number.isFinite(notionalLabel)) {
           parts.push(`${notionalLabel.toFixed(2)} USDT`);
@@ -187,6 +328,7 @@
 
         const symbol = plan.symbol || secret?.pair || 'UNKNOWN';
         const legs = Array.isArray(plan.legs) ? plan.legs : [];
+        const cycleSummary = loopInfo?.last_summary || null;
         const formatVenue = (leg) => {
           const venue = leg.ex ?? leg.exchange ?? '';
           return typeof venue === 'string' ? venue.toUpperCase() : String(venue ?? '');
@@ -213,11 +355,31 @@
         const grossBps = notional ? (grossSpread / notional) * 10_000 : 0;
         const netBps = planBps === undefined || planBps === null ? (notional ? (netSpread / notional) * 10_000 : 0) : Number(planBps);
 
-        summaryEl.textContent = `${symbol} · ${plan.viable ? 'Viable' : 'Rejected'}`;
+        const statusLabel = cycleSummary?.status
+          ? String(cycleSummary.status).toUpperCase()
+          : plan.viable
+            ? 'EXECUTED'
+            : 'REJECTED';
+        summaryEl.textContent = `${symbol} · ${statusLabel}`;
         summaryEl.classList.remove('muted');
+        const pnlValue = Number(
+          cycleSummary && cycleSummary.est_pnl_usdt !== undefined
+            ? cycleSummary.est_pnl_usdt
+            : netSpread,
+        );
+        const pnlBpsValue = Number(
+          cycleSummary && cycleSummary.est_pnl_bps !== undefined
+            ? cycleSummary.est_pnl_bps
+            : netBps,
+        );
+        const spreadBpsValue = Number(
+          cycleSummary && cycleSummary.spread_bps !== undefined
+            ? cycleSummary.spread_bps
+            : grossBps,
+        );
         spreadEl.innerHTML = `
-          <div>Spread (gross): <strong>${formatAmount(grossSpread)}</strong> USDT (${formatAmount(grossBps, 2)} bps)</div>
-          <div>Spread (net): <strong>${formatAmount(netSpread)}</strong> USDT (${formatAmount(netBps, 2)} bps)</div>
+          <div>Spread (gross): <strong>${formatAmount(grossSpread)}</strong> USDT (${formatAmount(spreadBpsValue, 2)} bps)</div>
+          <div>Spread (net): <strong>${formatAmount(pnlValue)}</strong> USDT (${formatAmount(pnlBpsValue, 2)} bps)</div>
           <div>Fees: ${formatAmount(totalFees)} USDT</div>
         `;
 
@@ -253,7 +415,9 @@
           legsTable.style.display = 'none';
         }
 
-        if (plan.viable) {
+        if (cycleSummary && cycleSummary.reason) {
+          reasonEl.textContent = `Decision: ${statusLabel.toLowerCase()} · Reason: ${cycleSummary.reason}`;
+        } else if (plan.viable) {
           reasonEl.textContent = 'Decision: execute (plan viable)';
         } else {
           const reason = plan.reason || 'Plan not viable';
@@ -274,6 +438,7 @@
             secret = await secretResp.json();
           }
           document.getElementById('mode').textContent = `Mode: ${data.mode}`;
+          const env = String((data.flags && (data.flags.ENV || data.flags.MODE)) || '').toLowerCase();
           const flagLines = Object.entries(data.flags || {})
             .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
             .join('');
@@ -302,6 +467,37 @@
           document.getElementById('events').textContent = events
             .map((event) => `${event.ts} [${event.level}] ${event.code}: ${JSON.stringify(event.payload)}`)
             .join('\n');
+          const orders = data.open_orders || [];
+          openOrdersBody.innerHTML = orders.length
+            ? orders
+                .map(
+                  (order) => `
+                    <tr>
+                      <td>${order.venue ?? ''}</td>
+                      <td>${order.symbol ?? ''}</td>
+                      <td>${String(order.side ?? '').toUpperCase()}</td>
+                      <td>${Number(order.qty ?? 0).toFixed(4)}</td>
+                      <td>${Number(order.price ?? 0).toFixed(4)}</td>
+                      <td>${String(order.status ?? '').toUpperCase()}</td>
+                    </tr>`
+                )
+                .join('')
+            : '<tr><td colspan="6" class="muted">No open orders</td></tr>';
+          const positions = data.positions || [];
+          positionsBody.innerHTML = positions.length
+            ? positions
+                .map(
+                  (pos) => `
+                    <tr>
+                      <td>${pos.venue ?? ''}</td>
+                      <td>${pos.symbol ?? ''}</td>
+                      <td>${Number(pos.base_qty ?? 0).toFixed(4)}</td>
+                      <td>${Number(pos.avg_price ?? 0).toFixed(4)}</td>
+                    </tr>`
+                )
+                .join('')
+            : '<tr><td colspan="4" class="muted">No positions</td></tr>';
+          renderLoopOverview(data.loop, secret, env, orders.length);
           renderLastPlan(data.last_plan, data.loop, secret);
           resumeBtn.disabled = data.safe_mode;
         } catch (error) {
@@ -320,6 +516,8 @@
 
       holdBtn.addEventListener('click', () => postAction('/api/ui/hold'));
       resumeBtn.addEventListener('click', () => postAction('/api/ui/resume'));
+      stopBtn.addEventListener('click', () => postAction('/api/ui/stop'));
+      cancelAllBtn.addEventListener('click', () => postAction('/api/ui/cancel-all'));
 
       fetchState();
       setInterval(fetchState, 4000);

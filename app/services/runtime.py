@@ -153,6 +153,10 @@ class LoopState:
     cycles_completed: int = 0
     last_spread_bps: float | None = None
     last_spread_usdt: float | None = None
+    pair: str | None = None
+    venues: List[str] = field(default_factory=list)
+    notional_usdt: float | None = None
+    last_summary: Dict[str, object] | None = None
 
     def as_dict(self) -> Dict[str, object | None]:
         return {
@@ -165,6 +169,10 @@ class LoopState:
             "cycles_completed": self.cycles_completed,
             "last_spread_bps": self.last_spread_bps,
             "last_spread_usdt": self.last_spread_usdt,
+            "pair": self.pair,
+            "venues": list(self.venues),
+            "notional_usdt": self.notional_usdt,
+            "last_summary": self.last_summary,
         }
 
 
@@ -289,6 +297,23 @@ def ensure_dryrun_state() -> DryRunState:
 
 def get_loop_state() -> LoopState:
     return _STATE.loop
+
+
+def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float) -> LoopState:
+    state = get_state()
+    state.control.loop_pair = pair.upper() if pair else None
+    state.control.loop_venues = [str(entry) for entry in venues]
+    state.control.order_notional_usdt = float(notional_usdt)
+    loop_state = get_loop_state()
+    loop_state.pair = state.control.loop_pair
+    loop_state.venues = list(state.control.loop_venues)
+    loop_state.notional_usdt = state.control.order_notional_usdt
+    return loop_state
+
+
+def update_loop_summary(summary: Dict[str, object]) -> None:
+    loop_state = get_loop_state()
+    loop_state.last_summary = dict(summary)
 
 
 def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:

@@ -70,13 +70,14 @@ def _run_loop(args: argparse.Namespace) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
     from .. import ledger
     from ..services.loop import loop_forever
-    from ..services.runtime import get_state, set_mode
+    from ..services.runtime import get_state, set_loop_config, set_mode
 
     ledger.init_db()
+    pair = str(args.pair).upper()
+    venues = [str(venue) for venue in args.venues]
+    notional = float(args.notional)
+    set_loop_config(pair=pair, venues=venues, notional_usdt=notional)
     state = get_state()
-    state.control.loop_pair = str(args.pair).upper()
-    state.control.loop_venues = [str(venue) for venue in args.venues]
-    state.control.order_notional_usdt = float(args.notional)
     logging.info(
         "starting auto-loop (env=%s, pair=%s, venues=%s, notional=%s, cycles=%s)",
         args.env,
@@ -87,8 +88,25 @@ def _run_loop(args: argparse.Namespace) -> int:
     )
     set_mode("RUN")
     cycles = args.cycles if args.cycles > 0 else None
+
+    async def _log_cycle(result) -> None:
+        summary = result.summary.as_dict() if result.summary else {}
+        status = summary.get("status", "unknown")
+        symbol = summary.get("symbol") or result.symbol or pair
+        spread_bps = summary.get("spread_bps")
+        pnl_usdt = summary.get("est_pnl_usdt")
+        reason = summary.get("reason") or result.error
+        details = [f"status={status}", f"symbol={symbol}"]
+        if isinstance(spread_bps, (int, float)):
+            details.append(f"spread_bps={spread_bps:.2f}")
+        if isinstance(pnl_usdt, (int, float)):
+            details.append(f"pnl_usdt={pnl_usdt:.4f}")
+        if reason:
+            details.append(f"reason={reason}")
+        logging.info("cycle summary: %s", ", ".join(details))
+
     try:
-        asyncio.run(loop_forever(cycles=cycles))
+        asyncio.run(loop_forever(cycles=cycles, on_cycle=_log_cycle))
     except KeyboardInterrupt:
         logging.info("loop interrupted by user")
     return 0
