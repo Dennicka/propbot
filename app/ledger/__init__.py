@@ -351,6 +351,19 @@ def fetch_balances() -> List[Dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def fetch_open_orders() -> List[Dict[str, object]]:
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT id, venue, symbol, side, qty, price, status, client_ts, exchange_ts
+        FROM orders
+        WHERE status NOT IN ('filled', 'cancelled')
+        ORDER BY client_ts DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def fetch_events(limit: int = 50) -> List[Dict[str, object]]:
     conn = _connect()
     rows = conn.execute(
@@ -432,6 +445,7 @@ __all__ = [
     "LEDGER_PATH",
     "compute_exposures",
     "compute_pnl",
+    "fetch_open_orders",
     "get_order",
     "fetch_balances",
     "fetch_events",

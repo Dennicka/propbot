@@ -7,8 +7,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import ledger
-from ..services.loop import hold_loop, loop_snapshot, reset_loop, resume_loop
-from ..services.runtime import get_last_plan, get_state, set_mode
+from ..services.loop import (
+    cancel_all_orders,
+    hold_loop,
+    loop_snapshot,
+    reset_loop,
+    resume_loop,
+    stop_loop,
+)
+from ..services.runtime import get_last_plan, get_state, set_loop_config, set_mode
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -27,9 +34,11 @@ class SecretUpdate(BaseModel):
 @router.get("/state")
 async def runtime_state() -> dict:
     state = get_state()
-    exposures, pnl = await asyncio.gather(
+    exposures, pnl, open_orders, positions = await asyncio.gather(
         asyncio.to_thread(ledger.compute_exposures),
         asyncio.to_thread(ledger.compute_pnl),
+        asyncio.to_thread(ledger.fetch_open_orders),
+        asyncio.to_thread(ledger.fetch_positions),
     )
     dryrun = state.dryrun
     return {
@@ -45,6 +54,8 @@ async def runtime_state() -> dict:
         },
         "exposures": exposures,
         "pnl": pnl,
+        "open_orders": open_orders,
+        "positions": positions,
         "recon_status": {"status": "ok", "last_run_ts": _ts()},
         "last_plan": dryrun.last_plan if dryrun else None,
         "last_execution": dryrun.last_execution if dryrun else None,
@@ -89,6 +100,11 @@ async def update_secret(payload: SecretUpdate) -> dict:
         state.control.loop_venues = [str(entry) for entry in payload.venues]
     if payload.notional_usdt is not None:
         state.control.order_notional_usdt = float(payload.notional_usdt)
+    set_loop_config(
+        pair=state.control.loop_pair,
+        venues=state.control.loop_venues,
+        notional_usdt=state.control.order_notional_usdt,
+    )
     return _secret_payload(state)
 
 
@@ -113,6 +129,13 @@ async def resume() -> dict:
     return {"mode": state.control.mode, "ts": _ts()}
 
 
+@router.post("/stop")
+async def stop() -> dict:
+    loop_state = await stop_loop()
+    ledger.record_event(level="INFO", code="loop_stop_requested", payload={"status": loop_state.status})
+    return {"loop": loop_state.as_dict(), "ts": _ts()}
+
+
 @router.post("/reset")
 async def reset() -> dict:
     await hold_loop()
@@ -120,6 +143,17 @@ async def reset() -> dict:
     set_mode("HOLD")
     ledger.record_event(level="INFO", code="loop_reset", payload={"mode": "HOLD"})
     return {"loop": loop_state.as_dict(), "ts": _ts()}
+
+
+@router.post("/cancel-all")
+async def cancel_all() -> dict:
+    state = get_state()
+    environment = str(state.control.environment or "").lower()
+    if environment != "testnet":
+        raise HTTPException(status_code=403, detail="Cancel-all only available on testnet")
+    result = await cancel_all_orders()
+    ledger.record_event(level="INFO", code="cancel_all", payload=result)
+    return {"result": result, "ts": _ts()}
 
 
 @router.get("/plan/last")

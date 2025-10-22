@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from .. import ledger
+from ..broker.router import ExecutionRouter
 from . import arbitrage
 from .dryrun import compute_metrics, select_cycle_symbol
 from .runtime import (
@@ -15,6 +17,8 @@ from .runtime import (
     get_state,
     set_last_execution,
     set_last_plan,
+    set_loop_config,
+    update_loop_summary,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -25,12 +29,37 @@ def _ts() -> str:
 
 
 @dataclass
+class LoopCycleSummary:
+    status: str
+    symbol: str
+    spread_bps: float | None
+    spread_usdt: float | None
+    est_pnl_usdt: float | None
+    est_pnl_bps: float | None
+    reason: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "status": self.status,
+            "symbol": self.symbol,
+            "spread_bps": self.spread_bps,
+            "spread_usdt": self.spread_usdt,
+            "est_pnl_usdt": self.est_pnl_usdt,
+            "est_pnl_bps": self.est_pnl_bps,
+        }
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        return payload
+
+
+@dataclass
 class LoopCycleResult:
     ok: bool
     symbol: Optional[str] = None
     plan: Optional[Dict[str, Any]] = None
     execution: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    summary: Optional[LoopCycleSummary] = None
 
 
 async def run_cycle(*, allow_safe_mode: bool = True) -> LoopCycleResult:
@@ -42,22 +71,60 @@ async def run_cycle(*, allow_safe_mode: bool = True) -> LoopCycleResult:
     loop_state.running = True
     loop_state.status = "RUN"
     loop_state.last_cycle_ts = _ts()
+    loop_state.pair = state.control.loop_pair or symbol
+    loop_state.venues = list(state.control.loop_venues)
+    loop_state.notional_usdt = notional
     plan = arbitrage.build_plan(symbol, notional, slippage)
     plan_payload = plan.as_dict()
     set_last_plan(plan_payload)
     loop_state.last_plan = plan_payload
 
+    metrics = compute_metrics(plan)
+    loop_state.last_spread_bps = metrics.spread_bps
+    loop_state.last_spread_usdt = metrics.spread_usdt
+    summary = LoopCycleSummary(
+        status="pending",
+        symbol=symbol,
+        spread_bps=metrics.spread_bps,
+        spread_usdt=metrics.spread_usdt,
+        est_pnl_usdt=metrics.est_pnl_usdt,
+        est_pnl_bps=metrics.est_pnl_bps,
+    )
+
     if not plan.viable:
         reason = plan.reason or "plan not viable"
         loop_state.last_error = reason
         loop_state.last_execution = None
-        LOGGER.info("loop plan rejected", extra={"symbol": symbol, "reason": reason})
+        summary.status = "rejected"
+        summary.reason = reason
+        update_loop_summary(summary.as_dict())
+        LOGGER.info(
+            "loop plan rejected",
+            extra={
+                "symbol": symbol,
+                "reason": reason,
+                "spread_bps": metrics.spread_bps,
+                "pnl_usdt": metrics.est_pnl_usdt,
+            },
+        )
         ledger.record_event(
             level="WARNING",
             code="loop_plan_unviable",
-            payload={"symbol": symbol, "reason": reason},
+            payload={
+                "symbol": symbol,
+                "reason": reason,
+                "spread_bps": metrics.spread_bps,
+                "pnl_usdt": metrics.est_pnl_usdt,
+            },
         )
-        return LoopCycleResult(ok=False, symbol=symbol, plan=plan_payload, error=reason)
+        loop_state.cycles_completed += 1
+        return LoopCycleResult(
+            ok=False,
+            symbol=symbol,
+            plan=plan_payload,
+            error=reason,
+            summary=summary,
+        )
 
     try:
         report = await arbitrage.execute_plan_async(plan, allow_safe_mode=allow_safe_mode)
@@ -65,23 +132,36 @@ async def run_cycle(*, allow_safe_mode: bool = True) -> LoopCycleResult:
         error = str(exc)
         loop_state.last_error = error
         LOGGER.exception("loop execution failed")
+        loop_state.last_execution = None
+        summary.status = "error"
+        summary.reason = error
+        update_loop_summary(summary.as_dict())
         ledger.record_event(
             level="ERROR",
             code="loop_execution_failed",
-            payload={"symbol": symbol, "error": error},
+            payload={
+                "symbol": symbol,
+                "error": error,
+                "spread_bps": metrics.spread_bps,
+                "pnl_usdt": metrics.est_pnl_usdt,
+            },
         )
-        return LoopCycleResult(ok=False, symbol=symbol, plan=plan_payload, error=error)
+        loop_state.cycles_completed += 1
+        return LoopCycleResult(
+            ok=False,
+            symbol=symbol,
+            plan=plan_payload,
+            error=error,
+            summary=summary,
+        )
 
     execution_payload = report.as_dict()
     set_last_execution(execution_payload)
     loop_state.last_execution = execution_payload
     loop_state.last_error = None
-    loop_state.cycles_completed += 1
-
-    metrics = compute_metrics(plan)
-    loop_state.last_spread_bps = metrics.spread_bps
-    loop_state.last_spread_usdt = metrics.spread_usdt
-
+    summary.status = "executed"
+    summary.reason = None
+    update_loop_summary(summary.as_dict())
     ledger.record_event(
         level="INFO",
         code="loop_cycle",
@@ -102,11 +182,13 @@ async def run_cycle(*, allow_safe_mode: bool = True) -> LoopCycleResult:
             "pnl_usdt": metrics.est_pnl_usdt,
         },
     )
+    loop_state.cycles_completed += 1
     return LoopCycleResult(
         ok=True,
         symbol=symbol,
         plan=plan_payload,
         execution=execution_payload,
+        summary=summary,
     )
 
 
@@ -122,6 +204,9 @@ class LoopController:
             loop_state.running = True
             state = get_state()
             state.control.auto_loop = True
+            loop_state.pair = state.control.loop_pair or loop_state.pair
+            loop_state.venues = list(state.control.loop_venues)
+            loop_state.notional_usdt = state.control.order_notional_usdt
             if self._task and not self._task.done():
                 return loop_state
             loop = asyncio.get_running_loop()
@@ -146,6 +231,15 @@ class LoopController:
             state.control.auto_loop = False
             return state.loop
 
+    async def stop_after_cycle(self) -> LoopState:
+        async with self._lock:
+            loop_state = get_loop_state()
+            if loop_state.status == "RUN":
+                loop_state.status = "STOPPING"
+            state = get_state()
+            state.control.auto_loop = False
+            return loop_state
+
     async def _cancel_locked(self) -> None:
         if self._task is None:
             return
@@ -163,7 +257,12 @@ class LoopController:
                 allow_safe = state.control.safe_mode or state.control.dry_run
                 await run_cycle(allow_safe_mode=allow_safe)
                 loop_state = get_loop_state()
+                if loop_state.status == "STOPPING":
+                    loop_state.status = "HOLD"
+                    state.control.auto_loop = False
+                    break
                 if loop_state.status != "RUN":
+                    state.control.auto_loop = False
                     break
                 interval = max(1, int(state.control.poll_interval_sec))
                 try:
@@ -180,7 +279,12 @@ class LoopController:
             ledger.record_event(level="ERROR", code="loop_worker_failed", payload={"error": error})
             LOGGER.exception("loop worker crashed")
         finally:
-            get_loop_state().running = False
+            loop_state = get_loop_state()
+            loop_state.running = False
+            if loop_state.status == "RUN":
+                loop_state.status = "HOLD"
+            state = get_state()
+            state.control.auto_loop = loop_state.status == "RUN"
 
 
 _CONTROLLER = LoopController()
@@ -198,11 +302,43 @@ async def hold_loop() -> LoopState:
     return await _CONTROLLER.hold()
 
 
+async def stop_loop() -> LoopState:
+    return await _CONTROLLER.stop_after_cycle()
+
+
+async def cancel_all_orders() -> Dict[str, int]:
+    orders = await asyncio.to_thread(ledger.fetch_open_orders)
+    if not orders:
+        return {"cancelled": 0, "failed": 0}
+    router = ExecutionRouter()
+    cancelled = 0
+    failed = 0
+    for order in orders:
+        venue = str(order.get("venue") or "")
+        order_id = int(order.get("id", 0))
+        broker = router.broker_for_venue(venue)
+        try:
+            await broker.cancel(venue=venue, order_id=order_id)
+            cancelled += 1
+        except Exception as exc:  # pragma: no cover - defensive logging
+            failed += 1
+            ledger.record_event(
+                level="ERROR",
+                code="cancel_failed",
+                payload={"venue": venue, "order_id": order_id, "error": str(exc)},
+            )
+    return {"cancelled": cancelled, "failed": failed}
+
+
 async def reset_loop() -> LoopState:
     return await _CONTROLLER.reset()
 
 
-async def loop_forever(cycles: int | None = None, allow_safe_mode: Optional[bool] = None) -> None:
+async def loop_forever(
+    cycles: int | None = None,
+    allow_safe_mode: Optional[bool] = None,
+    on_cycle: Callable[[LoopCycleResult], Awaitable[None] | None] | None = None,
+) -> None:
     count = 0
     loop_state = get_loop_state()
     loop_state.status = "RUN"
@@ -215,7 +351,22 @@ async def loop_forever(cycles: int | None = None, allow_safe_mode: Optional[bool
             allow = allow_safe_mode
             if allow is None:
                 allow = state.control.safe_mode or state.control.dry_run
-            await run_cycle(allow_safe_mode=bool(allow))
+            result = await run_cycle(allow_safe_mode=bool(allow))
+            if on_cycle:
+                maybe = on_cycle(result)
+                if inspect.isawaitable(maybe):
+                    await maybe
+            summary_payload = result.summary.as_dict() if result.summary else {}
+            LOGGER.info(
+                "cycle summary",
+                extra={
+                    "status": summary_payload.get("status", "unknown"),
+                    "symbol": summary_payload.get("symbol", result.symbol),
+                    "spread_bps": summary_payload.get("spread_bps"),
+                    "pnl_usdt": summary_payload.get("est_pnl_usdt"),
+                    "reason": summary_payload.get("reason"),
+                },
+            )
             count += 1
             if cycles is not None and count >= cycles:
                 break

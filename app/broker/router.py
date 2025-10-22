@@ -57,6 +57,12 @@ class ExecutionRouter:
     def _venue_for_exchange(self, exchange: str) -> str:
         return VENUE_ALIASES.get(exchange.lower(), exchange.lower())
 
+    def broker_for_venue(self, venue: str) -> Broker:
+        canonical = VENUE_ALIASES.get(venue.lower(), venue.lower())
+        if self.dry_run_only:
+            return self._brokers["paper"]
+        return self._brokers.get(canonical, self._brokers["paper"])
+
     async def execute_plan(self, plan: "Plan", *, allow_safe_mode: bool = False) -> Dict[str, object]:
         state = get_state()
         if state.control.safe_mode:

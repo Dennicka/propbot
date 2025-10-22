@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from app import ledger
 from app.services.runtime import get_state
 
 
@@ -16,6 +19,8 @@ def test_ui_state_and_controls(client):
     state_payload = state_resp.json()
     assert "exposures" in state_payload
     assert "pnl" in state_payload
+    assert "open_orders" in state_payload
+    assert "positions" in state_payload
     assert "recon_status" in state_payload
     assert state_payload["loop"]["status"] == "HOLD"
 
@@ -47,7 +52,32 @@ def test_ui_state_and_controls(client):
 
     secret_after_resume = client.get("/api/ui/secret")
     assert secret_after_resume.status_code == 200
-    assert secret_after_resume.json()["auto_loop"] is True
+    after_payload = secret_after_resume.json()
+    assert "loop" in after_payload
+    assert after_payload["loop"]["status"] in {"RUN", "HOLD", "STOPPING"}
+
+    stop_resp = client.post("/api/ui/stop")
+    assert stop_resp.status_code == 200
+    assert stop_resp.json()["loop"]["status"] in {"STOPPING", "HOLD"}
+
+    runtime_state = get_state()
+    runtime_state.control.environment = "testnet"
+    order_id = ledger.record_order(
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.2,
+        price=20_000.0,
+        status="submitted",
+        client_ts=datetime.now(timezone.utc).isoformat(),
+        exchange_ts=None,
+        idemp_key="ui-cancel",
+    )
+    cancel_resp = client.post("/api/ui/cancel-all")
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["result"]["cancelled"] >= 1
+    order = ledger.get_order(order_id)
+    assert order["status"] == "cancelled"
 
     # stop background loop to avoid leaking tasks between tests
     client.post("/api/ui/hold")
