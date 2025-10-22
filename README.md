@@ -16,7 +16,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-По умолчанию `SAFE_MODE=true`, `DRY_RUN_ONLY=false`. Для работы с тестнетами Binance UM / OKX заполните API-ключи. Переменная `PROFILE` переключает конфигурацию (`paper` / `testnet` / `live`).
+По умолчанию `SAFE_MODE=true`, `DRY_RUN_ONLY=false`. Для работы с тестнетами Binance UM / OKX заполните API-ключи. Переменная `PROFILE` переключает конфигурацию (`paper` / `testnet` / `live`). Для реальной отправки заявок на тестнет необходимо явно отключить `SAFE_MODE`, установить `DRY_RUN_ONLY=false` и выставить `ENABLE_PLACE_TEST_ORDERS=1` (при отсутствии флага брокер автоматически переключится в paper-режим).
 
 ## 2. Запуск API и UI
 
@@ -31,9 +31,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /api/arb/execute` — исполнение через брокер/маршрутизатор (в SAFE_MODE возвращает 403).
 - `POST /api/ui/hold` / `POST /api/ui/resume` / `POST /api/ui/reset` — управление циклом.
 - `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события, статус auto-loop.
+- `GET /api/ui/orders` — снимок открытых ордеров, позиций и последних fill'ов.
+- `POST /api/ui/cancel_all` — массовый отзыв ордеров (только `ENV=testnet`).
+- `POST /api/ui/close_exposure` — запрос на закрытие экспозиции (через `hedge.flatten`).
 - `GET /api/ui/plan/last` — последний сохранённый план.
 
-Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также содержит кнопки HOLD/RESUME.
+Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, таблицы открытых ордеров/позиций/последних fill'ов и содержит кнопки HOLD/RESUME, Cancel All и Close Exposure.
 
 ## 3. CLI и планировщик
 

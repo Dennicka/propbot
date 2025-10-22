@@ -177,6 +177,20 @@ class LoopState:
 
 
 @dataclass
+class LoopConfigState:
+    pair: str | None = None
+    venues: List[str] = field(default_factory=list)
+    notional_usdt: float | None = None
+
+    def as_dict(self) -> Dict[str, object | None]:
+        return {
+            "pair": self.pair,
+            "venues": list(self.venues),
+            "notional_usdt": self.notional_usdt,
+        }
+
+
+@dataclass
 class RuntimeState:
     config: LoadedConfig
     guards: Dict[str, GuardState]
@@ -186,6 +200,8 @@ class RuntimeState:
     derivatives: DerivativesRuntime | None = None
     dryrun: DryRunState | None = None
     loop: LoopState = field(default_factory=LoopState)
+    loop_config: LoopConfigState = field(default_factory=LoopConfigState)
+    open_orders: List[Dict[str, object]] = field(default_factory=list)
 
 
 def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
@@ -279,6 +295,12 @@ def _bootstrap_runtime() -> RuntimeState:
         derivatives=derivatives,
         dryrun=dryrun_state,
         loop=LoopState(),
+        loop_config=LoopConfigState(
+            pair=control.loop_pair,
+            venues=list(control.loop_venues),
+            notional_usdt=control.order_notional_usdt,
+        ),
+        open_orders=[],
     )
 
 
@@ -304,6 +326,10 @@ def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float
     state.control.loop_pair = pair.upper() if pair else None
     state.control.loop_venues = [str(entry) for entry in venues]
     state.control.order_notional_usdt = float(notional_usdt)
+    loop_config = state.loop_config
+    loop_config.pair = state.control.loop_pair
+    loop_config.venues = list(state.control.loop_venues)
+    loop_config.notional_usdt = state.control.order_notional_usdt
     loop_state = get_loop_state()
     loop_state.pair = state.control.loop_pair
     loop_state.venues = list(state.control.loop_venues)
@@ -314,6 +340,19 @@ def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float
 def update_loop_summary(summary: Dict[str, object]) -> None:
     loop_state = get_loop_state()
     loop_state.last_summary = dict(summary)
+
+
+def get_loop_config() -> LoopConfigState:
+    return _STATE.loop_config
+
+
+def get_open_orders() -> List[Dict[str, object]]:
+    return list(_STATE.open_orders)
+
+
+def set_open_orders(orders: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    _STATE.open_orders = [dict(order) for order in orders]
+    return _STATE.open_orders
 
 
 def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:

@@ -15,7 +15,13 @@ from ..services.loop import (
     resume_loop,
     stop_loop,
 )
-from ..services.runtime import get_last_plan, get_state, set_loop_config, set_mode
+from ..services.runtime import (
+    get_last_plan,
+    get_state,
+    set_loop_config,
+    set_mode,
+    set_open_orders,
+)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -40,6 +46,7 @@ async def runtime_state() -> dict:
         asyncio.to_thread(ledger.fetch_open_orders),
         asyncio.to_thread(ledger.fetch_positions),
     )
+    set_open_orders(open_orders)
     dryrun = state.dryrun
     return {
         "mode": state.control.mode,
@@ -61,6 +68,7 @@ async def runtime_state() -> dict:
         "last_execution": dryrun.last_execution if dryrun else None,
         "events": ledger.fetch_events(20),
         "loop": loop_snapshot(),
+        "loop_config": state.loop_config.as_dict(),
     }
 
 
@@ -108,6 +116,21 @@ async def update_secret(payload: SecretUpdate) -> dict:
     return _secret_payload(state)
 
 
+@router.get("/orders")
+async def orders_snapshot() -> dict:
+    open_orders, positions, fills = await asyncio.gather(
+        asyncio.to_thread(ledger.fetch_open_orders),
+        asyncio.to_thread(ledger.fetch_positions),
+        asyncio.to_thread(ledger.fetch_recent_fills, 20),
+    )
+    set_open_orders(open_orders)
+    return {
+        "open_orders": open_orders,
+        "positions": positions,
+        "fills": fills,
+    }
+
+
 @router.post("/hold")
 async def hold() -> dict:
     await hold_loop()
@@ -145,14 +168,34 @@ async def reset() -> dict:
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
-@router.post("/cancel-all")
-async def cancel_all() -> dict:
+async def _cancel_all_payload() -> dict:
     state = get_state()
     environment = str(state.control.environment or "").lower()
     if environment != "testnet":
         raise HTTPException(status_code=403, detail="Cancel-all only available on testnet")
     result = await cancel_all_orders()
     ledger.record_event(level="INFO", code="cancel_all", payload=result)
+    return {"result": result, "ts": _ts()}
+
+
+@router.post("/cancel_all")
+async def cancel_all_ui() -> dict:
+    return await _cancel_all_payload()
+
+
+@router.post("/cancel-all")
+async def cancel_all() -> dict:
+    return await _cancel_all_payload()
+
+
+@router.post("/close_exposure")
+async def close_exposure() -> dict:
+    state = get_state()
+    runtime = state.derivatives
+    if not runtime:
+        raise HTTPException(status_code=404, detail="derivatives runtime unavailable")
+    result = runtime.flatten_all()
+    ledger.record_event(level="INFO", code="flatten_requested", payload=result)
     return {"result": result, "ts": _ts()}
 
 

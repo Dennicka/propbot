@@ -18,6 +18,7 @@ from .runtime import (
     set_last_execution,
     set_last_plan,
     set_loop_config,
+    set_open_orders,
     update_loop_summary,
 )
 
@@ -308,6 +309,7 @@ async def stop_loop() -> LoopState:
 
 async def cancel_all_orders() -> Dict[str, int]:
     orders = await asyncio.to_thread(ledger.fetch_open_orders)
+    set_open_orders(orders)
     if not orders:
         return {"cancelled": 0, "failed": 0}
     router = ExecutionRouter()
@@ -327,6 +329,8 @@ async def cancel_all_orders() -> Dict[str, int]:
                 code="cancel_failed",
                 payload={"venue": venue, "order_id": order_id, "error": str(exc)},
             )
+    remaining = await asyncio.to_thread(ledger.fetch_open_orders)
+    set_open_orders(remaining)
     return {"cancelled": cancelled, "failed": failed}
 
 

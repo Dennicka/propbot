@@ -23,6 +23,7 @@ def test_ui_state_and_controls(client):
     assert "positions" in state_payload
     assert "recon_status" in state_payload
     assert state_payload["loop"]["status"] == "HOLD"
+    assert "loop_config" in state_payload
 
     secret_resp = client.get("/api/ui/secret")
     assert secret_resp.status_code == 200
@@ -50,6 +51,11 @@ def test_ui_state_and_controls(client):
     assert resume_resp.status_code == 200
     assert resume_resp.json()["mode"] == "RUN"
 
+    orders_resp = client.get("/api/ui/orders")
+    assert orders_resp.status_code == 200
+    snapshot = orders_resp.json()
+    assert set(snapshot.keys()) == {"open_orders", "positions", "fills"}
+
     secret_after_resume = client.get("/api/ui/secret")
     assert secret_after_resume.status_code == 200
     after_payload = secret_after_resume.json()
@@ -73,11 +79,14 @@ def test_ui_state_and_controls(client):
         exchange_ts=None,
         idemp_key="ui-cancel",
     )
-    cancel_resp = client.post("/api/ui/cancel-all")
+    cancel_resp = client.post("/api/ui/cancel_all")
     assert cancel_resp.status_code == 200
     assert cancel_resp.json()["result"]["cancelled"] >= 1
     order = ledger.get_order(order_id)
     assert order["status"] == "cancelled"
+
+    close_resp = client.post("/api/ui/close_exposure")
+    assert close_resp.status_code in {200, 404}
 
     # stop background loop to avoid leaking tasks between tests
     client.post("/api/ui/hold")

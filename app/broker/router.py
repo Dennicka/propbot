@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Dict, List
 from .base import Broker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
+from .. import ledger
 from ..ledger import compute_exposures, compute_pnl
-from ..services.runtime import get_state
+from ..services.runtime import get_state, set_open_orders
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..services.arbitrage import Plan
@@ -63,6 +64,11 @@ class ExecutionRouter:
             return self._brokers["paper"]
         return self._brokers.get(canonical, self._brokers["paper"])
 
+    async def _refresh_open_orders(self) -> List[Dict[str, object]]:
+        orders = await asyncio.to_thread(ledger.fetch_open_orders)
+        set_open_orders(orders)
+        return orders
+
     async def execute_plan(self, plan: "Plan", *, allow_safe_mode: bool = False) -> Dict[str, object]:
         state = get_state()
         if state.control.safe_mode:
@@ -103,8 +109,82 @@ class ExecutionRouter:
             orders.append(order)
         exposures = await asyncio.to_thread(compute_exposures)
         pnl = await asyncio.to_thread(compute_pnl)
+        open_orders = await self._refresh_open_orders()
         return {
             "orders": orders,
             "exposures": exposures,
             "pnl": pnl,
+            "open_orders": open_orders,
         }
+
+    async def place_limit_order(
+        self,
+        *,
+        venue: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        client_order_id: str | None = None,
+        post_only: bool = True,
+        reduce_only: bool = False,
+    ) -> Dict[str, object]:
+        broker = self.broker_for_venue(venue)
+        order = await broker.create_order(
+            venue=venue,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            price=price,
+            type="LIMIT",
+            post_only=post_only,
+            reduce_only=reduce_only,
+            idemp_key=client_order_id,
+        )
+        await self._refresh_open_orders()
+        return order
+
+    async def cancel_order(self, *, venue: str, order_id: int) -> None:
+        broker = self.broker_for_venue(venue)
+        await broker.cancel(venue=venue, order_id=order_id)
+        await self._refresh_open_orders()
+
+    async def replace_limit_order(
+        self,
+        *,
+        venue: str,
+        order_id: int,
+        price: float,
+        symbol: str | None = None,
+        side: str | None = None,
+        qty: float | None = None,
+        client_order_id: str | None = None,
+        post_only: bool = True,
+        reduce_only: bool = False,
+    ) -> Dict[str, object]:
+        existing = await asyncio.to_thread(ledger.get_order, order_id)
+        if not existing:
+            raise ValueError(f"order {order_id} not found")
+        symbol_value = symbol or str(existing.get("symbol") or "")
+        side_value = (side or str(existing.get("side") or "")).lower()
+        if not symbol_value or side_value not in {"buy", "sell"}:
+            raise ValueError("symbol and side must be provided")
+        qty_value = qty if qty is not None else float(existing.get("qty") or 0.0)
+        if qty_value <= 0:
+            raise ValueError("qty must be positive")
+        broker = self.broker_for_venue(venue)
+        await broker.cancel(venue=venue, order_id=order_id)
+        replacement_id = client_order_id or f"{existing.get('idemp_key') or order_id}:replace"
+        order = await broker.create_order(
+            venue=venue,
+            symbol=symbol_value,
+            side=side_value,
+            qty=qty_value,
+            price=price,
+            type="LIMIT",
+            post_only=post_only,
+            reduce_only=reduce_only,
+            idemp_key=replacement_id,
+        )
+        await self._refresh_open_orders()
+        return order
