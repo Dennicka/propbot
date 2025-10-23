@@ -244,6 +244,17 @@ class BinanceUMClient:
         data = self._signed_request("GET", "/fapi/v1/openOrders", params)
         return data  # type: ignore[return-value]
 
+    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> list[Dict[str, Any]]:
+        if self.safe_mode:
+            return self._fallback.recent_fills(symbol, since)
+        params: Dict[str, Any] = {}
+        if symbol:
+            params["symbol"] = symbol
+        if since:
+            params["startTime"] = int(since)
+        data = self._signed_request("GET", "/fapi/v1/userTrades", params)
+        return data  # type: ignore[return-value]
+
     def positions(self) -> list[Dict[str, Any]]:
         if self.safe_mode:
             return self._fallback.positions()

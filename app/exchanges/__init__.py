@@ -35,6 +35,8 @@ class DerivClient(Protocol):
 
     def positions(self) -> List[Dict[str, object]]: ...
 
+    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> List[Dict[str, object]]: ...
+
 
 @dataclass
 class SymbolState:
@@ -62,6 +64,7 @@ class InMemoryDerivClient:
     margin_type: Dict[str, str] = field(default_factory=dict)
     leverage: Dict[str, int] = field(default_factory=dict)
     positions_data: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    fills: List[Dict[str, object]] = field(default_factory=list)
 
     def server_time(self) -> float:
         return 0.0
@@ -136,6 +139,12 @@ class InMemoryDerivClient:
                 "leverage": self.leverage.get(sym, 1),
             })
         return results
+
+    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> List[Dict[str, object]]:
+        if symbol:
+            symbol_upper = symbol.upper()
+            return [entry for entry in self.fills if entry.get("symbol") == symbol_upper]
+        return list(self.fills)
 
 
 def build_in_memory_client(venue_id: str, symbols: Iterable[str]) -> InMemoryDerivClient:

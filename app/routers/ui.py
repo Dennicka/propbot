@@ -22,6 +22,7 @@ from ..services.runtime import (
     set_mode,
     set_open_orders,
 )
+from ..services import portfolio
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -40,9 +41,8 @@ class SecretUpdate(BaseModel):
 @router.get("/state")
 async def runtime_state() -> dict:
     state = get_state()
-    exposures, pnl, open_orders, positions = await asyncio.gather(
-        asyncio.to_thread(ledger.compute_exposures),
-        asyncio.to_thread(ledger.compute_pnl),
+    (exposures, pnl), open_orders, positions = await asyncio.gather(
+        portfolio.snapshot(),
         asyncio.to_thread(ledger.fetch_open_orders),
         asyncio.to_thread(ledger.fetch_positions),
     )

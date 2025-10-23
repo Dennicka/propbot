@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
 
 
 class Broker(ABC):
@@ -35,3 +36,11 @@ class Broker(ABC):
     @abstractmethod
     async def balances(self, *, venue: str) -> Dict[str, object]:
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_positions(self) -> List[Dict[str, object]]:
+        """Return normalised exposure snapshot for the broker venue."""
+
+    @abstractmethod
+    async def get_fills(self, since: datetime | None = None) -> List[Dict[str, object]]:
+        """Return fills executed on the broker since the optional timestamp."""

@@ -162,6 +162,7 @@
               <th>Venue</th>
               <th>Symbol</th>
               <th>Qty</th>
+              <th>Avg Entry</th>
               <th>Notional</th>
             </tr>
           </thead>
@@ -469,25 +470,28 @@
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
           const exposures = data.exposures || [];
-          document.getElementById('exposures').innerHTML = exposures
-            .map(
-              (row) => `
-                <tr>
-                  <td>${row.venue}</td>
-                  <td>${row.symbol}</td>
-                  <td>${row.base_qty?.toFixed(4) ?? 0}</td>
-                  <td>${row.notional?.toFixed(2) ?? 0}</td>
-                </tr>`
-            )
-            .join('');
+          document.getElementById('exposures').innerHTML = exposures.length
+            ? exposures
+                .map(
+                  (row) => `
+                    <tr>
+                      <td>${row.venue ?? ''}</td>
+                      <td>${row.symbol ?? ''}</td>
+                      <td>${Number(row.qty ?? row.base_qty ?? 0).toFixed(4)}</td>
+                      <td>${Number(row.avg_entry ?? row.avg_price ?? 0).toFixed(2)}</td>
+                      <td>${Number(row.notional ?? 0).toFixed(2)}</td>
+                    </tr>`
+                )
+                .join('')
+            : '<tr><td colspan="5" class="muted">No exposures</td></tr>';
           const pnl = data.pnl || {};
           const totalPnl = Number(pnl.total ?? 0);
           const realizedPnl = Number(pnl.realized ?? 0);
           const unrealizedPnl = Number(pnl.unrealized ?? 0);
           document.getElementById('pnl').innerHTML = `
-            <div>Total: <span class="${totalPnl >= 0 ? 'good' : 'bad'}">${totalPnl.toFixed(2)}</span> USDT</div>
-            <div>Realized: ${realizedPnl.toFixed(2)}</div>
-            <div>Unrealized: ${unrealizedPnl.toFixed(2)}</div>`;
+            <div>Realized: <span class="${realizedPnl >= 0 ? 'good' : 'bad'}">${realizedPnl.toFixed(2)}</span> USDT</div>
+            <div>Unrealized: <span class="${unrealizedPnl >= 0 ? 'good' : 'bad'}">${unrealizedPnl.toFixed(2)}</span> USDT</div>
+            <div>Total: <span class="${totalPnl >= 0 ? 'good' : 'bad'}">${totalPnl.toFixed(2)}</span> USDT</div>`;
           const events = data.events || [];
           document.getElementById('events').textContent = events
             .map((event) => `${event.ts} [${event.level}] ${event.code}: ${JSON.stringify(event.payload)}`)

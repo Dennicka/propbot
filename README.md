@@ -30,7 +30,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /api/arb/preview` — расчёт плана (legs, комиссии, ожидаемый PnL).
 - `POST /api/arb/execute` — исполнение через брокер/маршрутизатор (в SAFE_MODE возвращает 403).
 - `POST /api/ui/hold` / `POST /api/ui/resume` / `POST /api/ui/reset` — управление циклом.
-- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события, статус auto-loop.
+- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события, статус auto-loop. В paper-режиме позиции и PnL считываются из `data/ledger.db`, в testnet данные подтягиваются через брокеров Binance UM и OKX perp.
 - `GET /api/ui/orders` — снимок открытых ордеров, позиций и последних fill'ов.
 - `POST /api/ui/cancel_all` — массовый отзыв ордеров (только `ENV=testnet`).
 - `POST /api/ui/close_exposure` — запрос на закрытие экспозиции (через `hedge.flatten`).
@@ -60,7 +60,7 @@ python -m app.cli loop --env paper --cycles 10
 
 - Файл `data/ledger.db` создаётся автоматически (SQLite).
 - Таблицы: `orders`, `fills`, `positions`, `balances`, `events`.
-- После каждого исполнения обновляются экспозиции и PnL, которые отображаются в `/api/ui/state` и на дашборде.
+- После каждого исполнения обновляются экспозиции и PnL (реализованная/нереализованная по mark/last price), которые отображаются в `/api/ui/state` и на дашборде.
 
 Для просмотра содержимого можно использовать `sqlite3 data/ledger.db` или сторонние инструменты.
 
