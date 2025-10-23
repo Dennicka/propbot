@@ -207,21 +207,26 @@ def _compute_leg(
     return pnl, legs
 
 
+
 def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     state = get_state()
     symbol_normalised = (symbol or "").upper()
     notional_value = float(notional)
+
     fees = {
         "binance": state.control.taker_fee_bps_binance,
         "okx": state.control.taker_fee_bps_okx,
     }
+
     plan = Plan(
         symbol=symbol_normalised,
         notional=notional_value,
         used_slippage_bps=slippage_bps,
         used_fees_bps=fees,
-        viable=False,
+        viable=True,
     )
+
+    # Базовые валидации
     if symbol_normalised not in SUPPORTED_SYMBOLS:
         plan.reason = f"unsupported symbol {symbol_normalised}"
         return plan
@@ -229,17 +234,19 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         plan.reason = "notional must be positive"
         return plan
 
+    # Книги цен
     aggregator = get_market_data()
     try:
         binance_book = aggregator.top_of_book("binance-um", symbol_normalised)
-        okx_book = aggregator.top_of_book("okx-perp", symbol_normalised)
-    except Exception as exc:  # pragma: no cover - network errors are logged
+        okx_book     = aggregator.top_of_book("okx-perp",    symbol_normalised)
+    except Exception as exc:  # pragma: no cover
         logger.exception("failed to fetch books for %s", symbol_normalised)
         plan.reason = f"failed to fetch books: {exc}"
         return plan
 
-    okx_buy = okx_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
-    binance_sell = binance_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
+    # Две стороны арбитража с поправкой на слиппедж
+    okx_buy       = okx_book["ask"]     * _slippage_multiplier(slippage_bps, side="buy")
+    binance_sell  = binance_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
     spread_a, legs_a = _compute_leg(
         buy_exchange="okx",
         buy_price=okx_buy,
@@ -249,8 +256,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         fees=fees,
     )
 
-    binance_buy = binance_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
-    okx_sell = okx_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
+    binance_buy   = binance_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
+    okx_sell      = okx_book["bid"]     * _slippage_multiplier(slippage_bps, side="sell")
     spread_b, legs_b = _compute_leg(
         buy_exchange="binance",
         buy_price=binance_buy,
@@ -260,37 +267,52 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         fees=fees,
     )
 
+    # Выбираем лучший из двух направлений и считаем BPS
     spread_a_bps = (spread_a / notional_value) * 10_000 if notional_value else 0.0
     spread_b_bps = (spread_b / notional_value) * 10_000 if notional_value else 0.0
 
     plan.venues = ["binance-um", "okx-perp"]
 
-    if spread_a <= 0 and spread_b <= 0:
-        plan.reason = "spread non-positive after fees"
+    if spread_a >= spread_b:
+        pnl       = spread_a
+        legs      = legs_a
+        spread_bps= spread_a_bps
+    else:
+        pnl       = spread_b
+        legs      = legs_b
+        spread_bps= spread_b_bps
+
+    plan.legs          = legs
+    plan.est_pnl_usdt  = pnl
+    plan.est_pnl_bps   = (pnl / notional_value) * 10_000 if notional_value else 0.0
+    plan.spread_bps    = spread_bps
+
+    # Причины по "спреду" (но они вторичны относительно "risk:*")
+    min_spread = float(state.control.min_spread_bps)
+    spread_reason = None
+    if pnl <= 0:
+        spread_reason = "spread non-positive after fees"
+    elif plan.spread_bps < min_spread:
+        spread_reason = f"spread {plan.spread_bps:.4f} < min {min_spread:.4f}"
+
+    # СНАЧАЛА проверяем риск — его причина должна иметь приоритет
+    risk_ok, risk_reason, risk_state = risk.guard_plan(plan)
+    if not risk_ok:
+        plan.viable = False
+        plan.reason = risk_reason or "risk:blocked"
         return plan
 
-    if spread_a >= spread_b:
-        pnl = spread_a
-        legs = legs_a
-        spread_bps = spread_a_bps
-    else:
-        pnl = spread_b
-        legs = legs_b
-        spread_bps = spread_b_bps
-
-    plan.viable = True
-    plan.legs = legs
-    plan.est_pnl_usdt = pnl
-    if notional_value > 0:
-        plan.est_pnl_bps = (pnl / notional_value) * 10_000
-    plan.spread_bps = spread_bps
-
-    min_spread = float(state.control.min_spread_bps)
-    if plan.spread_bps < min_spread:
+    # Если риск ок, но спред плохой — блокируем план по спреду
+    if spread_reason:
         plan.viable = False
-        plan.reason = f"spread {plan.spread_bps:.4f} < min {min_spread:.4f}"
+        plan.reason = spread_reason
+        return plan
 
-    risk.evaluate_plan(plan)
+    # Иначе всё хорошо
+    plan.viable = True
+    plan.reason = None
+    risk.evaluate_plan(plan, risk_state=risk_state)
+
     logger.info(
         "arbitrage plan built",
         extra={
@@ -303,8 +325,6 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         },
     )
     return plan
-
-
 def plan_from_payload(payload: Dict[str, Any]) -> Plan:
     symbol = payload.get("symbol", "").upper()
     notional = float(payload.get("notional", 0.0))
