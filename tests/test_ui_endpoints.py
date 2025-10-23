@@ -42,11 +42,23 @@ def test_ui_state_and_controls(client):
     state_payload = state_resp.json()
     assert "exposures" in state_payload
     assert "pnl" in state_payload
+    assert "portfolio" in state_payload
     assert state_payload["exposures"], "paper environment exposures should not be empty"
     assert any(entry["symbol"].upper() == "BTCUSDT" for entry in state_payload["exposures"])
     pnl_snapshot = state_payload["pnl"]
     for key in ("realized", "unrealized", "total"):
         assert key in pnl_snapshot
+    portfolio_data = state_payload["portfolio"]
+    assert set(portfolio_data.keys()) >= {"balances", "positions", "pnl_totals", "notional_total"}
+    assert portfolio_data["pnl_totals"].keys() >= {"realized", "unrealized", "total"}
+    if portfolio_data["positions"]:
+        first_pos = portfolio_data["positions"][0]
+        for field in ("venue", "symbol", "qty", "notional", "entry_px", "mark_px", "upnl", "rpnl"):
+            assert field in first_pos
+    if portfolio_data["balances"]:
+        first_balance = portfolio_data["balances"][0]
+        for field in ("venue", "asset", "free", "total"):
+            assert field in first_balance
     assert "open_orders" in state_payload
     assert "positions" in state_payload
     assert "recon_status" in state_payload
@@ -127,6 +139,11 @@ def test_ui_state_and_controls(client):
     assert any(entry["symbol"].upper() == "ETHUSDT" for entry in testnet_payload["exposures"])
     for key in ("realized", "unrealized", "total"):
         assert key in testnet_payload["pnl"]
+    assert "portfolio" in testnet_payload
+    testnet_portfolio = testnet_payload["portfolio"]
+    assert testnet_portfolio["pnl_totals"].keys() >= {"realized", "unrealized", "total"}
+    if testnet_portfolio["positions"]:
+        assert any(pos["symbol"].upper() == "ETHUSDT" for pos in testnet_portfolio["positions"])
 
     order_id = ledger.record_order(
         venue="binance-um",

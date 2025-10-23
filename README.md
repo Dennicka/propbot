@@ -30,13 +30,13 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /api/arb/preview` — расчёт плана (legs, комиссии, ожидаемый PnL).
 - `POST /api/arb/execute` — исполнение через брокер/маршрутизатор (в SAFE_MODE возвращает 403).
 - `POST /api/ui/hold` / `POST /api/ui/resume` / `POST /api/ui/reset` — управление циклом.
-- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события, статус auto-loop. В paper-режиме позиции и PnL считываются из `data/ledger.db`, в testnet данные подтягиваются через брокеров Binance UM и OKX perp.
+- `GET /api/ui/state` — агрегированное состояние, флаги, PnL/экспозиции, события, статус auto-loop. В ответ добавлен блок `portfolio` с позициями (venue, qty, entry/mark, uPnL/rPnL), балансами по биржам и итоговыми PnL.
 - `GET /api/ui/orders` — снимок открытых ордеров, позиций и последних fill'ов.
 - `POST /api/ui/cancel_all` — массовый отзыв ордеров (только `ENV=testnet`).
 - `POST /api/ui/close_exposure` — запрос на закрытие экспозиции (через `hedge.flatten`).
 - `GET /api/ui/plan/last` — последний сохранённый план.
 
-Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, таблицы открытых ордеров/позиций/последних fill'ов и содержит кнопки HOLD/RESUME, Cancel All и Close Exposure.
+Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, таблицы открытых ордеров/позиций/последних fill'ов и содержит кнопки HOLD/RESUME, Cancel All и Close Exposure. Карточка «Exposures» показывает подробную таблицу позиций (venue, symbol, qty, notional, entry, mark, uPnL, rPnL), а под ней размещена мини-таблица Balances с остатками по активам на каждой площадке.
 
 ## 3. CLI и планировщик
 
