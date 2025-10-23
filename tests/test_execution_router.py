@@ -4,6 +4,7 @@ import pytest
 
 from app import ledger
 from app.broker.router import ExecutionRouter
+from app.services.arbitrage import Plan, PlanLeg
 from app.services.runtime import get_state, reset_for_tests
 
 
@@ -81,3 +82,27 @@ async def test_execution_router_places_and_replaces_orders(monkeypatch):
     open_orders = state.open_orders
     assert isinstance(open_orders, list)
     assert any(entry.get("id") == replacement["order_id"] for entry in open_orders)
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_blocked_by_risk(monkeypatch):
+    reset_for_tests()
+    ledger.reset()
+    state = get_state()
+    state.control.safe_mode = False
+    state.control.dry_run = False
+    state.risk.limits.max_open_orders = {"__default__": 0}
+    plan = Plan(
+        symbol="BTCUSDT",
+        notional=100.0,
+        used_slippage_bps=0,
+        used_fees_bps={"binance": 0, "okx": 0},
+        viable=True,
+    )
+    plan.legs = [
+        PlanLeg(exchange="binance", side="buy", price=20_000.0, qty=0.005, fee_usdt=0.0),
+        PlanLeg(exchange="okx", side="sell", price=20_010.0, qty=0.005, fee_usdt=0.0),
+    ]
+    router = ExecutionRouter()
+    with pytest.raises(PermissionError):
+        await router.execute_plan(plan)

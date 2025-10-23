@@ -44,6 +44,8 @@ def test_ui_state_and_controls(client):
     assert "pnl" in state_payload
     assert "portfolio" in state_payload
     assert "risk" in state_payload
+    assert "risk_blocked" in state_payload
+    assert "risk_reasons" in state_payload
     risk_block = state_payload["risk"]
     assert isinstance(risk_block, dict)
     assert "limits" in risk_block
@@ -145,6 +147,8 @@ def test_ui_state_and_controls(client):
     for key in ("realized", "unrealized", "total"):
         assert key in testnet_payload["pnl"]
     assert "portfolio" in testnet_payload
+    assert "risk_blocked" in testnet_payload
+    assert "risk_reasons" in testnet_payload
     testnet_portfolio = testnet_payload["portfolio"]
     assert testnet_portfolio["pnl_totals"].keys() >= {"realized", "unrealized", "total"}
     if testnet_portfolio["positions"]:
