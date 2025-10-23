@@ -107,12 +107,13 @@ class ExecutionRouter:
                 idemp_key=idemp_key,
             )
             orders.append(order)
-        exposures, pnl = await portfolio.snapshot()
+        snapshot = await portfolio.snapshot()
         open_orders = await self._refresh_open_orders()
         return {
             "orders": orders,
-            "exposures": exposures,
-            "pnl": pnl,
+            "exposures": snapshot.exposures(),
+            "pnl": dict(snapshot.pnl_totals),
+            "portfolio": snapshot.as_dict(),
             "open_orders": open_orders,
         }
 

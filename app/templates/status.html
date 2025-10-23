@@ -121,6 +121,16 @@
       .table-wrapper {
         overflow-x: auto;
       }
+      .table-wrapper + .table-wrapper {
+        margin-top: 0.75rem;
+      }
+      .mini-table th,
+      .mini-table td {
+        font-size: 0.8rem;
+      }
+      .mini-table th {
+        letter-spacing: 0.04em;
+      }
       pre {
         background: rgba(15, 23, 42, 0.65);
         padding: 0.75rem;
@@ -156,18 +166,37 @@
       </section>
       <section class="card">
         <h2>Exposures</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Venue</th>
-              <th>Symbol</th>
-              <th>Qty</th>
-              <th>Avg Entry</th>
-              <th>Notional</th>
-            </tr>
-          </thead>
-          <tbody id="exposures"></tbody>
-        </table>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Notional</th>
+                <th>Entry</th>
+                <th>Mark</th>
+                <th>UPnL</th>
+                <th>RPnL</th>
+              </tr>
+            </thead>
+            <tbody id="exposures"></tbody>
+          </table>
+        </div>
+        <div class="table-wrapper">
+          <h3>Balances</h3>
+          <table class="mini-table">
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Asset</th>
+                <th>Free</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody id="portfolioBalances"></tbody>
+          </table>
+        </div>
       </section>
       <section class="card">
         <h2>PnL</h2>
@@ -253,6 +282,22 @@
       const openOrdersBody = document.getElementById('openOrders');
       const positionsBody = document.getElementById('positions');
       const recentFillsBody = document.getElementById('recentFills');
+      const exposuresBody = document.getElementById('exposures');
+      const balancesBody = document.getElementById('portfolioBalances');
+
+      const formatNumber = (value, digits = 2) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return (0).toFixed(digits);
+        }
+        return numeric.toFixed(digits);
+      };
+
+      const signedSpan = (value, digits = 2) => {
+        const numeric = Number(value);
+        const cls = numeric >= 0 ? 'good' : 'bad';
+        return `<span class="${cls}">${formatNumber(numeric, digits)}</span>`;
+      };
 
       function renderLoopOverview(loopInfo, secret, env, ordersCount) {
         const running = Boolean(loopInfo?.running);
@@ -469,22 +514,48 @@
             .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
-          const exposures = data.exposures || [];
-          document.getElementById('exposures').innerHTML = exposures.length
-            ? exposures
-                .map(
-                  (row) => `
+          const portfolioData = data.portfolio || {};
+          const portfolioPositions = Array.isArray(portfolioData.positions) && portfolioData.positions.length
+            ? portfolioData.positions
+            : (data.exposures || []);
+          exposuresBody.innerHTML = portfolioPositions.length
+            ? portfolioPositions
+                .map((row) => {
+                  const venue = row.venue ?? '';
+                  const symbol = row.symbol ?? '';
+                  const qty = Number(row.qty ?? row.base_qty ?? 0);
+                  const entry = Number(row.entry_px ?? row.avg_entry ?? row.avg_price ?? 0);
+                  const mark = Number(row.mark_px ?? row.mark ?? entry);
+                  const notional = Number(row.notional ?? Math.abs(qty) * mark);
+                  const upnl = Number(row.upnl ?? (mark - entry) * qty);
+                  const rpnl = Number(row.rpnl ?? 0);
+                  return `
+                    <tr>
+                      <td>${venue}</td>
+                      <td>${symbol}</td>
+                      <td>${formatNumber(qty, 4)}</td>
+                      <td>${formatNumber(notional)}</td>
+                      <td>${formatNumber(entry)}</td>
+                      <td>${formatNumber(mark)}</td>
+                      <td>${signedSpan(upnl)}</td>
+                      <td>${signedSpan(rpnl)}</td>
+                    </tr>`;
+                })
+                .join('')
+            : '<tr><td colspan="8" class="muted">No positions</td></tr>';
+          const balances = Array.isArray(portfolioData.balances) ? portfolioData.balances : [];
+          balancesBody.innerHTML = balances.length
+            ? balances
+                .map((row) => `
                     <tr>
                       <td>${row.venue ?? ''}</td>
-                      <td>${row.symbol ?? ''}</td>
-                      <td>${Number(row.qty ?? row.base_qty ?? 0).toFixed(4)}</td>
-                      <td>${Number(row.avg_entry ?? row.avg_price ?? 0).toFixed(2)}</td>
-                      <td>${Number(row.notional ?? 0).toFixed(2)}</td>
-                    </tr>`
-                )
+                      <td>${row.asset ?? ''}</td>
+                      <td>${formatNumber(row.free ?? row.qty ?? 0, 4)}</td>
+                      <td>${formatNumber(row.total ?? row.balance ?? row.qty ?? 0, 4)}</td>
+                    </tr>`)
                 .join('')
-            : '<tr><td colspan="5" class="muted">No exposures</td></tr>';
-          const pnl = data.pnl || {};
+            : '<tr><td colspan="4" class="muted">No balances</td></tr>';
+          const pnl = portfolioData.pnl_totals || data.pnl || {};
           const totalPnl = Number(pnl.total ?? 0);
           const realizedPnl = Number(pnl.realized ?? 0);
           const unrealizedPnl = Number(pnl.unrealized ?? 0);
@@ -529,9 +600,9 @@
                 )
                 .join('')
             : '<tr><td colspan="7" class="muted">No fills recorded</td></tr>';
-          const positions = ordersData.positions || [];
-          positionsBody.innerHTML = positions.length
-            ? positions
+          const ledgerPositions = ordersData.positions || [];
+          positionsBody.innerHTML = ledgerPositions.length
+            ? ledgerPositions
                 .map(
                   (pos) => `
                     <tr>
@@ -546,7 +617,7 @@
           renderLoopOverview(data.loop, secret, env, orders.length);
           renderLastPlan(data.last_plan, data.loop, secret);
           resumeBtn.disabled = data.safe_mode;
-          const allowCloseExposure = Array.isArray(exposures) && exposures.length > 0;
+          const allowCloseExposure = Array.isArray(portfolioPositions) && portfolioPositions.length > 0;
           closeExposureBtn.disabled = !allowCloseExposure;
           closeExposureBtn.title = allowCloseExposure ? '' : 'No exposure to close';
         } catch (error) {

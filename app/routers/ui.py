@@ -41,7 +41,7 @@ class SecretUpdate(BaseModel):
 @router.get("/state")
 async def runtime_state() -> dict:
     state = get_state()
-    (exposures, pnl), open_orders, positions = await asyncio.gather(
+    snapshot, open_orders, positions = await asyncio.gather(
         portfolio.snapshot(),
         asyncio.to_thread(ledger.fetch_open_orders),
         asyncio.to_thread(ledger.fetch_positions),
@@ -59,8 +59,9 @@ async def runtime_state() -> dict:
             "counters": dict(state.metrics.counters),
             "latency_samples_ms": list(state.metrics.latency_samples_ms),
         },
-        "exposures": exposures,
-        "pnl": pnl,
+        "exposures": snapshot.exposures(),
+        "pnl": dict(snapshot.pnl_totals),
+        "portfolio": snapshot.as_dict(),
         "open_orders": open_orders,
         "positions": positions,
         "recon_status": {"status": "ok", "last_run_ts": _ts()},
