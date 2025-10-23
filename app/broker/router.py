@@ -9,7 +9,7 @@ from .base import Broker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger
-from ..ledger import compute_exposures, compute_pnl
+from ..services import portfolio
 from ..services.runtime import get_state, set_open_orders
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -107,8 +107,7 @@ class ExecutionRouter:
                 idemp_key=idemp_key,
             )
             orders.append(order)
-        exposures = await asyncio.to_thread(compute_exposures)
-        pnl = await asyncio.to_thread(compute_pnl)
+        exposures, pnl = await portfolio.snapshot()
         open_orders = await self._refresh_open_orders()
         return {
             "orders": orders,

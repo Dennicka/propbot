@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
-
-import logging
+from typing import Any, Dict, List, Optional
 
 from .base import Broker
 from .paper import PaperBroker
@@ -23,6 +22,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _to_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 1e12:
+        numeric /= 1000.0
+    dt = datetime.fromtimestamp(numeric, tz=timezone.utc)
+    return dt.isoformat()
 
 
 LOGGER = logging.getLogger(__name__)
@@ -251,3 +263,109 @@ class TestnetBroker(Broker):
             return await self._paper.balances(venue=venue)
         # Testnet balances are not exposed via the lightweight clients; return ledger snapshot
         return await self._paper.balances(venue=venue)
+
+    def _normalise_symbol(self, symbol: str | None) -> str:
+        return str(symbol or "").upper()
+
+    async def get_positions(self) -> List[Dict[str, object]]:
+        if not self._should_place():
+            return await self._paper.get_positions()
+        client = self._client()
+        if client is None:
+            return await self._paper.get_positions()
+        try:
+            rows = await asyncio.to_thread(client.positions)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.warning("failed to fetch testnet positions", extra={"venue": self.venue, "error": str(exc)})
+            return await self._paper.get_positions()
+        exposures: List[Dict[str, object]] = []
+        for row in rows:
+            symbol = self._normalise_symbol(row.get("symbol") or row.get("instId"))
+            if not symbol:
+                continue
+            qty_raw = row.get("position_amt")
+            if qty_raw is None:
+                qty_raw = row.get("pos")
+            if qty_raw is None:
+                qty_raw = row.get("qty")
+            try:
+                qty = float(qty_raw)
+            except (TypeError, ValueError):
+                qty = 0.0
+            if abs(qty) <= 1e-12:
+                continue
+            avg_raw = row.get("entry_price")
+            if avg_raw is None:
+                avg_raw = row.get("avgPx")
+            if avg_raw is None:
+                avg_raw = row.get("avg_price")
+            try:
+                avg_price = float(avg_raw)
+            except (TypeError, ValueError):
+                avg_price = 0.0
+            exposures.append(
+                {
+                    "venue": self.venue,
+                    "symbol": symbol,
+                    "qty": qty,
+                    "avg_entry": avg_price,
+                    "notional": abs(qty) * avg_price,
+                }
+            )
+        return exposures
+
+    async def get_fills(self, since: datetime | None = None) -> List[Dict[str, object]]:
+        if not self._should_place():
+            return await self._paper.get_fills(since=since)
+        client = self._client()
+        if client is None:
+            return await self._paper.get_fills(since=since)
+        since_ms: int | None = None
+        if since is not None:
+            since_ms = int(since.timestamp() * 1000)
+        try:
+            rows = await asyncio.to_thread(client.recent_fills, symbol=None, since=since_ms)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.warning("failed to fetch testnet fills", extra={"venue": self.venue, "error": str(exc)})
+            return await self._paper.get_fills(since=since)
+        fills: List[Dict[str, object]] = []
+        for row in rows:
+            symbol = self._normalise_symbol(row.get("symbol") or row.get("instId"))
+            side = str(row.get("side") or "").lower() or ("buy" if row.get("buy") else "sell")
+            qty_raw = row.get("qty")
+            if qty_raw is None:
+                qty_raw = row.get("size")
+            if qty_raw is None:
+                qty_raw = row.get("fillSz")
+            try:
+                qty = abs(float(qty_raw))
+            except (TypeError, ValueError):
+                qty = 0.0
+            price_raw = row.get("price")
+            if price_raw is None:
+                price_raw = row.get("fillPx")
+            try:
+                price = float(price_raw)
+            except (TypeError, ValueError):
+                price = 0.0
+            fee_raw = row.get("fee")
+            if fee_raw is None:
+                fee_raw = row.get("commission")
+            try:
+                fee = abs(float(fee_raw))
+            except (TypeError, ValueError):
+                fee = 0.0
+            ts_raw = row.get("time") or row.get("ts")
+            ts = _to_iso(ts_raw) or _ts()
+            fills.append(
+                {
+                    "venue": self.venue,
+                    "symbol": symbol,
+                    "side": side or ("buy" if qty >= 0 else "sell"),
+                    "qty": qty,
+                    "price": price,
+                    "fee": fee,
+                    "ts": ts,
+                }
+            )
+        return fills

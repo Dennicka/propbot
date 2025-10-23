@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -408,6 +409,33 @@ def fetch_recent_fills(limit: int = 20) -> List[Dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def fetch_fills_since(since: datetime | str | None = None) -> List[Dict[str, object]]:
+    conn = _connect()
+    if since is None:
+        rows = conn.execute(
+            """
+            SELECT id, order_id, venue, symbol, side, qty, price, fee, ts
+            FROM fills
+            ORDER BY ts ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    if isinstance(since, datetime):
+        ts_value = since.astimezone(timezone.utc).isoformat()
+    else:
+        ts_value = str(since)
+    rows = conn.execute(
+        """
+        SELECT id, order_id, venue, symbol, side, qty, price, fee, ts
+        FROM fills
+        WHERE ts >= ?
+        ORDER BY ts ASC
+        """,
+        (ts_value,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def fetch_events(limit: int = 50) -> List[Dict[str, object]]:
     conn = _connect()
     rows = conn.execute(
@@ -491,6 +519,7 @@ __all__ = [
     "compute_pnl",
     "fetch_open_orders",
     "fetch_recent_fills",
+    "fetch_fills_since",
     "get_order",
     "fetch_balances",
     "fetch_events",

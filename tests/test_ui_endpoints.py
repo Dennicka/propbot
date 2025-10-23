@@ -14,11 +14,39 @@ def test_ui_state_and_controls(client):
     assert plan_resp.status_code == 200
     assert plan_resp.json()["last_plan"]["symbol"] == "ETHUSDT"
 
+    ts_now = datetime.now(timezone.utc).isoformat()
+    order_id_exposure = ledger.record_order(
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.1,
+        price=20_000.0,
+        status="filled",
+        client_ts=ts_now,
+        exchange_ts=ts_now,
+        idemp_key="paper-exposure",
+    )
+    ledger.record_fill(
+        order_id=order_id_exposure,
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.1,
+        price=20_000.0,
+        fee=0.0,
+        ts=ts_now,
+    )
+
     state_resp = client.get("/api/ui/state")
     assert state_resp.status_code == 200
     state_payload = state_resp.json()
     assert "exposures" in state_payload
     assert "pnl" in state_payload
+    assert state_payload["exposures"], "paper environment exposures should not be empty"
+    assert any(entry["symbol"].upper() == "BTCUSDT" for entry in state_payload["exposures"])
+    pnl_snapshot = state_payload["pnl"]
+    for key in ("realized", "unrealized", "total"):
+        assert key in pnl_snapshot
     assert "open_orders" in state_payload
     assert "positions" in state_payload
     assert "recon_status" in state_payload
@@ -68,6 +96,38 @@ def test_ui_state_and_controls(client):
 
     runtime_state = get_state()
     runtime_state.control.environment = "testnet"
+    ledger.reset()
+    ts_testnet = datetime.now(timezone.utc).isoformat()
+    filled_order_id = ledger.record_order(
+        venue="binance-um",
+        symbol="ETHUSDT",
+        side="buy",
+        qty=0.5,
+        price=1_800.0,
+        status="filled",
+        client_ts=ts_testnet,
+        exchange_ts=ts_testnet,
+        idemp_key="testnet-exposure",
+    )
+    ledger.record_fill(
+        order_id=filled_order_id,
+        venue="binance-um",
+        symbol="ETHUSDT",
+        side="buy",
+        qty=0.5,
+        price=1_800.0,
+        fee=0.0,
+        ts=ts_testnet,
+    )
+
+    testnet_state = client.get("/api/ui/state")
+    assert testnet_state.status_code == 200
+    testnet_payload = testnet_state.json()
+    assert testnet_payload["exposures"], "testnet environment exposures should not be empty"
+    assert any(entry["symbol"].upper() == "ETHUSDT" for entry in testnet_payload["exposures"])
+    for key in ("realized", "unrealized", "total"):
+        assert key in testnet_payload["pnl"]
+
     order_id = ledger.record_order(
         venue="binance-um",
         symbol="BTCUSDT",
@@ -89,4 +149,5 @@ def test_ui_state_and_controls(client):
     assert close_resp.status_code in {200, 404}
 
     # stop background loop to avoid leaking tasks between tests
+    runtime_state.control.environment = "paper"
     client.post("/api/ui/hold")

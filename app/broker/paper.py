@@ -88,3 +88,39 @@ class PaperBroker(Broker):
     async def balances(self, *, venue: str) -> Dict[str, object]:
         rows = await asyncio.to_thread(ledger.fetch_balances)
         return {"balances": [row for row in rows if row["venue"] == (venue or self.venue)]}
+
+    async def get_positions(self) -> list[Dict[str, object]]:
+        rows = await asyncio.to_thread(ledger.fetch_positions)
+        exposures: list[Dict[str, object]] = []
+        for row in rows:
+            qty = float(row.get("base_qty", 0.0))
+            avg_price = float(row.get("avg_price", 0.0))
+            if abs(qty) <= 1e-12:
+                continue
+            exposures.append(
+                {
+                    "venue": row.get("venue", self.venue),
+                    "symbol": row.get("symbol"),
+                    "qty": qty,
+                    "avg_entry": avg_price,
+                    "notional": abs(qty) * avg_price,
+                }
+            )
+        return exposures
+
+    async def get_fills(self, since: datetime | None = None) -> list[Dict[str, object]]:
+        rows = await asyncio.to_thread(ledger.fetch_fills_since, since)
+        fills: list[Dict[str, object]] = []
+        for row in rows:
+            fills.append(
+                {
+                    "venue": row.get("venue", self.venue),
+                    "symbol": row.get("symbol"),
+                    "side": row.get("side"),
+                    "qty": float(row.get("qty", 0.0)),
+                    "price": float(row.get("price", 0.0)),
+                    "fee": float(row.get("fee", 0.0)),
+                    "ts": row.get("ts"),
+                }
+            )
+        return fills

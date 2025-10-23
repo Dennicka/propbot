@@ -281,6 +281,17 @@ class OKXPerpClient:
         data = self._request("GET", "/api/v5/trade/orders-pending", params=params)
         return data  # type: ignore[return-value]
 
+    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> list[Dict[str, Any]]:
+        if self.safe_mode:
+            return self._fallback.recent_fills(symbol, since)
+        params: Dict[str, Any] = {"instType": "SWAP"}
+        if symbol:
+            params["instId"] = symbol
+        if since:
+            params["after"] = str(int(since))
+        data = self._request("GET", "/api/v5/trade/fills-history", params=params)
+        return data  # type: ignore[return-value]
+
     def positions(self) -> list[Dict[str, Any]]:
         if self.safe_mode:
             return self._fallback.positions()
