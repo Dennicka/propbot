@@ -48,6 +48,9 @@ async def runtime_state() -> dict:
     )
     set_open_orders(open_orders)
     risk_state = risk.refresh_runtime_state(snapshot=snapshot, open_orders=open_orders)
+    risk_payload = risk_state.as_dict()
+    risk_blocked = bool(risk_state.breaches)
+    risk_reasons = [breach.detail or breach.limit for breach in risk_state.breaches]
     dryrun = state.dryrun
     return {
         "mode": state.control.mode,
@@ -71,7 +74,9 @@ async def runtime_state() -> dict:
         "events": ledger.fetch_events(20),
         "loop": loop_snapshot(),
         "loop_config": state.loop_config.as_dict(),
-        "risk": risk_state.as_dict(),
+        "risk": risk_payload,
+        "risk_blocked": risk_blocked,
+        "risk_reasons": risk_reasons,
     }
 
 
