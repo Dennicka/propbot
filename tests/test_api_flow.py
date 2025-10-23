@@ -36,3 +36,18 @@ def test_preview_accepts_pair_alias(client):
     assert resp.status_code == 200
     plan = resp.json()
     assert plan["symbol"] == "ETHUSDT"
+
+
+def test_preview_rejected_by_risk_limits(client):
+    state = get_state()
+    state.risk.limits.max_position_usdt = {"BTCUSDT": 50.0}
+    preview_payload = {"symbol": "BTCUSDT", "notional": 200.0, "used_slippage_bps": 2}
+    resp = client.post("/api/arb/preview", json=preview_payload)
+    assert resp.status_code == 200
+    plan = resp.json()
+    assert plan["viable"] is False
+    assert "max_position_usdt" in (plan.get("reason") or "")
+
+    state.control.safe_mode = False
+    execute_resp = client.post("/api/arb/execute", json=plan)
+    assert execute_resp.status_code == 422

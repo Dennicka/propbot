@@ -22,7 +22,7 @@ from ..services.runtime import (
     set_mode,
     set_open_orders,
 )
-from ..services import portfolio
+from ..services import portfolio, risk
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -47,6 +47,7 @@ async def runtime_state() -> dict:
         asyncio.to_thread(ledger.fetch_positions),
     )
     set_open_orders(open_orders)
+    risk_state = risk.refresh_runtime_state(snapshot=snapshot, open_orders=open_orders)
     dryrun = state.dryrun
     return {
         "mode": state.control.mode,
@@ -70,6 +71,7 @@ async def runtime_state() -> dict:
         "events": ledger.fetch_events(20),
         "loop": loop_snapshot(),
         "loop_config": state.loop_config.as_dict(),
+        "risk": risk_state.as_dict(),
     }
 
 
@@ -187,6 +189,23 @@ async def cancel_all_ui() -> dict:
 @router.post("/cancel-all")
 async def cancel_all() -> dict:
     return await _cancel_all_payload()
+
+
+@router.post("/kill")
+async def kill_switch() -> dict:
+    state = get_state()
+    state.control.safe_mode = True
+    set_mode("HOLD")
+    await hold_loop()
+    result = await cancel_all_orders()
+    ledger.record_event(level="CRITICAL", code="kill_switch", payload=result)
+    risk.refresh_runtime_state()
+    return {
+        "ts": _ts(),
+        "result": result,
+        "safe_mode": True,
+        "mode": state.control.mode,
+    }
 
 
 @router.post("/close_exposure")

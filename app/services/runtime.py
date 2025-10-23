@@ -55,6 +55,36 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_optional_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
+    mapping: Dict[str, float] = {}
+    base = os.environ.get(name)
+    if base is not None:
+        try:
+            mapping["__default__"] = float(base)
+        except ValueError:
+            pass
+    prefix = f"{name}__"
+    for key, value in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        scope = normaliser(key[len(prefix) :])
+        try:
+            mapping[scope] = float(value)
+        except ValueError:
+            continue
+    return mapping
+
+
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -191,6 +221,68 @@ class LoopConfigState:
 
 
 @dataclass
+class RiskLimitsState:
+    max_position_usdt: Dict[str, float] = field(default_factory=dict)
+    max_open_orders: Dict[str, int] = field(default_factory=dict)
+    max_daily_loss_usdt: float | None = None
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "max_position_usdt": dict(self.max_position_usdt),
+            "max_open_orders": dict(self.max_open_orders),
+            "max_daily_loss_usdt": self.max_daily_loss_usdt,
+        }
+
+
+@dataclass
+class RiskCurrentState:
+    position_usdt: Dict[str, float] = field(default_factory=dict)
+    open_orders: Dict[str, int] = field(default_factory=dict)
+    daily_loss_usdt: float = 0.0
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "position_usdt": dict(self.position_usdt),
+            "open_orders": dict(self.open_orders),
+            "daily_loss_usdt": self.daily_loss_usdt,
+        }
+
+
+@dataclass
+class RiskBreach:
+    limit: str
+    scope: str
+    current: float
+    threshold: float
+    detail: str | None = None
+
+    def as_dict(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "limit": self.limit,
+            "scope": self.scope,
+            "current": self.current,
+            "threshold": self.threshold,
+        }
+        if self.detail:
+            payload["detail"] = self.detail
+        return payload
+
+
+@dataclass
+class RiskState:
+    limits: RiskLimitsState = field(default_factory=RiskLimitsState)
+    current: RiskCurrentState = field(default_factory=RiskCurrentState)
+    breaches: List[RiskBreach] = field(default_factory=list)
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "limits": self.limits.as_dict(),
+            "current": self.current.as_dict(),
+            "breaches": [breach.as_dict() for breach in self.breaches],
+        }
+
+
+@dataclass
 class RuntimeState:
     config: LoadedConfig
     guards: Dict[str, GuardState]
@@ -202,6 +294,7 @@ class RuntimeState:
     loop: LoopState = field(default_factory=LoopState)
     loop_config: LoopConfigState = field(default_factory=LoopConfigState)
     open_orders: List[Dict[str, object]] = field(default_factory=list)
+    risk: RiskState = field(default_factory=RiskState)
 
 
 def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
@@ -286,6 +379,21 @@ def _bootstrap_runtime() -> RuntimeState:
         poll_interval_sec=poll_interval,
         min_spread_bps=min_spread_bps,
     )
+    position_limits_env = {
+        key.upper(): value
+        for key, value in _env_limit_map("MAX_POSITION_USDT", normaliser=lambda entry: str(entry).upper()).items()
+    }
+    open_order_limits_env = {
+        key.lower(): int(value)
+        for key, value in _env_limit_map("MAX_OPEN_ORDERS", normaliser=lambda entry: str(entry).lower()).items()
+    }
+    risk_state = RiskState(
+        limits=RiskLimitsState(
+            max_position_usdt=position_limits_env,
+            max_open_orders=open_order_limits_env,
+            max_daily_loss_usdt=_env_optional_float("MAX_DAILY_LOSS_USDT"),
+        )
+    )
     return RuntimeState(
         config=loaded,
         guards=guards,
@@ -301,6 +409,7 @@ def _bootstrap_runtime() -> RuntimeState:
             notional_usdt=control.order_notional_usdt,
         ),
         open_orders=[],
+        risk=risk_state,
     )
 
 
