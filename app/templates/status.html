@@ -83,6 +83,32 @@
         background: #f87171;
         color: #0f172a;
       }
+      .risk-section {
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid rgba(248, 250, 252, 0.08);
+      }
+      .risk-section:last-of-type {
+        border-bottom: none;
+        padding-bottom: 0;
+      }
+      .risk-section h3 {
+        margin: 0 0 0.35rem 0;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .risk-metric {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.9rem;
+      }
+      .risk-metric + .risk-metric {
+        margin-top: 0.25rem;
+      }
+      .risk-metric span.value {
+        font-weight: 600;
+      }
       .bad {
         color: #f87171;
       }
@@ -203,6 +229,24 @@
         <div id="pnl"></div>
       </section>
       <section class="card">
+        <h2>Risk</h2>
+        <div class="card-actions">
+          <button id="killBtn" class="danger">Kill Switch</button>
+        </div>
+        <div class="risk-section">
+          <h3>Limits</h3>
+          <div id="riskLimits" class="muted">Loading…</div>
+        </div>
+        <div class="risk-section">
+          <h3>Current</h3>
+          <div id="riskCurrent" class="muted">Loading…</div>
+        </div>
+        <div class="risk-section">
+          <h3>Breaches</h3>
+          <div id="riskBreaches" class="muted">No active breaches</div>
+        </div>
+      </section>
+      <section class="card">
         <h2>Orders &amp; Positions</h2>
         <div class="card-actions">
           <button id="closeExposureBtn" class="secondary">Close Exposure</button>
@@ -273,6 +317,7 @@
       const holdBtn = document.getElementById('holdBtn');
       const resumeBtn = document.getElementById('resumeBtn');
       const stopBtn = document.getElementById('stopBtn');
+      const killBtn = document.getElementById('killBtn');
       const cancelAllBtn = document.getElementById('cancelAllBtn');
       const closeExposureBtn = document.getElementById('closeExposureBtn');
       const loopStatusEl = document.getElementById('loopStatus');
@@ -284,6 +329,9 @@
       const recentFillsBody = document.getElementById('recentFills');
       const exposuresBody = document.getElementById('exposures');
       const balancesBody = document.getElementById('portfolioBalances');
+      const riskLimitsEl = document.getElementById('riskLimits');
+      const riskCurrentEl = document.getElementById('riskCurrent');
+      const riskBreachesEl = document.getElementById('riskBreaches');
 
       const formatNumber = (value, digits = 2) => {
         const numeric = Number(value);
@@ -297,6 +345,81 @@
         const numeric = Number(value);
         const cls = numeric >= 0 ? 'good' : 'bad';
         return `<span class="${cls}">${formatNumber(numeric, digits)}</span>`;
+      };
+
+      const renderRisk = (risk) => {
+        if (!risk || typeof risk !== 'object') {
+          riskLimitsEl.textContent = 'No limits configured';
+          riskCurrentEl.textContent = 'Unavailable';
+          riskBreachesEl.textContent = 'No data';
+          riskBreachesEl.classList.add('muted');
+          return;
+        }
+        const limits = risk.limits || {};
+        const current = risk.current || {};
+        const breaches = Array.isArray(risk.breaches) ? risk.breaches : [];
+
+        const limitLines = [];
+        const positionLimits = limits.max_position_usdt || {};
+        const openOrderLimits = limits.max_open_orders || {};
+        const dailyLossLimit = limits.max_daily_loss_usdt;
+        const formatLimitKey = (key) => (key === '__default__' ? 'ALL' : key);
+        Object.entries(positionLimits).forEach(([symbol, value]) => {
+          limitLines.push(
+            `<div class="risk-metric"><span>Pos ${formatLimitKey(symbol)}</span><span class="value">${formatNumber(value)}</span></div>`
+          );
+        });
+        Object.entries(openOrderLimits).forEach(([venue, value]) => {
+          limitLines.push(
+            `<div class="risk-metric"><span>Orders ${formatLimitKey(venue)}</span><span class="value">${Number(value)}</span></div>`
+          );
+        });
+        if (dailyLossLimit !== null && dailyLossLimit !== undefined) {
+          const limitValue = Number(dailyLossLimit);
+          if (Number.isFinite(limitValue)) {
+            limitLines.push(
+              `<div class="risk-metric"><span>Daily loss</span><span class="value">${formatNumber(limitValue)}</span></div>`
+            );
+          }
+        }
+        riskLimitsEl.innerHTML = limitLines.length ? limitLines.join('') : 'No limits configured';
+
+        const currentLines = [];
+        const positions = current.position_usdt || {};
+        Object.entries(positions).forEach(([symbol, value]) => {
+          currentLines.push(
+            `<div class="risk-metric"><span>${symbol}</span><span class="value">${formatNumber(value)}</span></div>`
+          );
+        });
+        const openOrders = current.open_orders || {};
+        Object.entries(openOrders).forEach(([venue, count]) => {
+          currentLines.push(
+            `<div class="risk-metric"><span>Orders ${venue}</span><span class="value">${Number(count)}</span></div>`
+          );
+        });
+        if (current.daily_loss_usdt !== undefined) {
+          currentLines.push(
+            `<div class="risk-metric"><span>Daily realized</span><span class="value">${formatNumber(current.daily_loss_usdt)}</span></div>`
+          );
+        }
+        riskCurrentEl.innerHTML = currentLines.length ? currentLines.join('') : 'No telemetry available';
+
+        if (breaches.length) {
+          const breachLines = breaches.map((breach) => {
+            const limit = breach.limit || '';
+            const scope = breach.scope || '';
+            const currentValue = formatNumber(breach.current ?? 0);
+            const thresholdValue = formatNumber(breach.threshold ?? 0);
+            const detail = breach.detail ? ` · ${breach.detail}` : '';
+            const detailLine = detail ? `<div class="muted" style="font-size:0.8rem;">${detail}</div>` : '';
+            return `<div class="risk-metric"><span>${limit} ${scope}</span><span class="value">${currentValue} / ${thresholdValue}</span></div>${detailLine}`;
+          });
+          riskBreachesEl.innerHTML = breachLines.join('');
+          riskBreachesEl.classList.remove('muted');
+        } else {
+          riskBreachesEl.textContent = 'No active breaches';
+          riskBreachesEl.classList.add('muted');
+        }
       };
 
       function renderLoopOverview(loopInfo, secret, env, ordersCount) {
@@ -514,6 +637,7 @@
             .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
+          renderRisk(data.risk);
           const portfolioData = data.portfolio || {};
           const portfolioPositions = Array.isArray(portfolioData.positions) && portfolioData.positions.length
             ? portfolioData.positions
@@ -637,6 +761,9 @@
       holdBtn.addEventListener('click', () => postAction('/api/ui/hold'));
       resumeBtn.addEventListener('click', () => postAction('/api/ui/resume'));
       stopBtn.addEventListener('click', () => postAction('/api/ui/stop'));
+      if (killBtn) {
+        killBtn.addEventListener('click', () => postAction('/api/ui/kill'));
+      }
       cancelAllBtn.addEventListener('click', () => postAction('/api/ui/cancel_all'));
       closeExposureBtn.addEventListener('click', () => postAction('/api/ui/close_exposure'));
 

@@ -43,6 +43,11 @@ def test_ui_state_and_controls(client):
     assert "exposures" in state_payload
     assert "pnl" in state_payload
     assert "portfolio" in state_payload
+    assert "risk" in state_payload
+    risk_block = state_payload["risk"]
+    assert isinstance(risk_block, dict)
+    assert "limits" in risk_block
+    assert "current" in risk_block
     assert state_payload["exposures"], "paper environment exposures should not be empty"
     assert any(entry["symbol"].upper() == "BTCUSDT" for entry in state_payload["exposures"])
     pnl_snapshot = state_payload["pnl"]
@@ -168,3 +173,26 @@ def test_ui_state_and_controls(client):
     # stop background loop to avoid leaking tasks between tests
     runtime_state.control.environment = "paper"
     client.post("/api/ui/hold")
+
+
+def test_kill_switch_cancels_orders(client):
+    state = get_state()
+    state.control.safe_mode = False
+    order_id = ledger.record_order(
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.1,
+        price=20_000.0,
+        status="submitted",
+        client_ts=datetime.now(timezone.utc).isoformat(),
+        exchange_ts=None,
+        idemp_key="kill-switch-order",
+    )
+    resp = client.post("/api/ui/kill")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["safe_mode"] is True
+    assert payload["mode"] == "HOLD"
+    order = ledger.get_order(order_id)
+    assert order["status"] == "cancelled"

@@ -9,6 +9,7 @@ from ..core.config import ArbitragePairConfig
 from ..exchanges import binance_um, okx_perp
 from ..broker.router import ExecutionRouter
 from .derivatives import DerivativesRuntime
+from . import risk
 from .runtime import (
     bump_counter,
     get_state,
@@ -269,6 +270,7 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     plan.est_pnl_usdt = pnl
     if notional_value > 0:
         plan.est_pnl_bps = (pnl / notional_value) * 10_000
+    risk.evaluate_plan(plan)
     logger.info(
         "arbitrage plan built",
         extra={
@@ -276,6 +278,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
             "pnl_usdt": plan.est_pnl_usdt,
             "pnl_bps": plan.est_pnl_bps,
             "direction": legs[0].exchange + "->" + legs[1].exchange if legs else "none",
+            "viable": plan.viable,
+            "reason": plan.reason,
         },
     )
     return plan
