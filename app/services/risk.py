@@ -193,10 +193,7 @@ def _plan_order_counts(plan: "Plan") -> Counter[str]:
     return counts
 
 
-def evaluate_plan(plan: "Plan") -> None:
-    risk_state = refresh_runtime_state()
-    if not plan.viable:
-        return
+def _plan_limit_reasons(plan: "Plan", risk_state: RiskState) -> list[str]:
     reasons: list[str] = []
     symbol = _normalise_symbol(plan.symbol)
     current_position = risk_state.current.position_usdt.get(symbol, 0.0)
@@ -229,6 +226,20 @@ def evaluate_plan(plan: "Plan") -> None:
                 f"risk:max_daily_loss_usdt limit {loss_limit:.2f} breached ({risk_state.current.daily_loss_usdt:.2f})"
             )
 
+    return reasons
+
+
+def guard_plan(plan: "Plan") -> tuple[bool, str | None, RiskState]:
+    risk_state = refresh_runtime_state()
+    reasons = _plan_limit_reasons(plan, risk_state)
+    if reasons:
+        return False, "; ".join(reasons), risk_state
+    return True, None, risk_state
+
+
+def evaluate_plan(plan: "Plan", *, risk_state: RiskState | None = None) -> None:
+    state = risk_state or refresh_runtime_state()
+    reasons = _plan_limit_reasons(plan, state)
     if reasons:
         plan.viable = False
         if plan.reason:

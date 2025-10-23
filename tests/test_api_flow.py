@@ -51,3 +51,36 @@ def test_preview_rejected_by_risk_limits(client):
     state.control.safe_mode = False
     execute_resp = client.post("/api/arb/execute", json=plan)
     assert execute_resp.status_code == 422
+
+
+def test_execute_accepts_preview_payload_with_extra_fields(client):
+    state = get_state()
+    state.control.safe_mode = False
+    state.control.dry_run = True
+    preview_payload = {"symbol": "BTCUSDT", "notional": 500.0, "used_slippage_bps": 2}
+    preview_resp = client.post("/api/arb/preview", json=preview_payload)
+    assert preview_resp.status_code == 200
+    plan = preview_resp.json()
+    plan["viable"] = False
+    plan["extra_payload"] = {"from": "preview"}
+    exec_resp = client.post("/api/arb/execute", json=plan)
+    assert exec_resp.status_code == 200
+    body = exec_resp.json()
+    assert body["symbol"] == "BTCUSDT"
+    assert isinstance(body.get("orders"), list)
+    assert isinstance(body.get("exposures"), list)
+    assert body["pnl_summary"].keys() >= {"realized", "unrealized", "total"}
+
+
+def test_preview_prioritises_risk_reason_over_spread(client):
+    state = get_state()
+    state.risk.limits.max_position_usdt = {"BTCUSDT": 50.0}
+    preview_payload = {"symbol": "BTCUSDT", "notional": 100.0, "used_slippage_bps": 500}
+    resp = client.post("/api/arb/preview", json=preview_payload)
+    assert resp.status_code == 200
+    plan = resp.json()
+    assert plan["viable"] is False
+    reason = plan.get("reason") or ""
+    assert reason.startswith("risk:max_position_usdt")
+    if "; " in reason:
+        assert "spread" in reason.split("; ", 1)[1]
