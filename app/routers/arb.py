@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, List, Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, ConfigDict, Field, root_validator
 
 from ..services import arbitrage
 from ..services.runtime import get_state, set_last_execution, set_last_plan
@@ -12,6 +12,8 @@ router = APIRouter()
 
 
 class PreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     symbol: str
     pair: str | None = None
     notional: float | None = None
@@ -31,6 +33,8 @@ class PreviewRequest(BaseModel):
 
 
 class PlanLegModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     ex: str = Field(..., description="Exchange identifier")
     side: Literal["buy", "sell"]
     px: float = Field(..., description="Execution price")
@@ -39,6 +43,8 @@ class PlanLegModel(BaseModel):
 
 
 class PlanModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     symbol: str
     notional: float
     viable: bool
@@ -74,8 +80,10 @@ async def execute(plan_body: PlanModel) -> dict:
     state = get_state()
     if state.control.safe_mode:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
-    plan = arbitrage.plan_from_payload(plan_body.model_dump())
-    if not plan.viable:
+    payload = plan_body.model_dump()
+    plan = arbitrage.plan_from_payload(payload)
+    dry_run = bool(state.control.dry_run)
+    if not plan.viable and not dry_run:
         detail = plan.reason or "plan not viable"
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
     try:
@@ -83,5 +91,11 @@ async def execute(plan_body: PlanModel) -> dict:
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     report_dict = report.as_dict()
+    report_dict.setdefault("orders", [])
+    report_dict.setdefault("exposures", [])
+    pnl_summary = report_dict.setdefault("pnl_summary", {})
+    pnl_summary.setdefault("realized", 0.0)
+    pnl_summary.setdefault("unrealized", 0.0)
+    pnl_summary.setdefault("total", 0.0)
     set_last_execution(report_dict)
     return report_dict

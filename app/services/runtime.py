@@ -525,3 +525,4 @@ def reset_for_tests() -> None:
     """Helper used in tests to reset runtime state."""
     global _STATE
     _STATE = _bootstrap_runtime()
+    _STATE.control.dry_run = False

@@ -148,11 +148,23 @@ class InMemoryDerivClient:
 
 
 def build_in_memory_client(venue_id: str, symbols: Iterable[str]) -> InMemoryDerivClient:
-    states = {
-        symbol: SymbolState(
-            mark_price=100.0,
-            bid=100.4,
-            ask=100.1,
+    venue = str(venue_id or "").lower()
+    states = {}
+    for symbol in symbols:
+        mark_price = 100.0
+        if "binance" in venue:
+            bid = 100.6
+            ask = 100.3
+        elif "okx" in venue:
+            bid = 100.4
+            ask = 100.0
+        else:
+            bid = 100.2
+            ask = 100.05
+        states[symbol] = SymbolState(
+            mark_price=mark_price,
+            bid=bid,
+            ask=ask,
             lot_size=0.001,
             min_qty=0.001,
             max_qty=1000.0,
@@ -160,6 +172,4 @@ def build_in_memory_client(venue_id: str, symbols: Iterable[str]) -> InMemoryDer
             taker_bps=3.0,
             maker_bps=1.5,
         )
-        for symbol in symbols
-    }
     return InMemoryDerivClient(venue=venue_id, symbols=states)
