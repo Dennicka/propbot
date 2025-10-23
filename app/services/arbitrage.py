@@ -220,7 +220,7 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         notional=notional_value,
         used_slippage_bps=slippage_bps,
         used_fees_bps=fees,
-        viable=True,
+        viable=False,
     )
     if symbol_normalised not in SUPPORTED_SYMBOLS:
         plan.reason = f"unsupported symbol {symbol_normalised}"
@@ -260,8 +260,6 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         fees=fees,
     )
 
-<<<<<<< HEAD
-=======
     spread_a_bps = (spread_a / notional_value) * 10_000 if notional_value else 0.0
     spread_b_bps = (spread_b / notional_value) * 10_000 if notional_value else 0.0
 
@@ -271,7 +269,6 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         plan.reason = "spread non-positive after fees"
         return plan
 
->>>>>>> origin/main
     if spread_a >= spread_b:
         pnl = spread_a
         legs = legs_a
@@ -281,34 +278,11 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         legs = legs_b
         spread_bps = spread_b_bps
 
+    plan.viable = True
     plan.legs = legs
     plan.est_pnl_usdt = pnl
     if notional_value > 0:
         plan.est_pnl_bps = (pnl / notional_value) * 10_000
-<<<<<<< HEAD
-
-    spread_reason = None
-    if pnl <= 0:
-        spread_reason = "spread non-positive after fees"
-
-    risk_ok, risk_reason, risk_state = risk.guard_plan(plan)
-    if not risk_ok:
-        plan.viable = False
-        if spread_reason:
-            plan.reason = f"{risk_reason}; {spread_reason}"
-        else:
-            plan.reason = risk_reason
-        return plan
-
-    if spread_reason:
-        plan.viable = False
-        plan.reason = spread_reason
-        return plan
-
-    plan.viable = True
-    plan.reason = None
-    risk.evaluate_plan(plan, risk_state=risk_state)
-=======
     plan.spread_bps = spread_bps
 
     min_spread = float(state.control.min_spread_bps)
@@ -317,7 +291,6 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         plan.reason = f"spread {plan.spread_bps:.4f} < min {min_spread:.4f}"
 
     risk.evaluate_plan(plan)
->>>>>>> origin/main
     logger.info(
         "arbitrage plan built",
         extra={
@@ -380,18 +353,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
     dry_run = state.control.dry_run
     router = ExecutionRouter()
     result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
-    pnl_summary_raw = result.get("pnl", {}) if isinstance(result, dict) else {}
-    pnl_summary = {
-        "realized": float(pnl_summary_raw.get("realized", 0.0)),
-        "unrealized": float(pnl_summary_raw.get("unrealized", 0.0)),
-        "total": float(
-            pnl_summary_raw.get(
-                "total",
-                float(pnl_summary_raw.get("realized", 0.0))
-                + float(pnl_summary_raw.get("unrealized", 0.0)),
-            )
-        ),
-    }
+    pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}
     orders = result.get("orders", []) if isinstance(result, dict) else []
     exposures = result.get("exposures", []) if isinstance(result, dict) else []
     pnl_usdt = float(pnl_summary.get("total", plan.est_pnl_usdt if plan.viable else 0.0))
