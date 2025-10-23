@@ -32,6 +32,9 @@ def runtime_state() -> dict:
         "counters": dict(state.metrics.counters),
         "latency_samples_ms": list(state.metrics.latency_samples_ms),
     }
+    risk_state = state.risk.as_dict()
+    risk_blocked = bool(state.risk.breaches)
+    risk_reasons = [breach.get("detail") or breach.get("limit") for breach in risk_state["breaches"]]
     dryrun = None
     if state.dryrun:
         dryrun = {
@@ -53,4 +56,7 @@ def runtime_state() -> dict:
         "flags": state.control.flags,
         "metrics": metrics,
         "dry_run": dryrun,
+        "risk": risk_state,
+        "risk_blocked": risk_blocked,
+        "risk_reasons": risk_reasons,
     }

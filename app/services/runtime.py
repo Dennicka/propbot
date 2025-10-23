@@ -7,6 +7,7 @@ from typing import Dict, List
 
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
+from .marketdata import MarketDataAggregator
 
 
 DEFAULT_CONFIG_PATHS = {
@@ -290,6 +291,7 @@ class RuntimeState:
     metrics: MetricsState
     incidents: List[Dict[str, object]] = field(default_factory=list)
     derivatives: DerivativesRuntime | None = None
+    market_data: MarketDataAggregator | None = None
     dryrun: DryRunState | None = None
     loop: LoopState = field(default_factory=LoopState)
     loop_config: LoopConfigState = field(default_factory=LoopConfigState)
@@ -375,6 +377,25 @@ def _bootstrap_runtime() -> RuntimeState:
     guards = _init_guards(loaded)
     metrics = MetricsState()
     derivatives = bootstrap_derivatives(loaded, safe_mode=safe_mode)
+    market_data = MarketDataAggregator(stale_after=1.5)
+    if derivatives and derivatives.venues:
+        for venue_id, venue_rt in derivatives.venues.items():
+            symbol_map: Dict[str, str] = {}
+            for entry in venue_rt.config.symbols:
+                symbol_map[entry.upper()] = entry
+                cleaned = entry.replace("-", "").replace("_", "").replace("/", "").upper()
+                symbol_map.setdefault(cleaned, entry)
+                parts = entry.replace("_", "-").split("-")
+                if len(parts) >= 2:
+                    pair_key = "".join(parts[:2]).upper()
+                    symbol_map.setdefault(pair_key, entry)
+
+            def _fetcher(symbol: str, *, client=venue_rt.client, mapping=symbol_map):
+                lookup = symbol.upper()
+                target = mapping.get(lookup, symbol)
+                return client.get_orderbook_top(target)
+
+            market_data.register_rest_fetcher(venue_id.replace("_", "-"), _fetcher)
     dryrun_state = DryRunState(
         poll_interval_sec=poll_interval,
         min_spread_bps=min_spread_bps,
@@ -402,6 +423,7 @@ def _bootstrap_runtime() -> RuntimeState:
         incidents=[],
         derivatives=derivatives,
         dryrun=dryrun_state,
+        market_data=market_data,
         loop=LoopState(),
         loop_config=LoopConfigState(
             pair=control.loop_pair,
@@ -418,6 +440,12 @@ _STATE = _bootstrap_runtime()
 
 def get_state() -> RuntimeState:
     return _STATE
+
+
+def get_market_data() -> MarketDataAggregator:
+    if _STATE.market_data is None:
+        _STATE.market_data = MarketDataAggregator()
+    return _STATE.market_data
 
 
 def ensure_dryrun_state() -> DryRunState:

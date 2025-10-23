@@ -6,13 +6,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Tuple
 
 from ..core.config import ArbitragePairConfig
-from ..exchanges import binance_um, okx_perp
 from ..broker.router import ExecutionRouter
 from .derivatives import DerivativesRuntime
 from . import risk
 from .runtime import (
     bump_counter,
     get_state,
+    get_market_data,
     record_incident,
     set_preflight_result,
     update_guard,
@@ -126,6 +126,8 @@ class Plan:
     legs: List[PlanLeg] = field(default_factory=list)
     est_pnl_usdt: float = 0.0
     est_pnl_bps: float = 0.0
+    spread_bps: float = 0.0
+    venues: List[str] = field(default_factory=list)
     reason: str | None = None
 
     def as_dict(self) -> Dict[str, Any]:
@@ -138,6 +140,8 @@ class Plan:
             "est_pnl_bps": self.est_pnl_bps,
             "used_fees_bps": self.used_fees_bps,
             "used_slippage_bps": self.used_slippage_bps,
+            "spread_bps": self.spread_bps,
+            "venues": list(self.venues),
         }
         if self.reason:
             payload["reason"] = self.reason
@@ -224,9 +228,11 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     if notional_value <= 0:
         plan.reason = "notional must be positive"
         return plan
+
+    aggregator = get_market_data()
     try:
-        binance_book = binance_um.get_book(symbol_normalised)
-        okx_book = okx_perp.get_book(symbol_normalised)
+        binance_book = aggregator.top_of_book("binance-um", symbol_normalised)
+        okx_book = aggregator.top_of_book("okx-perp", symbol_normalised)
     except Exception as exc:  # pragma: no cover - network errors are logged
         logger.exception("failed to fetch books for %s", symbol_normalised)
         plan.reason = f"failed to fetch books: {exc}"
@@ -254,17 +260,32 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         fees=fees,
     )
 
+<<<<<<< HEAD
+=======
+    spread_a_bps = (spread_a / notional_value) * 10_000 if notional_value else 0.0
+    spread_b_bps = (spread_b / notional_value) * 10_000 if notional_value else 0.0
+
+    plan.venues = ["binance-um", "okx-perp"]
+
+    if spread_a <= 0 and spread_b <= 0:
+        plan.reason = "spread non-positive after fees"
+        return plan
+
+>>>>>>> origin/main
     if spread_a >= spread_b:
         pnl = spread_a
         legs = legs_a
+        spread_bps = spread_a_bps
     else:
         pnl = spread_b
         legs = legs_b
+        spread_bps = spread_b_bps
 
     plan.legs = legs
     plan.est_pnl_usdt = pnl
     if notional_value > 0:
         plan.est_pnl_bps = (pnl / notional_value) * 10_000
+<<<<<<< HEAD
 
     spread_reason = None
     if pnl <= 0:
@@ -287,6 +308,16 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     plan.viable = True
     plan.reason = None
     risk.evaluate_plan(plan, risk_state=risk_state)
+=======
+    plan.spread_bps = spread_bps
+
+    min_spread = float(state.control.min_spread_bps)
+    if plan.spread_bps < min_spread:
+        plan.viable = False
+        plan.reason = f"spread {plan.spread_bps:.4f} < min {min_spread:.4f}"
+
+    risk.evaluate_plan(plan)
+>>>>>>> origin/main
     logger.info(
         "arbitrage plan built",
         extra={
@@ -336,6 +367,8 @@ def plan_from_payload(payload: Dict[str, Any]) -> Plan:
         legs=legs,
         est_pnl_usdt=float(payload.get("est_pnl_usdt", 0.0)),
         est_pnl_bps=float(payload.get("est_pnl_bps", 0.0)),
+        spread_bps=float(payload.get("spread_bps", 0.0)),
+        venues=[str(v) for v in payload.get("venues", [])],
         reason=payload.get("reason"),
     )
     return plan

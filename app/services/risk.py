@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, Iterable, Mapping
 
 from .. import ledger
-from ..broker.router import VENUE_ALIASES
+from ..util.venues import VENUE_ALIASES
 from .portfolio import PortfolioPosition, PortfolioSnapshot
 from .pnl import Fill, compute_realized_pnl
 from .runtime import (

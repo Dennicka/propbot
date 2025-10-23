@@ -9,22 +9,16 @@ from .base import Broker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger
-from ..services import portfolio
-from ..services.runtime import get_state, set_open_orders
+from ..services import portfolio, risk
+from ..services.runtime import get_market_data, get_state, set_open_orders
+from ..util.venues import VENUE_ALIASES
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..services.arbitrage import Plan
 
 
-VENUE_ALIASES: Dict[str, str] = {
-    "binance": "binance-um",
-    "binance-um": "binance-um",
-    "binance_um": "binance-um",
-    "okx": "okx-perp",
-    "okx-perp": "okx-perp",
-    "okx_perp": "okx-perp",
-    "paper": "paper",
-}
+ORDER_TIMEOUT_SEC = 2.0
+MAX_ORDER_ATTEMPTS = 3
 
 
 class ExecutionRouter:
@@ -33,6 +27,7 @@ class ExecutionRouter:
         self.safe_mode = state.control.safe_mode
         self.dry_run_only = state.control.dry_run
         self.two_man_rule = state.control.two_man_rule
+        self.market_data = get_market_data()
         self._brokers: Dict[str, Broker] = {
             "paper": PaperBroker("paper"),
             "binance-um": TestnetBroker(
@@ -64,6 +59,94 @@ class ExecutionRouter:
             return self._brokers["paper"]
         return self._brokers.get(canonical, self._brokers["paper"])
 
+    def brokers(self) -> Dict[str, Broker]:
+        return dict(self._brokers)
+
+    def _nudge_price(
+        self, *, venue: str, symbol: str, side: str, original: float
+    ) -> float:
+        try:
+            book = self.market_data.top_of_book(venue, symbol)
+        except Exception:  # pragma: no cover - fallback to original
+            return original
+        best_bid = float(book.get("bid", 0.0))
+        best_ask = float(book.get("ask", 0.0))
+        epsilon = max(abs(original) * 1e-4, 1e-6)
+        if side.lower() == "buy":
+            if best_bid > 0:
+                adjusted = min(original, best_bid - epsilon)
+                if adjusted > 0:
+                    return adjusted
+        else:
+            if best_ask > 0:
+                adjusted = max(original, best_ask + epsilon)
+                return adjusted
+        return original
+
+    async def _place_leg_with_retry(
+        self,
+        *,
+        broker: Broker,
+        venue: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        fee: float,
+        post_only: bool,
+        reduce_only: bool,
+        plan_key: str,
+        index: int,
+    ) -> Dict[str, object]:
+        attempt = 0
+        last_error: Exception | None = None
+        while attempt < MAX_ORDER_ATTEMPTS:
+            attempt_key = f"{plan_key}:{index}" if attempt == 0 else f"{plan_key}:{index}:{attempt}"
+            price_to_use = price
+            if post_only and attempt > 0:
+                price_to_use = self._nudge_price(
+                    venue=venue, symbol=symbol, side=side, original=price_to_use
+                )
+            try:
+                create_task = broker.create_order(
+                    venue=venue,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price_to_use,
+                    type="LIMIT",
+                    post_only=post_only,
+                    reduce_only=reduce_only,
+                    fee=fee,
+                    idemp_key=attempt_key,
+                )
+                order = await asyncio.wait_for(create_task, timeout=ORDER_TIMEOUT_SEC)
+                return order
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+            except Exception as exc:  # pragma: no cover - defensive logging
+                last_error = exc
+            attempt += 1
+            if attempt < MAX_ORDER_ATTEMPTS:
+                await asyncio.sleep(min(0.2 * (2**attempt), 1.0))
+        message = "order_failed"
+        if last_error:
+            message = f"order_failed:{last_error}"
+        ledger.record_event(
+            level="ERROR",
+            code="order_execution_failed",
+            payload={
+                "venue": venue,
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "price": price,
+                "post_only": post_only,
+                "error": str(last_error) if last_error else "timeout",
+            },
+        )
+        raise RuntimeError(message)
+
     async def _refresh_open_orders(self) -> List[Dict[str, object]]:
         orders = await asyncio.to_thread(ledger.fetch_open_orders)
         set_open_orders(orders)
@@ -81,34 +164,57 @@ class ExecutionRouter:
             return await self._simulate_plan(plan)
         if state.control.two_man_rule and len(state.control.approvals) < 2:
             raise PermissionError("TWO_MAN_RULE approvals missing")
+        risk_state = risk.refresh_runtime_state()
+        if risk_state.breaches:
+            reasons = [breach.detail or breach.limit for breach in risk_state.breaches]
+            raise PermissionError("RISK_BREACH: " + "; ".join(reasons))
         return await self._dispatch_plan(plan)
 
     async def _simulate_plan(self, plan: "Plan") -> Dict[str, object]:
-        return await self._dispatch_plan(plan)
+        return await self._dispatch_plan(plan, simulate=True)
 
-    async def _dispatch_plan(self, plan: "Plan") -> Dict[str, object]:
+    async def _dispatch_plan(self, plan: "Plan", simulate: bool = False) -> Dict[str, object]:
         orders: List[Dict[str, object]] = []
         plan_payload = plan.as_dict()
         plan_key = hashlib.sha256(json.dumps(plan_payload, sort_keys=True).encode("utf-8")).hexdigest()
-        for index, leg in enumerate(plan.legs):
-            broker = self._resolve_broker(leg.exchange)
-            venue = self._venue_for_exchange(leg.exchange)
-            idemp_key = f"{plan_key}:{index}"
-            order = await broker.create_order(
-                venue=venue,
-                symbol=plan.symbol,
-                side=leg.side,
-                qty=leg.qty,
-                price=leg.price,
-                type="LIMIT",
-                post_only=True,
-                reduce_only=False,
-                fee=leg.fee_usdt,
-                idemp_key=idemp_key,
-            )
-            orders.append(order)
+        state = get_state()
+        post_only = bool(state.control.post_only)
+        reduce_only = bool(state.control.reduce_only)
+        if simulate or self.dry_run_only or state.control.safe_mode:
+            for leg in plan.legs:
+                venue = self._venue_for_exchange(leg.exchange)
+                orders.append(
+                    {
+                        "venue": venue,
+                        "symbol": plan.symbol,
+                        "side": leg.side,
+                        "qty": leg.qty,
+                        "price": leg.price,
+                        "simulated": True,
+                    }
+                )
+            open_orders = await self._refresh_open_orders()
+        else:
+            for index, leg in enumerate(plan.legs):
+                broker = self._resolve_broker(leg.exchange)
+                venue = self._venue_for_exchange(leg.exchange)
+                order = await self._place_leg_with_retry(
+                    broker=broker,
+                    venue=venue,
+                    symbol=plan.symbol,
+                    side=leg.side,
+                    qty=leg.qty,
+                    price=leg.price,
+                    fee=leg.fee_usdt,
+                    post_only=post_only,
+                    reduce_only=reduce_only,
+                    plan_key=plan_key,
+                    index=index,
+                )
+                orders.append(order)
+            open_orders = await self._refresh_open_orders()
         snapshot = await portfolio.snapshot()
-        open_orders = await self._refresh_open_orders()
+        risk.refresh_runtime_state(snapshot=snapshot, open_orders=open_orders)
         return {
             "orders": orders,
             "exposures": snapshot.exposures(),
