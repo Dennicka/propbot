@@ -55,6 +55,18 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Эндпоинт `PATCH /api/ui/control` нормализует входящие значения и валидирует диапазоны: `max_slippage_bps ∈ [0, 50]`, `min_spread_bps ∈ [0, 100]`, `order_notional_usdt ∈ [1, 1_000_000]`. Поля с `null` пропускаются без ошибок. После применения изменения сохраняются в файл `data/runtime_state.json`, и сервис подхватывает последний снапшот контролов при рестарте.
 
+## Deploy with Docker/Compose
+
+```bash
+make docker-build   # собрать локальный образ propbot:local
+make up             # поднять сервис в фоне (docker compose up -d)
+make curl-health    # проверить /healthz (ожидается 200)
+make logs           # поток логов контейнера
+make down           # остановить сервис и удалить контейнер
+```
+
+Каталог `./data` монтируется внутрь контейнера как `/app/data`, поэтому `runtime_state.json`, `ledger.db` и другие артефакты сохраняются между перезапусками.
+
 Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также включает:
 
 - кнопку **Edit Config** (панель PATCH `/api/ui/control` с валидацией и ограничениями по профилю);
