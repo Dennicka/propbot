@@ -55,10 +55,13 @@ def _write_output(text: str, out_path: Path | None) -> None:
     out_path.write_text(text, encoding="utf-8")
 
 
-def _auth_headers(token: str | None) -> dict[str, str] | None:
-    if not token:
-        return None
-    return {"Authorization": f"Bearer {token}"}
+def _request_headers(token: str | None, idempotency_key: str | None) -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    return headers or None
 
 
 def _events_command(args: argparse.Namespace) -> int:
@@ -73,7 +76,11 @@ def _events_command(args: argparse.Namespace) -> int:
         if value:
             params[key] = value
     url = _build_url(args.base_url, "/api/ui/events/export")
-    response = _perform_get(url, params, headers=_auth_headers(args.api_token))
+    response = _perform_get(
+        url,
+        params,
+        headers=_request_headers(args.api_token, getattr(args, "idempotency_key", None)),
+    )
     text = _to_text(response, args.format)
     _write_output(text, args.out)
     if args.out:
@@ -84,7 +91,11 @@ def _events_command(args: argparse.Namespace) -> int:
 def _portfolio_command(args: argparse.Namespace) -> int:
     params = {"format": args.format}
     url = _build_url(args.base_url, "/api/ui/portfolio/export")
-    response = _perform_get(url, params, headers=_auth_headers(args.api_token))
+    response = _perform_get(
+        url,
+        params,
+        headers=_request_headers(args.api_token, getattr(args, "idempotency_key", None)),
+    )
     text = _to_text(response, args.format)
     _write_output(text, args.out)
     if args.out:
@@ -99,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--api-token",
         default=None,
         help="Bearer token for API calls (falls back to PROPBOT_API_TOKEN or API_TOKEN env)",
+    )
+    parser.add_argument(
+        "--idempotency-key",
+        default=None,
+        help="Optional idempotency key to include with requests",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

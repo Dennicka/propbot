@@ -22,9 +22,10 @@ class StubResponse:
 def test_cli_events_csv(monkeypatch, tmp_path, capsys) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_get(url: str, params: dict[str, Any], timeout: int) -> StubResponse:
+    def fake_get(url: str, params: dict[str, Any], timeout: int, **kwargs: Any) -> StubResponse:
         captured["url"] = url
         captured["params"] = params
+        captured["headers"] = kwargs.get("headers")
         return StubResponse(200, "ts,venue,type,level,symbol,message\n", [{"ts": "2024"}], {"content-type": "text/csv"})
 
     monkeypatch.setattr(api_cli, "requests", type("R", (), {"get": staticmethod(fake_get)}))
@@ -54,7 +55,7 @@ def test_cli_events_csv(monkeypatch, tmp_path, capsys) -> None:
 def test_cli_portfolio_json(monkeypatch, tmp_path, capsys) -> None:
     response_data = {"positions": [], "balances": []}
 
-    def fake_get(url: str, params: dict[str, Any], timeout: int) -> StubResponse:
+    def fake_get(url: str, params: dict[str, Any], timeout: int, **kwargs: Any) -> StubResponse:
         return StubResponse(200, "", response_data, {"content-type": "application/json"})
 
     monkeypatch.setattr(api_cli, "requests", type("R", (), {"get": staticmethod(fake_get)}))
@@ -69,10 +70,32 @@ def test_cli_portfolio_json(monkeypatch, tmp_path, capsys) -> None:
 
 
 def test_cli_http_error(monkeypatch) -> None:
-    def fake_get(url: str, params: dict[str, Any], timeout: int) -> StubResponse:
+    def fake_get(url: str, params: dict[str, Any], timeout: int, **kwargs: Any) -> StubResponse:
         return StubResponse(500, "boom", {"detail": "fail"}, {"content-type": "application/json"})
 
     monkeypatch.setattr(api_cli, "requests", type("R", (), {"get": staticmethod(fake_get)}))
 
     with pytest.raises(SystemExit):
         api_cli.main(["events"])
+
+
+def test_cli_forwards_idempotency_key(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_get(url: str, params: dict[str, Any], timeout: int, **kwargs: Any) -> StubResponse:
+        captured["headers"] = kwargs.get("headers")
+        return StubResponse(200, "", {"ok": True})
+
+    monkeypatch.setattr(api_cli, "requests", type("R", (), {"get": staticmethod(fake_get)}))
+
+    exit_code = api_cli.main([
+        "--api-token",
+        "abc",
+        "--idempotency-key",
+        "cli-key",
+        "events",
+    ])
+    assert exit_code == 0
+    headers = captured["headers"]
+    assert headers["Authorization"] == "Bearer abc"
+    assert headers["Idempotency-Key"] == "cli-key"

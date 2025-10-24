@@ -43,6 +43,16 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 > При включённом `AUTH_ENABLED=true` все POST/PATCH/DELETE-запросы к `/api/ui/*` и `/api/arb/*` требуют заголовок `Authorization: Bearer <API_TOKEN>`. Запросы чтения (`GET`/`HEAD`/`OPTIONS`) остаются публичными.
 
+Для всех мутаций можно (и рекомендуется) передавать заголовок `Idempotency-Key`. Сервис нормализует JSON-тело и кэширует ответ на `IDEM_TTL_SEC` секунд (по умолчанию 600). Повторный запрос с тем же методом/путём/телом вернёт сохранённый ответ и установит заголовок `Idempotent-Replay: true`.
+
+На уровне приложения действует токен-бакапный rate limit: идентификатором служит bearer-токен (если передан) либо IP клиента. Значения по умолчанию — `API_RATE_PER_MIN=30` с `API_BURST=10`. При превышении квоты возвращается `HTTP 429` с телом
+
+```json
+{"detail": "rate limit exceeded"}
+```
+
+и заголовками `X-RateLimit-Remaining` (оставшийся запас) и `X-RateLimit-Reset` (секунд до полного восстановления бакета).
+
 Эндпоинт `PATCH /api/ui/control` нормализует входящие значения и валидирует диапазоны: `max_slippage_bps ∈ [0, 50]`, `min_spread_bps ∈ [0, 100]`, `order_notional_usdt ∈ [1, 1_000_000]`. Поля с `null` пропускаются без ошибок. После применения изменения сохраняются в файл `data/runtime_state.json`, и сервис подхватывает последний снапшот контролов при рестарте.
 
 Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также включает:
@@ -79,10 +89,12 @@ python -m app.cli loop --env paper --cycles 10
 python -m api_cli events --limit 500 --format csv --venue binance-um --out artifacts/events.csv
 python -m api_cli portfolio --format json --out artifacts/portfolio.json
 python -m api_cli events --base-url https://propbot.local --api-token "$API_TOKEN"
+python -m api_cli events --idempotency-key retry-42
 PROPBOT_API_TOKEN="$API_TOKEN" python -m api_cli portfolio --format json
 ```
 
 Поддерживаются все параметры фильтрации `/api/ui/events` (`--level`, `--search`, `--since`, `--until`, `--symbol`). По умолчанию база API — `http://localhost:8000`, изменяется флагом `--base-url`. Токен авторизации можно передать флагом `--api-token` или через переменные окружения `PROPBOT_API_TOKEN` / `API_TOKEN`.
+Флаг `--idempotency-key` прокидывает одноимённый заголовок и позволяет безопасно ретраить мутации через CLI.
 
 ## 4. Леджер и журнал
 
