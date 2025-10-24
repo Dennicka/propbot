@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <title>PropBot System Status</title>
     <style>
+      :root {
+        color-scheme: dark;
+      }
       body {
         font-family: Arial, sans-serif;
         margin: 0;
@@ -17,9 +20,12 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        position: sticky;
+        top: 0;
+        z-index: 10;
       }
       main {
-        padding: 1.5rem 2rem;
+        padding: 1.5rem 2rem 3rem;
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
         gap: 1.5rem;
@@ -29,26 +35,10 @@
         border-radius: 12px;
         padding: 1rem 1.25rem;
         box-shadow: 0 10px 30px rgba(15, 23, 42, 0.45);
+        position: relative;
       }
       h1, h2 {
         margin: 0;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      th, td {
-        text-align: left;
-        padding: 0.35rem 0.25rem;
-      }
-      th {
-        border-bottom: 1px solid rgba(248, 250, 252, 0.2);
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      td {
-        font-size: 0.9rem;
       }
       button {
         background: #38bdf8;
@@ -59,13 +49,6 @@
         border-radius: 8px;
         cursor: pointer;
         transition: transform 0.15s ease, opacity 0.2s ease;
-      }
-      .actions {
-        display: flex;
-        gap: 0.5rem;
-      }
-      button + button {
-        margin-left: 0.5rem;
       }
       button:hover {
         transform: translateY(-1px);
@@ -83,6 +66,40 @@
         background: #f87171;
         color: #0f172a;
       }
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 0.35rem 0.3rem;
+        vertical-align: middle;
+      }
+      th {
+        border-bottom: 1px solid rgba(248, 250, 252, 0.2);
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      td {
+        font-size: 0.9rem;
+      }
+      .table-wrapper {
+        overflow-x: auto;
+      }
+      .table-wrapper + .table-wrapper {
+        margin-top: 0.75rem;
+      }
+      .mini-table th,
+      .mini-table td {
+        font-size: 0.8rem;
+      }
       .risk-section {
         margin-bottom: 0.75rem;
         padding-bottom: 0.5rem;
@@ -91,12 +108,7 @@
       .risk-section:last-of-type {
         border-bottom: none;
         padding-bottom: 0;
-      }
-      .risk-section h3 {
-        margin: 0 0 0.35rem 0;
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
+        margin-bottom: 0;
       }
       .risk-metric {
         display: flex;
@@ -109,60 +121,217 @@
       .risk-metric span.value {
         font-weight: 600;
       }
-      .bad {
-        color: #f87171;
-      }
       .good {
         color: #4ade80;
       }
-      .plan-summary {
-        margin-top: 0.5rem;
+      .bad {
+        color: #f87171;
+      }
+      .muted {
+        color: rgba(148, 163, 184, 0.85);
+      }
+      .plan-summary,
+      .plan-reason {
+        margin-top: 0.75rem;
+        line-height: 1.4;
       }
       .plan-spread {
         margin-top: 0.5rem;
         line-height: 1.4;
       }
-      .plan-reason {
-        margin-top: 0.75rem;
-        font-size: 0.85rem;
-        color: rgba(248, 250, 252, 0.75);
-      }
-      .muted {
-        color: rgba(148, 163, 184, 0.85);
-      }
-      .plan-legs {
-        margin-top: 0.75rem;
-      }
-      .card h3 {
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
-        font-size: 1rem;
-        color: #e2e8f0;
-      }
       .card-actions {
         display: flex;
-        justify-content: flex-end;
-        margin-bottom: 0.5rem;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
       }
-      .table-wrapper {
-        overflow-x: auto;
+      .tab-group {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
       }
-      .table-wrapper + .table-wrapper {
-        margin-top: 0.75rem;
+      .tab-button {
+        background: rgba(148, 163, 184, 0.2);
+        color: #e2e8f0;
+        font-weight: 600;
       }
-      .mini-table th,
-      .mini-table td {
-        font-size: 0.8rem;
+      .tab-button.active {
+        background: #38bdf8;
+        color: #0f172a;
       }
-      .mini-table th {
-        letter-spacing: 0.04em;
+      .tab-panel {
+        display: none;
       }
-      pre {
-        background: rgba(15, 23, 42, 0.65);
-        padding: 0.75rem;
+      .tab-panel.active {
+        display: block;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.2rem 0.45rem;
+        border-radius: 9999px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .badge-info {
+        background: rgba(59, 130, 246, 0.2);
+        color: #60a5fa;
+      }
+      .badge-warning {
+        background: rgba(251, 191, 36, 0.2);
+        color: #fbbf24;
+      }
+      .badge-error {
+        background: rgba(239, 68, 68, 0.2);
+        color: #f87171;
+      }
+      .events-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        max-height: 360px;
+        overflow-y: auto;
+        padding-right: 0.25rem;
+      }
+      .event-row {
+        background: rgba(15, 23, 42, 0.6);
         border-radius: 8px;
-        overflow: auto;
+        padding: 0.5rem 0.75rem;
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        gap: 0.5rem 0.75rem;
+        align-items: center;
+      }
+      .event-time {
+        font-size: 0.75rem;
+        color: rgba(148, 163, 184, 0.85);
+      }
+      .event-code {
+        font-weight: 600;
+      }
+      .event-payload {
+        font-size: 0.8rem;
+        color: rgba(226, 232, 240, 0.85);
+        word-break: break-word;
+      }
+      .event-controls {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      select {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        color: #f8fafc;
+        padding: 0.35rem 0.5rem;
+        border-radius: 6px;
+      }
+      .toast {
+        position: fixed;
+        top: 1.5rem;
+        right: 2rem;
+        background: rgba(15, 23, 42, 0.95);
+        color: #f8fafc;
+        border-radius: 10px;
+        padding: 0.75rem 1.2rem;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.4);
+        opacity: 0;
+        transform: translateY(-10px);
+        transition: opacity 0.25s ease, transform 0.25s ease;
+        z-index: 20;
+        min-width: 220px;
+        font-weight: 600;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .toast.success {
+        border-left: 4px solid #4ade80;
+      }
+      .toast.error {
+        border-left: 4px solid #f87171;
+      }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.65);
+        backdrop-filter: blur(2px);
+        z-index: 30;
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 40;
+      }
+      .modal.hidden,
+      .modal-backdrop.hidden,
+      .toast.hidden {
+        display: none;
+      }
+      .modal-content {
+        background: #0f172a;
+        border-radius: 16px;
+        padding: 1.5rem;
+        width: min(520px, 92vw);
+        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.6);
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+      .modal-form {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.75rem 1rem;
+      }
+      .modal-form label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
         font-size: 0.85rem;
+        font-weight: 600;
+      }
+      .modal-form input[type="number"],
+      .modal-form input[type="text"] {
+        background: rgba(30, 41, 59, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        border-radius: 8px;
+        padding: 0.45rem 0.6rem;
+        color: #f8fafc;
+      }
+      .modal-form input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: #38bdf8;
+      }
+      .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        margin-top: 1.2rem;
+      }
+      @media (max-width: 768px) {
+        header {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 1rem;
+        }
+        .actions {
+          justify-content: flex-start;
+        }
       }
     </style>
   </head>
@@ -173,11 +342,13 @@
         <p id="mode">Loading...</p>
       </div>
       <div class="actions">
+        <button id="editConfigBtn" class="secondary">Edit Config</button>
         <button id="resumeBtn">Resume</button>
         <button id="holdBtn">Hold</button>
         <button id="stopBtn" class="secondary">Stop</button>
       </div>
     </header>
+    <div id="toast" class="toast hidden"></div>
     <main>
       <section class="card">
         <h2>Auto Loop</h2>
@@ -202,8 +373,8 @@
                 <th>Notional</th>
                 <th>Entry</th>
                 <th>Mark</th>
-                <th>UPnL</th>
-                <th>RPnL</th>
+                <th>uPnL</th>
+                <th>rPnL</th>
               </tr>
             </thead>
             <tbody id="exposures"></tbody>
@@ -249,55 +420,70 @@
       <section class="card">
         <h2>Orders &amp; Positions</h2>
         <div class="card-actions">
-          <button id="closeExposureBtn" class="secondary">Close Exposure</button>
-          <button id="cancelAllBtn" class="danger">Cancel All</button>
+          <div class="actions" style="justify-content:flex-start;">
+            <button id="closeExposureBtn" class="secondary">Close Exposure</button>
+            <button id="cancelAllBtn" class="danger">Cancel All</button>
+          </div>
+          <div id="venueCancelButtons" class="actions" style="justify-content:flex-end;"></div>
         </div>
-        <div class="table-wrapper">
-          <h3>Open Orders</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Venue</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="openOrders"></tbody>
-          </table>
+        <div class="tab-group">
+          <button class="tab-button active" data-tab-target="orders">Open Orders</button>
+          <button class="tab-button" data-tab-target="positions">Positions</button>
+          <button class="tab-button" data-tab-target="fills">Fills</button>
         </div>
-        <div class="table-wrapper">
-          <h3>Recent Fills</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Venue</th>
-                <th>Symbol</th>
-                <th>Side</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Fee</th>
-                <th>Timestamp</th>
-              </tr>
-            </thead>
-            <tbody id="recentFills"></tbody>
-          </table>
+        <div class="tab-panel active" data-tab-panel="orders">
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Venue</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="openOrders"></tbody>
+            </table>
+          </div>
         </div>
-        <div class="table-wrapper">
-          <h3>Positions</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Venue</th>
-                <th>Symbol</th>
-                <th>Qty</th>
-                <th>Avg Price</th>
-              </tr>
-            </thead>
-            <tbody id="positions"></tbody>
-          </table>
+        <div class="tab-panel" data-tab-panel="positions">
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Venue</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Entry</th>
+                  <th>Mark</th>
+                  <th>uPnL</th>
+                  <th>rPnL</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="positions"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="tab-panel" data-tab-panel="fills">
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Venue</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Fee</th>
+                  <th>Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="recentFills"></tbody>
+            </table>
+          </div>
         </div>
       </section>
       <section class="card">
@@ -310,9 +496,68 @@
       </section>
       <section class="card">
         <h2>Events</h2>
-        <pre id="events"></pre>
+        <div class="event-controls">
+          <label for="eventFilter" class="muted" style="font-size:0.85rem;">Level</label>
+          <select id="eventFilter">
+            <option value="all">All</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+        <div id="events" class="events-list"></div>
       </section>
     </main>
+
+    <div id="modalBackdrop" class="modal-backdrop hidden"></div>
+    <div id="configModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Edit Runtime Config</h3>
+          <button id="closeConfigBtn" class="danger" style="padding:0.4rem 0.8rem;">Close</button>
+        </div>
+        <form id="configForm" class="modal-form">
+          <label>
+            Min spread (bps)
+            <input type="number" step="0.01" min="0" name="min_spread_bps" />
+          </label>
+          <label>
+            Max slippage (bps)
+            <input type="number" step="1" min="0" max="1000" name="max_slippage_bps" />
+          </label>
+          <label>
+            Order notional (USDT)
+            <input type="number" step="0.01" min="0.01" name="order_notional_usdt" />
+          </label>
+          <label>
+            Loop pair
+            <input type="text" name="loop_pair" placeholder="e.g. BTCUSDT" />
+          </label>
+          <label>
+            Loop venues (comma separated)
+            <input type="text" name="loop_venues" placeholder="binance-um, okx-perp" />
+          </label>
+          <label style="flex-direction:row; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="safe_mode" /> SAFE_MODE
+          </label>
+          <label style="flex-direction:row; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="dry_run_only" /> Dry-run only
+          </label>
+          <label style="flex-direction:row; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="two_man_rule" /> Two-man rule
+          </label>
+          <label style="flex-direction:row; align-items:center; gap:0.5rem;">
+            <input type="checkbox" name="auto_loop" /> Auto loop enabled
+          </label>
+        </form>
+        <div class="modal-footer">
+          <button id="saveConfigBtn">Apply Patch</button>
+        </div>
+        <p class="muted" style="font-size:0.75rem; margin-top:0.5rem;">
+          Changes available only in paper/testnet profiles while SAFE_MODE is enabled.
+        </p>
+      </div>
+    </div>
     <script>
       const holdBtn = document.getElementById('holdBtn');
       const resumeBtn = document.getElementById('resumeBtn');
@@ -320,6 +565,7 @@
       const killBtn = document.getElementById('killBtn');
       const cancelAllBtn = document.getElementById('cancelAllBtn');
       const closeExposureBtn = document.getElementById('closeExposureBtn');
+      const editConfigBtn = document.getElementById('editConfigBtn');
       const loopStatusEl = document.getElementById('loopStatus');
       const loopConfigEl = document.getElementById('loopConfig');
       const loopCountersEl = document.getElementById('loopCounters');
@@ -332,6 +578,39 @@
       const riskLimitsEl = document.getElementById('riskLimits');
       const riskCurrentEl = document.getElementById('riskCurrent');
       const riskBreachesEl = document.getElementById('riskBreaches');
+      const eventsContainer = document.getElementById('events');
+      const eventFilterSelect = document.getElementById('eventFilter');
+      const toastEl = document.getElementById('toast');
+      const modalBackdrop = document.getElementById('modalBackdrop');
+      const configModal = document.getElementById('configModal');
+      const closeConfigBtn = document.getElementById('closeConfigBtn');
+      const configForm = document.getElementById('configForm');
+      const saveConfigBtn = document.getElementById('saveConfigBtn');
+      const venueCancelButtons = document.getElementById('venueCancelButtons');
+      const tabButtons = Array.from(document.querySelectorAll('[data-tab-target]'));
+      const tabPanels = Array.from(document.querySelectorAll('[data-tab-panel]'));
+
+      const state = {
+        env: 'paper',
+        events: [],
+        control: null,
+        secret: null,
+        orders: { open_orders: [], positions: [], fills: [] },
+      };
+
+      let toastTimer = null;
+
+      const showToast = (message, kind = 'success') => {
+        if (!toastEl) return;
+        toastEl.textContent = message;
+        toastEl.classList.remove('hidden', 'success', 'error');
+        toastEl.classList.add('show', kind);
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          toastEl.classList.remove('show');
+          toastEl.classList.add('hidden');
+        }, 3500);
+      };
 
       const formatNumber = (value, digits = 2) => {
         const numeric = Number(value);
@@ -347,6 +626,48 @@
         return `<span class="${cls}">${formatNumber(numeric, digits)}</span>`;
       };
 
+      const activateTab = (name) => {
+        tabButtons.forEach((btn) => {
+          btn.classList.toggle('active', btn.dataset.tabTarget === name);
+        });
+        tabPanels.forEach((panel) => {
+          panel.classList.toggle('active', panel.dataset.tabPanel === name);
+        });
+      };
+
+      tabButtons.forEach((btn) => {
+        btn.addEventListener('click', () => activateTab(btn.dataset.tabTarget));
+      });
+
+      const openModal = () => {
+        populateConfigForm(state.control);
+        modalBackdrop.classList.remove('hidden');
+        configModal.classList.remove('hidden');
+      };
+
+      const closeModal = () => {
+        configModal.classList.add('hidden');
+        modalBackdrop.classList.add('hidden');
+      };
+
+      modalBackdrop.addEventListener('click', closeModal);
+      closeConfigBtn.addEventListener('click', closeModal);
+      editConfigBtn.addEventListener('click', openModal);
+
+      const populateConfigForm = (control) => {
+        if (!control) return;
+        configForm.elements['min_spread_bps'].value = control.min_spread_bps ?? '';
+        configForm.elements['max_slippage_bps'].value = control.max_slippage_bps ?? '';
+        configForm.elements['order_notional_usdt'].value = control.order_notional_usdt ?? '';
+        configForm.elements['loop_pair'].value = control.loop_pair || '';
+        configForm.elements['loop_venues'].value = Array.isArray(control.loop_venues)
+          ? control.loop_venues.join(', ')
+          : '';
+        configForm.elements['safe_mode'].checked = Boolean(control.safe_mode);
+        configForm.elements['dry_run_only'].checked = Boolean(control.dry_run);
+        configForm.elements['two_man_rule'].checked = Boolean(control.two_man_rule);
+        configForm.elements['auto_loop'].checked = Boolean(control.auto_loop);
+      };
       const renderRisk = (risk) => {
         if (!risk || typeof risk !== 'object') {
           riskLimitsEl.textContent = 'No limits configured';
@@ -422,7 +743,7 @@
         }
       };
 
-      function renderLoopOverview(loopInfo, secret, env, ordersCount) {
+      const renderLoopOverview = (loopInfo, secret, env, ordersCount) => {
         const running = Boolean(loopInfo?.running);
         const statusLabel = running ? 'RUNNING' : String(loopInfo?.status || 'IDLE').toUpperCase();
         loopStatusEl.textContent = `Status: ${statusLabel}`;
@@ -479,293 +800,317 @@
           : envIsTestnet
             ? 'No open orders to cancel'
             : 'Cancel-all requires testnet environment';
-      }
+      };
 
-      function renderLastPlan(plan, loopInfo, secret) {
-        const loopStateEl = document.getElementById('loopState');
-        const summaryEl = document.getElementById('lastPlanSummary');
-        const spreadEl = document.getElementById('lastPlanSpread');
-        const legsTable = document.getElementById('lastPlanLegs');
-        const reasonEl = document.getElementById('lastPlanReason');
-
-        const cycles = loopInfo?.cycles_completed ?? 0;
-        const runningLabel = loopInfo?.running ? 'RUNNING' : String(loopInfo?.status || 'IDLE');
-        const targetPair = loopInfo?.pair || secret?.pair || plan?.symbol || 'N/A';
-        const targetNotional = loopInfo?.notional_usdt ?? secret?.notional_usdt ?? plan?.notional;
-        const venuesLabel = Array.isArray(loopInfo?.venues) && loopInfo.venues.length
-          ? loopInfo.venues.join(' ↔ ')
-          : (Array.isArray(secret?.venues) ? secret.venues.join(' ↔ ') : '');
-        const parts = [`Auto-loop: ${runningLabel}`, `Cycles: ${cycles}`, `${targetPair}`];
-        const notionalLabel = Number(targetNotional);
-        if (Number.isFinite(notionalLabel)) {
-          parts.push(`${notionalLabel.toFixed(2)} USDT`);
-        }
-        if (venuesLabel) {
-          parts.push(venuesLabel);
-        }
-        loopStateEl.textContent = parts.join(' · ');
-
-        if (!plan) {
-          summaryEl.textContent = 'No plan recorded';
-          summaryEl.classList.add('muted');
-          spreadEl.innerHTML = '';
-          legsTable.innerHTML = '';
-          legsTable.style.display = 'none';
-          reasonEl.textContent = '';
+      const renderEvents = () => {
+        const filter = eventFilterSelect.value;
+        if (!Array.isArray(state.events)) {
+          eventsContainer.innerHTML = '<div class="muted">No events recorded</div>';
           return;
         }
+        const filtered = state.events.filter((event) => {
+          if (filter === 'all') return true;
+          return String(event.level || '').toLowerCase().startsWith(filter);
+        });
+        if (!filtered.length) {
+          eventsContainer.innerHTML = '<div class="muted">No events for selected level</div>';
+          return;
+        }
+        const rows = filtered
+          .map((event) => {
+            const level = String(event.level || 'INFO').toLowerCase();
+            const badgeClass = level.startsWith('error')
+              ? 'badge-error'
+              : level.startsWith('warning')
+                ? 'badge-warning'
+                : 'badge-info';
+            const payload = event.payload ? JSON.stringify(event.payload) : '';
+            const ts = event.ts ? new Date(event.ts).toLocaleString() : '';
+            return `
+              <div class="event-row">
+                <div class="event-time">${ts}</div>
+                <span class="badge ${badgeClass}">${level}</span>
+                <div class="event-code">${event.code || ''}</div>
+                <div class="event-payload">${payload}</div>
+              </div>`;
+          })
+          .join('');
+        eventsContainer.innerHTML = rows;
+      };
 
-        const symbol = plan.symbol || secret?.pair || 'UNKNOWN';
-        const legs = Array.isArray(plan.legs) ? plan.legs : [];
-        const cycleSummary = loopInfo?.last_summary || null;
-        const formatVenue = (leg) => {
-          const venue = leg.ex ?? leg.exchange ?? '';
-          return typeof venue === 'string' ? venue.toUpperCase() : String(venue ?? '');
-        };
-        const formatAmount = (value, decimals = 2) => {
-          const numeric = Number(value);
-          if (!Number.isFinite(numeric)) {
-            return (0).toFixed(decimals);
+      eventFilterSelect.addEventListener('change', renderEvents);
+      const renderOrders = (orders, env) => {
+        const rows = Array.isArray(orders) ? orders : [];
+        openOrdersBody.innerHTML = rows.length
+          ? rows
+              .map(
+                (order) => `
+                  <tr>
+                    <td>${order.venue ?? ''}</td>
+                    <td>${order.symbol ?? ''}</td>
+                    <td>${String(order.side ?? '').toUpperCase()}</td>
+                    <td>${Number(order.qty ?? 0).toFixed(4)}</td>
+                    <td>${Number(order.price ?? 0).toFixed(4)}</td>
+                    <td>${String(order.status ?? '').toUpperCase()}</td>
+                  </tr>`
+              )
+              .join('')
+          : '<tr><td colspan="6" class="muted">No open orders</td></tr>';
+
+        const envIsTestnet = env === 'testnet';
+        if (!rows.length || !envIsTestnet) {
+          venueCancelButtons.innerHTML = '';
+          return;
+        }
+        const venues = Array.from(new Set(rows.map((row) => String(row.venue || '').toLowerCase()))).filter(Boolean);
+        venueCancelButtons.innerHTML = venues
+          .map(
+            (venue) => `<button data-cancel-venue="${venue}" class="danger" style="padding:0.45rem 0.8rem;">Cancel ${venue}</button>`
+          )
+          .join('');
+        venueCancelButtons.querySelectorAll('button[data-cancel-venue]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const venue = btn.getAttribute('data-cancel-venue');
+            invokeAction('/api/ui/cancel_all', { venue });
+          });
+        });
+      };
+
+      const renderPositions = (positions) => {
+        const rows = Array.isArray(positions) ? positions : [];
+        positionsBody.innerHTML = rows.length
+          ? rows
+              .map((row) => {
+                const venue = row.venue ?? '';
+                const symbol = row.symbol ?? '';
+                const qty = Number(row.qty ?? row.base_qty ?? 0);
+                const entry = Number(row.entry_px ?? row.avg_entry ?? row.avg_price ?? 0);
+                const mark = Number(row.mark_px ?? row.mark ?? entry);
+                const upnl = row.upnl !== undefined ? Number(row.upnl) : (mark - entry) * qty;
+                const rpnl = Number(row.rpnl ?? 0);
+                return `
+                  <tr>
+                    <td>${venue}</td>
+                    <td>${symbol}</td>
+                    <td>${formatNumber(qty, 4)}</td>
+                    <td>${formatNumber(entry)}</td>
+                    <td>${formatNumber(mark)}</td>
+                    <td>${signedSpan(upnl)}</td>
+                    <td>${signedSpan(rpnl)}</td>
+                    <td><button class="secondary" data-close-pos="${venue}|${symbol}" style="padding:0.4rem 0.6rem;">Close</button></td>
+                  </tr>`;
+              })
+              .join('')
+          : '<tr><td colspan="8" class="muted">No positions</td></tr>';
+
+        positionsBody.querySelectorAll('button[data-close-pos]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const [venue, symbol] = btn.getAttribute('data-close-pos').split('|');
+            invokeAction('/api/ui/close_exposure', { venue, symbol });
+          });
+        });
+      };
+
+      const renderFills = (fills) => {
+        const rows = Array.isArray(fills) ? fills : [];
+        recentFillsBody.innerHTML = rows.length
+          ? rows
+              .map(
+                (fill) => `
+                  <tr>
+                    <td>${fill.venue ?? ''}</td>
+                    <td>${fill.symbol ?? ''}</td>
+                    <td>${String(fill.side ?? '').toUpperCase()}</td>
+                    <td>${Number(fill.qty ?? 0).toFixed(4)}</td>
+                    <td>${Number(fill.price ?? 0).toFixed(4)}</td>
+                    <td>${Number(fill.fee ?? 0).toFixed(4)}</td>
+                    <td>${fill.ts ? new Date(fill.ts).toLocaleString() : ''}</td>
+                  </tr>`
+              )
+              .join('')
+          : '<tr><td colspan="7" class="muted">No fills recorded</td></tr>';
+      };
+
+      const renderPortfolio = (data) => {
+        const portfolioData = data.portfolio || {};
+        const portfolioPositions = Array.isArray(portfolioData.positions) && portfolioData.positions.length
+          ? portfolioData.positions
+          : (data.exposures || []);
+        exposuresBody.innerHTML = portfolioPositions.length
+          ? portfolioPositions
+              .map((row) => {
+                const venue = row.venue ?? '';
+                const symbol = row.symbol ?? '';
+                const qty = Number(row.qty ?? row.base_qty ?? 0);
+                const entry = Number(row.entry_px ?? row.avg_entry ?? row.avg_price ?? 0);
+                const mark = Number(row.mark_px ?? row.mark ?? entry);
+                const notional = Number(row.notional ?? Math.abs(qty) * mark);
+                const upnl = row.upnl !== undefined ? Number(row.upnl) : (mark - entry) * qty;
+                const rpnl = Number(row.rpnl ?? 0);
+                return `
+                  <tr>
+                    <td>${venue}</td>
+                    <td>${symbol}</td>
+                    <td>${formatNumber(qty, 4)}</td>
+                    <td>${formatNumber(notional)}</td>
+                    <td>${formatNumber(entry)}</td>
+                    <td>${formatNumber(mark)}</td>
+                    <td>${signedSpan(upnl)}</td>
+                    <td>${signedSpan(rpnl)}</td>
+                  </tr>`;
+              })
+              .join('')
+          : '<tr><td colspan="8" class="muted">No positions</td></tr>';
+
+        const balances = Array.isArray(portfolioData.balances) ? portfolioData.balances : [];
+        balancesBody.innerHTML = balances.length
+          ? balances
+              .map((row) => `
+                  <tr>
+                    <td>${row.venue ?? ''}</td>
+                    <td>${row.asset ?? ''}</td>
+                    <td>${formatNumber(row.free ?? row.qty ?? 0, 4)}</td>
+                    <td>${formatNumber(row.total ?? row.balance ?? row.qty ?? 0, 4)}</td>
+                  </tr>`)
+              .join('')
+          : '<tr><td colspan="4" class="muted">No balances</td></tr>';
+
+        const pnl = portfolioData.pnl_totals || data.pnl || {};
+        const totalPnl = Number(pnl.total ?? 0);
+        const realizedPnl = Number(pnl.realized ?? 0);
+        const unrealizedPnl = Number(pnl.unrealized ?? 0);
+        document.getElementById('pnl').innerHTML = `
+          <div>Realized: <span class="${realizedPnl >= 0 ? 'good' : 'bad'}">${realizedPnl.toFixed(2)}</span> USDT</div>
+          <div>Unrealized: <span class="${unrealizedPnl >= 0 ? 'good' : 'bad'}">${unrealizedPnl.toFixed(2)}</span> USDT</div>
+          <div>Total: <span class="${totalPnl >= 0 ? 'good' : 'bad'}">${totalPnl.toFixed(2)}</span> USDT</div>`;
+
+        const allowCloseExposure = Array.isArray(portfolioPositions) && portfolioPositions.length > 0;
+        closeExposureBtn.disabled = !allowCloseExposure;
+        closeExposureBtn.title = allowCloseExposure ? '' : 'No exposure to close';
+
+        renderPositions(portfolioPositions);
+      };
+      const invokeAction = async (path, payload = undefined, method = 'POST') => {
+        const options = { method };
+        if (payload !== undefined) {
+          options.headers = { 'Content-Type': 'application/json' };
+          options.body = JSON.stringify(payload);
+        }
+        try {
+          const resp = await fetch(path, options);
+          if (!resp.ok) {
+            const error = await resp.json().catch(() => ({}));
+            throw new Error(error.detail || resp.statusText || 'Action failed');
           }
-          return numeric.toFixed(decimals);
-        };
-        const buyLeg = legs.find((leg) => leg.side === 'buy');
-        const sellLeg = legs.find((leg) => leg.side === 'sell');
-        const qty = Number(buyLeg?.qty ?? sellLeg?.qty ?? 0);
-        const buyPrice = Number(buyLeg?.px ?? 0);
-        const sellPrice = Number(sellLeg?.px ?? 0);
-        const grossSpread = qty ? (sellPrice - buyPrice) * qty : 0;
-        const totalFees = legs.reduce((acc, leg) => acc + Number(leg.fee_usdt ?? 0), 0);
-        const planPnl = plan.est_pnl_usdt;
-        const netSpread =
-          planPnl === undefined || planPnl === null ? grossSpread - totalFees : Number(planPnl);
-        const notional = Number(plan.notional ?? secret?.notional_usdt ?? 0);
-        const planBps = plan.est_pnl_bps;
-        const grossBps = notional ? (grossSpread / notional) * 10_000 : 0;
-        const netBps = planBps === undefined || planBps === null ? (notional ? (netSpread / notional) * 10_000 : 0) : Number(planBps);
-
-        const statusLabel = cycleSummary?.status
-          ? String(cycleSummary.status).toUpperCase()
-          : plan.viable
-            ? 'EXECUTED'
-            : 'REJECTED';
-        summaryEl.textContent = `${symbol} · ${statusLabel}`;
-        summaryEl.classList.remove('muted');
-        const pnlValue = Number(
-          cycleSummary && cycleSummary.est_pnl_usdt !== undefined
-            ? cycleSummary.est_pnl_usdt
-            : netSpread,
-        );
-        const pnlBpsValue = Number(
-          cycleSummary && cycleSummary.est_pnl_bps !== undefined
-            ? cycleSummary.est_pnl_bps
-            : netBps,
-        );
-        const spreadBpsValue = Number(
-          cycleSummary && cycleSummary.spread_bps !== undefined
-            ? cycleSummary.spread_bps
-            : grossBps,
-        );
-        spreadEl.innerHTML = `
-          <div>Spread (gross): <strong>${formatAmount(grossSpread)}</strong> USDT (${formatAmount(spreadBpsValue, 2)} bps)</div>
-          <div>Spread (net): <strong>${formatAmount(pnlValue)}</strong> USDT (${formatAmount(pnlBpsValue, 2)} bps)</div>
-          <div>Fees: ${formatAmount(totalFees)} USDT</div>
-        `;
-
-        if (legs.length) {
-          legsTable.style.display = 'table';
-          legsTable.innerHTML = `
-            <thead>
-              <tr>
-                <th>Exchange</th>
-                <th>Side</th>
-                <th>Price</th>
-                <th>Qty</th>
-                <th>Fee (USDT)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${legs
-                .map(
-                  (leg) => `
-                    <tr>
-                      <td>${formatVenue(leg)}</td>
-                      <td>${leg.side?.toUpperCase() ?? ''}</td>
-                      <td>${formatAmount(leg.px ?? 0)}</td>
-                      <td>${formatAmount(leg.qty ?? 0, 4)}</td>
-                      <td>${formatAmount(leg.fee_usdt ?? 0, 4)}</td>
-                    </tr>`
-                )
-                .join('')}
-            </tbody>
-          `;
-        } else {
-          legsTable.innerHTML = '';
-          legsTable.style.display = 'none';
+          showToast('Action applied', 'success');
+        } catch (error) {
+          showToast(error.message || 'Action failed', 'error');
+        } finally {
+          await fetchState();
         }
+      };
 
-        if (cycleSummary && cycleSummary.reason) {
-          reasonEl.textContent = `Decision: ${statusLabel.toLowerCase()} · Reason: ${cycleSummary.reason}`;
-        } else if (plan.viable) {
-          reasonEl.textContent = 'Decision: execute (plan viable)';
-        } else {
-          const reason = plan.reason || 'Plan not viable';
-          reasonEl.textContent = `Decision: skip · Reason: ${reason}`;
-        }
-      }
-
-      async function fetchState() {
+      const fetchState = async () => {
         try {
           const [stateResp, secretResp, ordersResp] = await Promise.all([
             fetch('/api/ui/state'),
             fetch('/api/ui/secret'),
             fetch('/api/ui/orders'),
           ]);
-          if (!stateResp.ok) throw new Error('failed to load state');
+          if (!stateResp.ok) {
+            throw new Error('failed to load state');
+          }
           const data = await stateResp.json();
-          let secret = null;
-          if (secretResp.ok) {
-            secret = await secretResp.json();
-          }
-          let ordersData = { open_orders: [], positions: [], fills: [] };
-          if (ordersResp.ok) {
-            ordersData = await ordersResp.json();
-          }
+          state.control = data.control || state.control;
+          state.events = Array.isArray(data.events) ? data.events : [];
           document.getElementById('mode').textContent = `Mode: ${data.mode}`;
           const env = String((data.flags && (data.flags.ENV || data.flags.MODE)) || '').toLowerCase();
+          state.env = env || state.env;
           const flagLines = Object.entries(data.flags || {})
             .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
           renderRisk(data.risk);
-          const portfolioData = data.portfolio || {};
-          const portfolioPositions = Array.isArray(portfolioData.positions) && portfolioData.positions.length
-            ? portfolioData.positions
-            : (data.exposures || []);
-          exposuresBody.innerHTML = portfolioPositions.length
-            ? portfolioPositions
-                .map((row) => {
-                  const venue = row.venue ?? '';
-                  const symbol = row.symbol ?? '';
-                  const qty = Number(row.qty ?? row.base_qty ?? 0);
-                  const entry = Number(row.entry_px ?? row.avg_entry ?? row.avg_price ?? 0);
-                  const mark = Number(row.mark_px ?? row.mark ?? entry);
-                  const notional = Number(row.notional ?? Math.abs(qty) * mark);
-                  const upnl = Number(row.upnl ?? (mark - entry) * qty);
-                  const rpnl = Number(row.rpnl ?? 0);
-                  return `
-                    <tr>
-                      <td>${venue}</td>
-                      <td>${symbol}</td>
-                      <td>${formatNumber(qty, 4)}</td>
-                      <td>${formatNumber(notional)}</td>
-                      <td>${formatNumber(entry)}</td>
-                      <td>${formatNumber(mark)}</td>
-                      <td>${signedSpan(upnl)}</td>
-                      <td>${signedSpan(rpnl)}</td>
-                    </tr>`;
-                })
-                .join('')
-            : '<tr><td colspan="8" class="muted">No positions</td></tr>';
-          const balances = Array.isArray(portfolioData.balances) ? portfolioData.balances : [];
-          balancesBody.innerHTML = balances.length
-            ? balances
-                .map((row) => `
-                    <tr>
-                      <td>${row.venue ?? ''}</td>
-                      <td>${row.asset ?? ''}</td>
-                      <td>${formatNumber(row.free ?? row.qty ?? 0, 4)}</td>
-                      <td>${formatNumber(row.total ?? row.balance ?? row.qty ?? 0, 4)}</td>
-                    </tr>`)
-                .join('')
-            : '<tr><td colspan="4" class="muted">No balances</td></tr>';
-          const pnl = portfolioData.pnl_totals || data.pnl || {};
-          const totalPnl = Number(pnl.total ?? 0);
-          const realizedPnl = Number(pnl.realized ?? 0);
-          const unrealizedPnl = Number(pnl.unrealized ?? 0);
-          document.getElementById('pnl').innerHTML = `
-            <div>Realized: <span class="${realizedPnl >= 0 ? 'good' : 'bad'}">${realizedPnl.toFixed(2)}</span> USDT</div>
-            <div>Unrealized: <span class="${unrealizedPnl >= 0 ? 'good' : 'bad'}">${unrealizedPnl.toFixed(2)}</span> USDT</div>
-            <div>Total: <span class="${totalPnl >= 0 ? 'good' : 'bad'}">${totalPnl.toFixed(2)}</span> USDT</div>`;
-          const events = data.events || [];
-          document.getElementById('events').textContent = events
-            .map((event) => `${event.ts} [${event.level}] ${event.code}: ${JSON.stringify(event.payload)}`)
-            .join('\n');
-          const orders = ordersData.open_orders || [];
-          openOrdersBody.innerHTML = orders.length
-            ? orders
-                .map(
-                  (order) => `
-                    <tr>
-                      <td>${order.venue ?? ''}</td>
-                      <td>${order.symbol ?? ''}</td>
-                      <td>${String(order.side ?? '').toUpperCase()}</td>
-                      <td>${Number(order.qty ?? 0).toFixed(4)}</td>
-                      <td>${Number(order.price ?? 0).toFixed(4)}</td>
-                      <td>${String(order.status ?? '').toUpperCase()}</td>
-                    </tr>`
-                )
-                .join('')
-            : '<tr><td colspan="6" class="muted">No open orders</td></tr>';
-          const fills = ordersData.fills || [];
-          recentFillsBody.innerHTML = fills.length
-            ? fills
-                .map(
-                  (fill) => `
-                    <tr>
-                      <td>${fill.venue ?? ''}</td>
-                      <td>${fill.symbol ?? ''}</td>
-                      <td>${String(fill.side ?? '').toUpperCase()}</td>
-                      <td>${Number(fill.qty ?? 0).toFixed(4)}</td>
-                      <td>${Number(fill.price ?? 0).toFixed(4)}</td>
-                      <td>${Number(fill.fee ?? 0).toFixed(4)}</td>
-                      <td>${fill.ts ? new Date(fill.ts).toLocaleString() : ''}</td>
-                    </tr>`
-                )
-                .join('')
-            : '<tr><td colspan="7" class="muted">No fills recorded</td></tr>';
-          const ledgerPositions = ordersData.positions || [];
-          positionsBody.innerHTML = ledgerPositions.length
-            ? ledgerPositions
-                .map(
-                  (pos) => `
-                    <tr>
-                      <td>${pos.venue ?? ''}</td>
-                      <td>${pos.symbol ?? ''}</td>
-                      <td>${Number(pos.base_qty ?? 0).toFixed(4)}</td>
-                      <td>${Number(pos.avg_price ?? 0).toFixed(4)}</td>
-                    </tr>`
-                )
-                .join('')
-            : '<tr><td colspan="4" class="muted">No positions</td></tr>';
-          renderLoopOverview(data.loop, secret, env, orders.length);
-          renderLastPlan(data.last_plan, data.loop, secret);
-          resumeBtn.disabled = data.safe_mode;
-          const allowCloseExposure = Array.isArray(portfolioPositions) && portfolioPositions.length > 0;
-          closeExposureBtn.disabled = !allowCloseExposure;
-          closeExposureBtn.title = allowCloseExposure ? '' : 'No exposure to close';
+
+          if (secretResp.ok) {
+            state.secret = await secretResp.json();
+          }
+          if (ordersResp.ok) {
+            state.orders = await ordersResp.json();
+          }
+
+          renderPortfolio(data);
+          renderOrders(state.orders.open_orders, state.env);
+          renderFills(state.orders.fills);
+          renderLoopOverview(data.loop, state.secret, state.env, state.orders.open_orders.length);
+          renderEvents();
+          renderLastPlan(data.last_plan, data.loop, state.secret);
+
+          resumeBtn.disabled = Boolean(data.safe_mode);
         } catch (error) {
-          console.error(error);
+          console.error('Failed to refresh state', error);
+          showToast('Failed to refresh state', 'error');
         }
-      }
+      };
 
-      async function postAction(path) {
-        const resp = await fetch(path, { method: 'POST' });
-        if (!resp.ok) {
-          const error = await resp.json().catch(() => ({}));
-          alert(error.detail || 'Action failed');
+      const collectFormPayload = () => {
+        const payload = {};
+        const minSpread = configForm.elements['min_spread_bps'].value;
+        if (minSpread !== '') payload.min_spread_bps = Number(minSpread);
+        const maxSlippage = configForm.elements['max_slippage_bps'].value;
+        if (maxSlippage !== '') payload.max_slippage_bps = Number(maxSlippage);
+        const notional = configForm.elements['order_notional_usdt'].value;
+        if (notional !== '') payload.order_notional_usdt = Number(notional);
+        const loopPair = configForm.elements['loop_pair'].value.trim();
+        if (loopPair) payload.loop_pair = loopPair.toUpperCase();
+        const loopVenuesRaw = configForm.elements['loop_venues'].value;
+        if (loopVenuesRaw) {
+          payload.loop_venues = loopVenuesRaw
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
         }
-        fetchState();
-      }
+        payload.safe_mode = configForm.elements['safe_mode'].checked;
+        payload.dry_run_only = configForm.elements['dry_run_only'].checked;
+        payload.two_man_rule = configForm.elements['two_man_rule'].checked;
+        payload.auto_loop = configForm.elements['auto_loop'].checked;
+        return payload;
+      };
 
-      holdBtn.addEventListener('click', () => postAction('/api/ui/hold'));
-      resumeBtn.addEventListener('click', () => postAction('/api/ui/resume'));
-      stopBtn.addEventListener('click', () => postAction('/api/ui/stop'));
-      if (killBtn) {
-        killBtn.addEventListener('click', () => postAction('/api/ui/kill'));
-      }
-      cancelAllBtn.addEventListener('click', () => postAction('/api/ui/cancel_all'));
-      closeExposureBtn.addEventListener('click', () => postAction('/api/ui/close_exposure'));
+      const submitConfig = async (event) => {
+        event.preventDefault();
+        const payload = collectFormPayload();
+        saveConfigBtn.disabled = true;
+        try {
+          const resp = await fetch('/api/ui/control', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) {
+            const error = await resp.json().catch(() => ({}));
+            throw new Error(error.detail || resp.statusText || 'Failed to patch control');
+          }
+          const result = await resp.json().catch(() => ({}));
+          state.control = result.control || state.control;
+          showToast('Runtime control updated', 'success');
+          closeModal();
+          await fetchState();
+        } catch (error) {
+          showToast(error.message || 'Failed to update config', 'error');
+        } finally {
+          saveConfigBtn.disabled = false;
+        }
+      };
+
+      holdBtn.addEventListener('click', () => invokeAction('/api/ui/hold'));
+      resumeBtn.addEventListener('click', () => invokeAction('/api/ui/resume'));
+      stopBtn.addEventListener('click', () => invokeAction('/api/ui/stop'));
+      killBtn.addEventListener('click', () => invokeAction('/api/ui/kill'));
+      cancelAllBtn.addEventListener('click', () => invokeAction('/api/ui/cancel_all'));
+      closeExposureBtn.addEventListener('click', () => invokeAction('/api/ui/close_exposure'));
+      configForm.addEventListener('submit', submitConfig);
+      saveConfigBtn.addEventListener('click', submitConfig);
 
       fetchState();
       setInterval(fetchState, 4000);

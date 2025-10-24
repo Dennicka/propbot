@@ -307,8 +307,11 @@ async def stop_loop() -> LoopState:
     return await _CONTROLLER.stop_after_cycle()
 
 
-async def cancel_all_orders() -> Dict[str, int]:
+async def cancel_all_orders(venue: str | None = None) -> Dict[str, int]:
+    venue_normalised = venue.lower() if venue else None
     orders = await asyncio.to_thread(ledger.fetch_open_orders)
+    if venue_normalised:
+        orders = [order for order in orders if str(order.get("venue", "")).lower() == venue_normalised]
     set_open_orders(orders)
     if not orders:
         return {"cancelled": 0, "failed": 0}

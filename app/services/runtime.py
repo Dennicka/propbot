@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List
+import threading
+from typing import Dict, List, Mapping, Tuple
 
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
@@ -436,6 +437,7 @@ def _bootstrap_runtime() -> RuntimeState:
 
 
 _STATE = _bootstrap_runtime()
+_STATE_LOCK = threading.RLock()
 
 
 def get_state() -> RuntimeState:
@@ -459,19 +461,20 @@ def get_loop_state() -> LoopState:
 
 
 def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float) -> LoopState:
-    state = get_state()
-    state.control.loop_pair = pair.upper() if pair else None
-    state.control.loop_venues = [str(entry) for entry in venues]
-    state.control.order_notional_usdt = float(notional_usdt)
-    loop_config = state.loop_config
-    loop_config.pair = state.control.loop_pair
-    loop_config.venues = list(state.control.loop_venues)
-    loop_config.notional_usdt = state.control.order_notional_usdt
-    loop_state = get_loop_state()
-    loop_state.pair = state.control.loop_pair
-    loop_state.venues = list(state.control.loop_venues)
-    loop_state.notional_usdt = state.control.order_notional_usdt
-    return loop_state
+    with _STATE_LOCK:
+        state = get_state()
+        state.control.loop_pair = pair.upper() if pair else None
+        state.control.loop_venues = [str(entry) for entry in venues]
+        state.control.order_notional_usdt = float(notional_usdt)
+        loop_config = state.loop_config
+        loop_config.pair = state.control.loop_pair
+        loop_config.venues = list(state.control.loop_venues)
+        loop_config.notional_usdt = state.control.order_notional_usdt
+        loop_state = get_loop_state()
+        loop_state.pair = state.control.loop_pair
+        loop_state.venues = list(state.control.loop_venues)
+        loop_state.notional_usdt = state.control.order_notional_usdt
+        return loop_state
 
 
 def update_loop_summary(summary: Dict[str, object]) -> None:
@@ -488,8 +491,9 @@ def get_open_orders() -> List[Dict[str, object]]:
 
 
 def set_open_orders(orders: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    _STATE.open_orders = [dict(order) for order in orders]
-    return _STATE.open_orders
+    with _STATE_LOCK:
+        _STATE.open_orders = [dict(order) for order in orders]
+        return _STATE.open_orders
 
 
 def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:
@@ -528,7 +532,8 @@ def set_mode(mode: str) -> None:
     normalised = mode.upper()
     if normalised not in {"RUN", "HOLD"}:
         raise ValueError(f"unsupported mode {mode}")
-    _STATE.control.mode = normalised
+    with _STATE_LOCK:
+        _STATE.control.mode = normalised
 
 
 def set_last_plan(plan: Dict[str, object]) -> None:
@@ -552,5 +557,108 @@ def get_last_plan() -> Dict[str, object] | None:
 def reset_for_tests() -> None:
     """Helper used in tests to reset runtime state."""
     global _STATE
-    _STATE = _bootstrap_runtime()
-    _STATE.control.dry_run = False
+    with _STATE_LOCK:
+        _STATE = _bootstrap_runtime()
+        _STATE.control.dry_run = False
+    globals()["_STATE"] = _STATE
+
+
+def control_as_dict() -> Dict[str, object]:
+    with _STATE_LOCK:
+        return asdict(_STATE.control)
+
+
+def _normalise_loop_inputs(
+    *,
+    loop_pair: str | None = None,
+    loop_venues: List[str] | None = None,
+    notional_usdt: float | None = None,
+) -> Tuple[str | None, List[str], float | None]:
+    pair = loop_pair.upper() if loop_pair else None
+    venues = [str(entry) for entry in loop_venues] if loop_venues else []
+    notional = float(notional_usdt) if notional_usdt is not None else None
+    return pair, venues, notional
+
+
+def apply_control_patch(patch: Mapping[str, object]) -> Tuple[ControlState, Dict[str, object]]:
+    allowed_fields = {
+        "min_spread_bps",
+        "max_slippage_bps",
+        "order_notional_usdt",
+        "safe_mode",
+        "dry_run_only",
+        "two_man_rule",
+        "auto_loop",
+        "loop_pair",
+        "loop_venues",
+    }
+    updates: Dict[str, object] = {}
+    with _STATE_LOCK:
+        control = _STATE.control
+        for field, value in patch.items():
+            if field not in allowed_fields:
+                continue
+            if field == "dry_run_only":
+                normalised = bool(value)
+                if control.dry_run != normalised:
+                    control.dry_run = normalised
+                    updates[field] = normalised
+                continue
+            if field == "safe_mode":
+                normalised = bool(value)
+                if control.safe_mode != normalised:
+                    control.safe_mode = normalised
+                    updates[field] = normalised
+                continue
+            if field == "two_man_rule":
+                normalised = bool(value)
+                if control.two_man_rule != normalised:
+                    control.two_man_rule = normalised
+                    updates[field] = normalised
+                continue
+            if field == "auto_loop":
+                normalised = bool(value)
+                if control.auto_loop != normalised:
+                    control.auto_loop = normalised
+                    updates[field] = normalised
+                continue
+            if field == "max_slippage_bps":
+                normalised = int(value)
+                if control.max_slippage_bps != normalised:
+                    control.max_slippage_bps = normalised
+                    updates[field] = normalised
+                continue
+            if field == "order_notional_usdt":
+                normalised = float(value)
+                if control.order_notional_usdt != normalised:
+                    control.order_notional_usdt = normalised
+                    updates[field] = normalised
+                continue
+            if field == "min_spread_bps":
+                normalised = float(value)
+                if control.min_spread_bps != normalised:
+                    control.min_spread_bps = normalised
+                    updates[field] = normalised
+                continue
+            if field == "loop_pair":
+                pair, _, _ = _normalise_loop_inputs(loop_pair=str(value))
+                if control.loop_pair != pair:
+                    control.loop_pair = pair
+                    updates[field] = pair
+                continue
+            if field == "loop_venues":
+                _, venues, _ = _normalise_loop_inputs(loop_venues=list(value) if value is not None else [])
+                if control.loop_venues != venues:
+                    control.loop_venues = venues
+                    updates[field] = venues
+                continue
+        if {"loop_pair", "loop_venues", "order_notional_usdt"} & updates.keys():
+            loop_config = _STATE.loop_config
+            loop_config.pair = control.loop_pair
+            loop_config.venues = list(control.loop_venues)
+            loop_config.notional_usdt = control.order_notional_usdt
+            loop_state = _STATE.loop
+            loop_state.pair = control.loop_pair
+            loop_state.venues = list(control.loop_venues)
+            loop_state.notional_usdt = control.order_notional_usdt
+        return control, updates

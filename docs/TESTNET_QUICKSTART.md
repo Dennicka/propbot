@@ -1,0 +1,43 @@
+# Testnet Quickstart
+
+This addendum highlights runtime controls that can now be updated without restarts while running the dashboard against paper or testnet environments.
+
+## Runtime control patch API
+
+The dashboard issues `PATCH /api/ui/control` requests when the **Edit Config** modal is submitted. You can also invoke it directly:
+
+```bash
+curl -X PATCH http://localhost:8000/api/ui/control \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "order_notional_usdt": 150,
+        "min_spread_bps": 1.5,
+        "max_slippage_bps": 8,
+        "loop_pair": "ETHUSDT",
+        "loop_venues": ["binance-um", "okx-perp"],
+        "dry_run_only": true
+      }'
+```
+
+Constraints:
+
+- Available only when `ENV`/`PROFILE` is `paper` or `testnet`.
+- `SAFE_MODE` must remain `true`; otherwise the API returns `403`.
+- Unknown fields are ignored; values are normalised (floats/ints/bools) before applying.
+- The response contains the updated control block and a `changes` map with applied keys.
+
+## Risk overview endpoint
+
+`GET /api/risk/state` exposes the aggregated risk snapshot used by the dashboard (positions in USDT, per-venue exposure totals, current counters and limit breaches). This is useful for external monitoring or alerting without parsing the full UI payload.
+
+```bash
+curl http://localhost:8000/api/risk/state | jq
+```
+
+## Dashboard shortcuts
+
+- **Positions** tab now lists every venue/symbol with per-row **Close** buttons (calls `POST /api/ui/close_exposure`).
+- **Cancel All** buttons appear per venue on testnet once open orders are detected; they call `POST /api/ui/cancel_all` with a JSON `{ "venue": "binance-um" }` payload.
+- **Events** card features level badges and a drop-down filter (`info`, `warning`, `error`).
+
+These additions streamline intraday testing on Binance UM / OKX perpetual testnets without restarting the service.

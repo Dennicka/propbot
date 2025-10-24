@@ -35,8 +35,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /api/ui/cancel_all` — массовый отзыв ордеров (только `ENV=testnet`).
 - `POST /api/ui/close_exposure` — запрос на закрытие экспозиции (через `hedge.flatten`).
 - `GET /api/ui/plan/last` — последний сохранённый план.
+- `PATCH /api/ui/control` — частичное обновление runtime-параметров (только `paper`/`testnet` + `SAFE_MODE=true`).
+- `GET /api/risk/state` — агрегированное состояние риск-монитора (позиций и сработавших лимитов).
 
-Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, таблицы открытых ордеров/позиций/последних fill'ов и содержит кнопки HOLD/RESUME, Cancel All и Close Exposure. Карточка «Exposures» показывает подробную таблицу позиций (venue, symbol, qty, notional, entry, mark, uPnL, rPnL), а под ней размещена мини-таблица Balances с остатками по активам на каждой площадке.
+Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также включает:
+
+- кнопку **Edit Config** (панель PATCH `/api/ui/control` с валидацией и ограничениями по профилю);
+- карточку Orders & Positions с табами «Open Orders», «Positions» (кнопки Close по каждой строке) и «Fills», а также кнопки Cancel All по venue;
+- карточку Events с бейджами уровней (info/warning/error) и фильтром;
+- карточку Exposures с подробной таблицей позиций (venue, symbol, qty, notional, entry, mark, uPnL, rPnL) и мини-таблицей Balances.
 
 ## 3. CLI и планировщик
 

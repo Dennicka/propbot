@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from datetime import datetime, timezone
+
 from app import ledger
 from app.services import risk
 from app.services.arbitrage import Plan, PlanLeg
@@ -103,3 +105,36 @@ def test_plan_rejected_by_daily_loss_limit() -> None:
     assert plan.viable is False
     assert plan.reason and "max_daily_loss_usdt" in plan.reason
     assert any(b.limit == "max_daily_loss_usdt" for b in state.risk.breaches)
+
+
+def test_risk_state_metrics_shape_and_limits() -> None:
+    state = get_state()
+    state.risk.limits.max_position_usdt = {"BTCUSDT": 100.0}
+    state.risk.limits.max_open_orders = {"__default__": 1}
+    state.risk.limits.max_daily_loss_usdt = 1_000.0
+    ts = datetime.now(timezone.utc).isoformat()
+    order_id = ledger.record_order(
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.5,
+        price=20_000.0,
+        status="filled",
+        client_ts=ts,
+        exchange_ts=ts,
+        idemp_key="risk-metrics",
+    )
+    ledger.record_fill(
+        order_id=order_id,
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.5,
+        price=20_000.0,
+        fee=0.0,
+        ts=ts,
+    )
+    overview = risk.risk_overview()
+    assert set(overview.keys()) >= {"limits", "current", "breaches", "positions_usdt", "exposures", "exposure_totals", "limits_hit"}
+    assert overview["positions_usdt"].get("BTCUSDT", 0.0) > 0
+    assert any(entry["symbol"] == "BTCUSDT" for entry in overview["exposures"])
