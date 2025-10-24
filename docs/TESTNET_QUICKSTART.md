@@ -51,15 +51,37 @@ python -m api_cli events --base-url http://localhost:8000 --api-token "$API_TOKE
 
 ## Deploy with Docker/Compose
 
+### Run from the published image
+
+Set `REPO` to the GitHub organisation/user that owns the GHCR namespace (`ghcr.io/<REPO>/propbot:<TAG>`). `TAG` defaults to `main`, but you can point it to a release or commit tag:
+
 ```bash
-make docker-build   # build propbot:local image
-make up             # start the service in detached mode
+export REPO=my-org
+docker compose up -d           # pulls ghcr.io/$REPO/propbot:main by default
+docker compose logs -f app
+```
+
+Make targets accept the same variables and keep the long-running helpers available:
+
+```bash
+export REPO=my-org
+make up
 make curl-health    # GET /healthz (expects HTTP 200)
 make logs           # follow container logs
 make down           # stop and remove the compose stack
 ```
 
-The local `./data` directory is mounted into the container as `/app/data`, so files such as `runtime_state.json` and `ledger.db` persist across restarts.
+Compose mounts the local `./data` directory into the container as `/app/data`, so files such as `runtime_state.json` and `ledger.db` persist across restarts. If auth is enabled, provide `API_TOKEN` via `.env` or the shell before invoking compose.
+
+### Build locally when required
+
+Flip `BUILD_LOCAL=1` to force a local build (default image tag: `propbot:local`). Compose skips pulling from GHCR and rebuilds the image before starting the stack:
+
+```bash
+BUILD_LOCAL=1 make up
+BUILD_LOCAL=1 make down
+IMAGE=propbot:test make docker-build   # manual build with a custom tag
+```
 
 Constraints:
 

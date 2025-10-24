@@ -57,15 +57,45 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ## Deploy with Docker/Compose
 
+### Run from a prebuilt image
+
+Экспортируйте `REPO` с названием GitHub-организации/аккаунта, в котором публикуются образы (`ghcr.io/<REPO>/propbot:<TAG>`). По умолчанию `TAG=main`, но можно указать тег релиза или sha:
+
 ```bash
-make docker-build   # собрать локальный образ propbot:local
-make up             # поднять сервис в фоне (docker compose up -d)
+export REPO=my-org
+# при необходимости можно переопределить TAG, API_TOKEN или SAFE_MODE перед запуском
+TAG=v1.2.3 docker compose up -d
+```
+
+`docker compose` автоматически подтянет образ из GHCR благодаря `pull_policy: always`. Порты и тома совпадают с локальной разработкой: каталог `./data` монтируется внутрь контейнера как `/app/data`, поэтому `runtime_state.json`, `ledger.db` и другие артефакты сохраняются между перезапусками.
+
+Для запуска в фоне через Makefile достаточно указать `REPO` и вызвать `make up`:
+
+```bash
+export REPO=my-org
+make up
 make curl-health    # проверить /healthz (ожидается 200)
 make logs           # поток логов контейнера
 make down           # остановить сервис и удалить контейнер
 ```
 
-Каталог `./data` монтируется внутрь контейнера как `/app/data`, поэтому `runtime_state.json`, `ledger.db` и другие артефакты сохраняются между перезапусками.
+Если включена авторизация (`AUTH_ENABLED=true`), прокиньте `API_TOKEN` в окружение или `.env` до запуска compose.
+
+### Build locally when needed
+
+Локальная сборка включается флагом `BUILD_LOCAL=1`. В этом режиме compose пропускает pull из GHCR и собирает образ на месте (тег по умолчанию — `propbot:local`):
+
+```bash
+BUILD_LOCAL=1 make up              # docker compose up -d --build с локальным образом
+BUILD_LOCAL=1 make down            # остановка после локальной сборки
+IMAGE=propbot:test make docker-build  # ручная сборка с произвольным тегом
+```
+
+Проверить готовый образ из GHCR можно без compose:
+
+```bash
+IMAGE=ghcr.io/$REPO/propbot:main make docker-run-image
+```
 
 Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также включает:
 
@@ -149,6 +179,11 @@ make fmt       # форматирование (ruff + black)
 make lint      # линтеры
 make dryrun.once  # одиночный запуск CLI
 make dryrun.loop  # непрерывный dry-run
+make docker-login   # авторизация в ghcr.io (использует GHCR_USERNAME / GHCR_TOKEN)
+make docker-build   # локальная сборка (IMAGE=propbot:local по умолчанию)
+make docker-push    # push произвольного тега (требует IMAGE)
+make docker-run-image  # запуск контейнера из уже собранного образа
+make docker-release  # multi-arch билд и push через buildx (IMAGE обязателен)
 ```
 
 ## 8. Документация

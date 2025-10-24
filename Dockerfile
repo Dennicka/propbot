@@ -1,5 +1,16 @@
 FROM python:3.12-slim
 
+ARG VCS_REF="local"
+ARG VERSION="dev"
+ARG REPO_URL="https://github.com/propbot/propbot"
+
+LABEL org.opencontainers.image.title="PropBot" \
+    org.opencontainers.image.description="Arbitrage test bot MVP with FastAPI, paper/testnet brokers, and dashboard." \
+    org.opencontainers.image.url="${REPO_URL}" \
+    org.opencontainers.image.source="${REPO_URL}" \
+    org.opencontainers.image.revision="${VCS_REF}" \
+    org.opencontainers.image.version="${VERSION}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
