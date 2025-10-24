@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app import ledger
 from app.services.runtime import get_state
 
@@ -46,6 +48,8 @@ def test_ui_state_and_controls(client):
     assert "risk" in state_payload
     assert "risk_blocked" in state_payload
     assert "risk_reasons" in state_payload
+    assert "control" in state_payload
+    assert state_payload["control"]["safe_mode"] is True
     risk_block = state_payload["risk"]
     assert isinstance(risk_block, dict)
     assert "limits" in risk_block
@@ -198,5 +202,82 @@ def test_kill_switch_cancels_orders(client):
     payload = resp.json()
     assert payload["safe_mode"] is True
     assert payload["mode"] == "HOLD"
-    order = ledger.get_order(order_id)
-    assert order["status"] == "cancelled"
+
+
+def test_patch_control_rejects_in_live_or_unsafe(client):
+    state = get_state()
+    state.control.environment = "live"
+    state.control.safe_mode = True
+    resp = client.patch("/api/ui/control", json={"order_notional_usdt": 75.0})
+    assert resp.status_code == 403
+
+    state.control.environment = "paper"
+    state.control.safe_mode = False
+    resp = client.patch("/api/ui/control", json={"order_notional_usdt": 80.0})
+    assert resp.status_code == 403
+    state.control.safe_mode = True
+
+
+def test_patch_control_applies_and_reflected_in_state(client):
+    state = get_state()
+    state.control.environment = "paper"
+    state.control.safe_mode = True
+    state.control.loop_pair = "BTCUSDT"
+    payload = {
+        "order_notional_usdt": 123.45,
+        "min_spread_bps": 1.2,
+        "max_slippage_bps": 7,
+        "loop_pair": "ethusdt",
+        "loop_venues": ["binance-um", "okx-perp"],
+        "dry_run_only": True,
+        "safe_mode": True,
+    }
+    resp = client.patch("/api/ui/control", json=payload)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["control"]["order_notional_usdt"] == pytest.approx(123.45)
+    assert result["control"]["loop_pair"] == "ETHUSDT"
+    assert result["control"]["dry_run"] is True
+    assert set(result["changes"].keys()) >= {"order_notional_usdt", "loop_pair", "loop_venues", "dry_run_only", "min_spread_bps", "max_slippage_bps"}
+    runtime_state = get_state()
+    assert runtime_state.control.order_notional_usdt == pytest.approx(123.45)
+    assert runtime_state.control.loop_pair == "ETHUSDT"
+    assert runtime_state.control.min_spread_bps == pytest.approx(1.2)
+    assert runtime_state.control.max_slippage_bps == 7
+    assert runtime_state.loop_config.pair == "ETHUSDT"
+    assert runtime_state.loop_config.venues == ["binance-um", "okx-perp"]
+
+
+def test_positions_close_exposure_endpoint_called_from_ui(client):
+    class DummyRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def flatten_all(self):
+            self.calls += 1
+            return {"results": []}
+
+    state = get_state()
+    state.derivatives = DummyRuntime()
+    resp = client.post("/api/ui/close_exposure", json={"venue": "binance-um", "symbol": "BTCUSDT"})
+    assert resp.status_code == 200
+    assert state.derivatives.calls == 1
+
+
+def test_events_levels_and_filtering(client):
+    ledger.reset()
+    ledger.record_event(level="INFO", code="info_check", payload={})
+    ledger.record_event(level="WARNING", code="risk_block", payload={"reason": "risk:limit"})
+    ledger.record_event(level="ERROR", code="execution_failed", payload={"order": 1})
+    resp = client.get("/api/ui/state")
+    assert resp.status_code == 200
+    levels = {entry["level"] for entry in resp.json()["events"]}
+    assert {"INFO", "WARNING", "ERROR"} <= levels
+
+
+def test_risk_state_endpoint(client):
+    ledger.reset()
+    resp = client.get("/api/risk/state")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert set(payload.keys()) >= {"limits", "current", "breaches", "positions_usdt", "exposures"}

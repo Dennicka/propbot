@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import ledger
-from .routers import arb, health, ui
+from .routers import arb, health, risk, ui
 from .routers.dashboard import router as dashboard_router
 
 
@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health.router)
+    app.include_router(risk.router)
     app.include_router(ui.router)
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)

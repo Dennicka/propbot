@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, Iterable, Mapping
+from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping
 
 from .. import ledger
 from ..util.venues import VENUE_ALIASES
@@ -233,6 +233,11 @@ def guard_plan(plan: "Plan") -> tuple[bool, str | None, RiskState]:
     risk_state = refresh_runtime_state()
     reasons = _plan_limit_reasons(plan, risk_state)
     if reasons:
+        ledger.record_event(
+            level="WARNING",
+            code="risk_blocked",
+            payload={"symbol": plan.symbol, "reasons": reasons},
+        )
         return False, "; ".join(reasons), risk_state
     return True, None, risk_state
 
@@ -245,3 +250,39 @@ def evaluate_plan(plan: "Plan", *, risk_state: RiskState | None = None) -> None:
         if plan.reason:
             reasons.insert(0, plan.reason)
         plan.reason = "; ".join(reasons)
+
+
+def risk_overview(snapshot: PortfolioSnapshot | None = None) -> Dict[str, object]:
+    state = refresh_runtime_state(snapshot=snapshot)
+    positions_rows = ledger.fetch_positions()
+    exposures: List[Dict[str, object]] = []
+    exposure_totals: Dict[str, Dict[str, float]] = {}
+    for row in positions_rows:
+        venue = _normalise_venue(row.get("venue"))
+        symbol = _normalise_symbol(row.get("symbol"))
+        qty = float(row.get("base_qty", 0.0))
+        price = float(row.get("avg_price", 0.0))
+        notional = abs(qty) * price
+        exposures.append(
+            {
+                "venue": venue,
+                "symbol": symbol,
+                "qty": qty,
+                "avg_price": price,
+                "notional": notional,
+            }
+        )
+        venue_totals = exposure_totals.setdefault(venue, {})
+        venue_totals[symbol] = venue_totals.get(symbol, 0.0) + notional
+    limits_hit = sorted({breach.limit for breach in state.breaches})
+    return {
+        "limits": state.limits.as_dict(),
+        "current": state.current.as_dict(),
+        "breaches": [breach.as_dict() for breach in state.breaches],
+        "positions_usdt": dict(state.current.position_usdt),
+        "open_orders": dict(state.current.open_orders),
+        "daily_loss_usdt": state.current.daily_loss_usdt,
+        "exposures": exposures,
+        "exposure_totals": exposure_totals,
+        "limits_hit": limits_hit,
+    }

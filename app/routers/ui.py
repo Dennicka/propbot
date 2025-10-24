@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field, conint, confloat
 
 from .. import ledger
 from ..services.loop import (
@@ -18,6 +18,8 @@ from ..services.loop import (
 from ..services.runtime import (
     get_last_plan,
     get_state,
+    apply_control_patch,
+    control_as_dict,
     set_loop_config,
     set_mode,
     set_open_orders,
@@ -36,6 +38,36 @@ class SecretUpdate(BaseModel):
     pair: str | None = Field(default=None, description="Target symbol override")
     venues: list[str] | None = Field(default=None, description="Venues participating in the loop")
     notional_usdt: float | None = Field(default=None, description="Order notional in USDT")
+
+
+class ControlPatchPayload(BaseModel):
+    min_spread_bps: confloat(ge=0.0) | None = Field(default=None, description="Minimum spread in bps")
+    max_slippage_bps: conint(ge=0, le=1_000) | None = Field(default=None, description="Maximum allowed slippage in bps")
+    order_notional_usdt: confloat(gt=0.0) | None = Field(default=None, description="Order notional in USDT")
+    safe_mode: bool | None = None
+    dry_run_only: bool | None = Field(default=None, description="Restrict execution to dry-run")
+    two_man_rule: bool | None = Field(default=None, description="Require two-man approval")
+    auto_loop: bool | None = Field(default=None, description="Toggle auto loop")
+    loop_pair: str | None = Field(default=None, description="Override loop symbol")
+    loop_venues: list[str] | None = Field(default=None, description="Override loop venues")
+
+    class Config:
+        extra = "ignore"
+
+
+class CancelAllPayload(BaseModel):
+    venue: str | None = Field(default=None, description="Limit cancel-all to a specific venue")
+
+    class Config:
+        extra = "forbid"
+
+
+class CloseExposurePayload(BaseModel):
+    venue: str | None = Field(default=None, description="Venue of the position to flatten")
+    symbol: str | None = Field(default=None, description="Symbol of the position to flatten")
+
+    class Config:
+        extra = "forbid"
 
 
 @router.get("/state")
@@ -58,6 +90,7 @@ async def runtime_state() -> dict:
         "safe_mode": state.control.safe_mode,
         "dry_run": state.control.dry_run,
         "two_man_rule": state.control.two_man_rule,
+        "control": control_as_dict(),
         "incidents": list(state.incidents),
         "metrics": {
             "counters": dict(state.metrics.counters),
@@ -103,6 +136,27 @@ def _secret_payload(state) -> dict:
 async def secret_state() -> dict:
     state = get_state()
     return _secret_payload(state)
+
+
+@router.patch("/control")
+async def patch_control(payload: ControlPatchPayload) -> dict:
+    state = get_state()
+    environment = str(state.control.environment or "").lower()
+    if environment not in {"paper", "testnet"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Control patch allowed only in paper/testnet environments",
+        )
+    if not state.control.safe_mode:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SAFE_MODE must be enabled to modify control",
+        )
+    payload_dict = payload.model_dump(exclude_unset=True)
+    control, changes = apply_control_patch(payload_dict)
+    if changes:
+        ledger.record_event(level="INFO", code="control_patch", payload={"changes": changes})
+    return {"control": control_as_dict(), "changes": changes}
 
 
 @router.post("/secret")
@@ -176,24 +230,28 @@ async def reset() -> dict:
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
-async def _cancel_all_payload() -> dict:
+async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     state = get_state()
     environment = str(state.control.environment or "").lower()
     if environment != "testnet":
         raise HTTPException(status_code=403, detail="Cancel-all only available on testnet")
-    result = await cancel_all_orders()
-    ledger.record_event(level="INFO", code="cancel_all", payload=result)
+    venue = request.venue if request else None
+    result = await cancel_all_orders(venue=venue)
+    event_payload = dict(result)
+    if venue:
+        event_payload["venue"] = venue
+    ledger.record_event(level="INFO", code="cancel_all", payload=event_payload)
     return {"result": result, "ts": _ts()}
 
 
 @router.post("/cancel_all")
-async def cancel_all_ui() -> dict:
-    return await _cancel_all_payload()
+async def cancel_all_ui(payload: CancelAllPayload | None = None) -> dict:
+    return await _cancel_all_payload(payload)
 
 
 @router.post("/cancel-all")
-async def cancel_all() -> dict:
-    return await _cancel_all_payload()
+async def cancel_all(payload: CancelAllPayload | None = None) -> dict:
+    return await _cancel_all_payload(payload)
 
 
 @router.post("/kill")
@@ -214,13 +272,19 @@ async def kill_switch() -> dict:
 
 
 @router.post("/close_exposure")
-async def close_exposure() -> dict:
+async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     state = get_state()
     runtime = state.derivatives
     if not runtime:
         raise HTTPException(status_code=404, detail="derivatives runtime unavailable")
     result = runtime.flatten_all()
-    ledger.record_event(level="INFO", code="flatten_requested", payload=result)
+    event_payload = dict(result)
+    if payload and (payload.venue or payload.symbol):
+        event_payload.update({
+            "venue": payload.venue,
+            "symbol": payload.symbol,
+        })
+    ledger.record_event(level="INFO", code="flatten_requested", payload=event_payload)
     return {"result": result, "ts": _ts()}
 
 
