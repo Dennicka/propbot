@@ -4,9 +4,9 @@ import json
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
@@ -436,25 +436,206 @@ def fetch_fills_since(since: datetime | str | None = None) -> List[Dict[str, obj
     return [dict(row) for row in rows]
 
 
-def fetch_events(limit: int = 50, offset: int = 0) -> List[Dict[str, object]]:
+_EVENT_LEVELS = {"info", "warning", "error"}
+_MAX_EVENT_LIMIT = 1_000
+_MAX_EVENT_WINDOW = timedelta(days=7)
+
+
+def _parse_timestamp(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    raw = str(value).strip()
+    if not raw:
+        return None
     try:
-        limit_value = max(0, int(limit))
-    except (TypeError, ValueError):
-        limit_value = 0
-    try:
-        offset_value = max(0, int(offset))
-    except (TypeError, ValueError):
-        offset_value = 0
-    conn = _connect()
-    rows = conn.execute(
-        "SELECT ts, level, code, payload FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
-        (limit_value, offset_value),
-    ).fetchall()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:  # pragma: no cover - FastAPI validation should catch most cases
+        raise ValueError(f"invalid timestamp '{value}'") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
+
+
+def _normalise_level(level: str | None) -> str | None:
+    if not level:
+        return None
+    value = str(level).strip().lower()
+    if not value:
+        return None
+    if value not in _EVENT_LEVELS:
+        raise ValueError("level must be one of: info, warning, error")
+    return value
+
+
+def _event_message(payload: Mapping[str, object] | None) -> str:
+    if not payload:
+        return ""
+    message = payload.get("message") if isinstance(payload, dict) else None
+    if isinstance(message, str) and message:
+        return message
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, str) and detail:
+        return detail
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+
+def _event_lookup(payload: Mapping[str, object] | None, keys: Sequence[str]) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _filter_events(
+    rows: Iterable[sqlite3.Row],
+    *,
+    venue: str | None,
+    symbol: str | None,
+    search: str | None,
+) -> List[Dict[str, object]]:
+    venue_filter = venue.lower() if venue else None
+    symbol_filter = symbol.lower() if symbol else None
+    search_filter = search.lower() if search else None
     events: List[Dict[str, object]] = []
     for row in rows:
         payload = json.loads(row["payload"]) if row["payload"] else {}
-        events.append({"ts": row["ts"], "level": row["level"], "code": row["code"], "payload": payload})
+        venue_value = _event_lookup(payload, ("venue", "exchange", "source_venue"))
+        symbol_value = _event_lookup(payload, ("symbol", "pair"))
+        message_value = _event_message(payload)
+        if venue_filter and (venue_value or "") .lower() != venue_filter:
+            continue
+        if symbol_filter and (symbol_value or "").lower() != symbol_filter:
+            continue
+        if search_filter and search_filter not in message_value.lower():
+            continue
+        level_value = str(row["level"]).upper()
+        code_value = row["code"]
+        events.append(
+            {
+                "id": int(row["id"]),
+                "ts": row["ts"],
+                "level": level_value,
+                "code": code_value,
+                "type": code_value,
+                "venue": venue_value,
+                "symbol": symbol_value,
+                "message": message_value,
+                "payload": payload,
+            }
+        )
     return events
+
+
+def fetch_events_page(
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    order: str = "desc",
+    venue: str | None = None,
+    symbol: str | None = None,
+    level: str | None = None,
+    since: datetime | str | None = None,
+    until: datetime | str | None = None,
+    search: str | None = None,
+) -> Dict[str, object]:
+    try:
+        limit_value = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("limit must be an integer") from exc
+    if limit_value <= 0:
+        raise ValueError("limit must be positive")
+    if limit_value > _MAX_EVENT_LIMIT:
+        raise ValueError(f"limit must not exceed {_MAX_EVENT_LIMIT}")
+    try:
+        offset_value = int(offset)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("offset must be an integer") from exc
+    if offset_value < 0:
+        raise ValueError("offset must be greater or equal to zero")
+    order_value = str(order or "desc").lower()
+    if order_value not in {"asc", "desc"}:
+        raise ValueError("order must be either 'asc' or 'desc'")
+
+    level_value = _normalise_level(level)
+    since_dt = _parse_timestamp(since)
+    until_dt = _parse_timestamp(until)
+    if since_dt and until_dt and until_dt < since_dt:
+        since_dt, until_dt = until_dt, since_dt
+    if since_dt and until_dt and until_dt - since_dt > _MAX_EVENT_WINDOW:
+        raise ValueError("time window must not exceed 7 days")
+
+    conn = _connect()
+    conditions: List[str] = []
+    params: List[object] = []
+    if since_dt:
+        conditions.append("ts >= ?")
+        params.append(since_dt.isoformat())
+    if until_dt:
+        conditions.append("ts <= ?")
+        params.append(until_dt.isoformat())
+    if level_value:
+        conditions.append("lower(level) = ?")
+        params.append(level_value)
+    query = "SELECT id, ts, level, code, payload FROM events"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY ts DESC, id DESC"
+    rows = conn.execute(query, tuple(params)).fetchall()
+    events = _filter_events(rows, venue=venue, symbol=symbol, search=search)
+    if order_value == "asc":
+        events.reverse()
+    total = len(events)
+    start = min(offset_value, total)
+    end = min(start + limit_value, total)
+    items = events[start:end]
+    next_offset = end if end < total else end
+    has_more = end < total
+    return {
+        "items": items,
+        "total": total,
+        "offset": start,
+        "limit": limit_value,
+        "order": order_value,
+        "next_offset": next_offset,
+        "has_more": has_more,
+    }
+
+
+def fetch_events(
+    limit: int = 50,
+    offset: int = 0,
+    *,
+    order: str = "desc",
+    venue: str | None = None,
+    symbol: str | None = None,
+    level: str | None = None,
+    since: datetime | str | None = None,
+    until: datetime | str | None = None,
+    search: str | None = None,
+) -> List[Dict[str, object]]:
+    page = fetch_events_page(
+        offset=offset,
+        limit=limit,
+        order=order,
+        venue=venue,
+        symbol=symbol,
+        level=level,
+        since=since,
+        until=until,
+        search=search,
+    )
+    return page["items"]
 
 
 def compute_exposures() -> List[Dict[str, object]]:
@@ -531,6 +712,7 @@ __all__ = [
     "get_order",
     "fetch_balances",
     "fetch_events",
+    "fetch_events_page",
     "fetch_positions",
     "init_db",
     "record_event",

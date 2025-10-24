@@ -29,7 +29,8 @@ Constraints:
 - The response contains the updated control block and a `changes` map with applied keys.
 - Every successful patch persists the control snapshot to `data/runtime_state.json`; the runtime reloads this file on restart.
 
-The dashboard also exposes `GET /api/ui/events?offset=&limit=` for paginating the event log (default: 100 most recent entries).
+The dashboard also exposes `GET /api/ui/events` for paginating the event log. You can combine `offset`/`limit` (≤1000) with filters (`venue`, `symbol`, `level`, `search`) and optional `since`/`until` timestamps (window ≤7 days).
+Exports are available through `GET /api/ui/events/export?format=csv|json` and `GET /api/ui/portfolio/export?format=csv|json`.
 
 ## Risk overview endpoint
 
@@ -43,7 +44,7 @@ curl http://localhost:8000/api/risk/state | jq
 
 - **Positions** tab now lists every venue/symbol with per-row **Close** buttons (calls `POST /api/ui/close_exposure`).
 - **Cancel All** buttons appear per venue on testnet once open orders are detected; they call `POST /api/ui/cancel_all` with a JSON `{ "venue": "binance-um" }` payload.
-- **Events** card features level badges, a drop-down filter (`info`, `warning`, `error`) and a **Load more** button that streams older entries via `/api/ui/events`.
+- **Events** card features level badges, filters (venue / level / message search), the overall event count, a **Download CSV** shortcut, and a **Load more** button that streams older entries via `/api/ui/events`.
 - **Runtime Flags** card now shows the normalised control snapshot (post-PATCH values).
 - **Exposures** table includes a `venue_type` column, while the Balances table ends with the aggregated USDT total.
 

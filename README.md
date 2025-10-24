@@ -36,7 +36,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /api/ui/close_exposure` — запрос на закрытие экспозиции (через `hedge.flatten`).
 - `GET /api/ui/plan/last` — последний сохранённый план.
 - `PATCH /api/ui/control` — частичное обновление runtime-параметров (только `paper`/`testnet` + `SAFE_MODE=true`).
-- `GET /api/ui/events` — страница журнала событий с пагинацией (`offset`, `limit`, по умолчанию 100 последних записей`).
+- `GET /api/ui/events` — страница журнала событий с пагинацией (`offset`, `limit` ≤ 1000), фильтрами (`venue`, `symbol`, `level`, `search`) и окном по времени (`since`/`until` ≤ 7 суток).
+- `GET /api/ui/events/export` — выгрузка событий в `csv`/`json` с теми же фильтрами (поддерживает `offset`/`limit`).
+- `GET /api/ui/portfolio/export` — экспорт текущего снапшота портфеля (позиции/балансы) в `csv` или `json`.
 - `GET /api/risk/state` — агрегированное состояние риск-монитора (позиций и сработавших лимитов).
 
 Эндпоинт `PATCH /api/ui/control` нормализует входящие значения и валидирует диапазоны: `max_slippage_bps ∈ [0, 50]`, `min_spread_bps ∈ [0, 100]`, `order_notional_usdt ∈ [1, 1_000_000]`. Поля с `null` пропускаются без ошибок. После применения изменения сохраняются в файл `data/runtime_state.json`, и сервис подхватывает последний снапшот контролов при рестарте.
@@ -46,7 +48,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - кнопку **Edit Config** (панель PATCH `/api/ui/control` с валидацией и ограничениями по профилю);
 - карточку Runtime Flags с актуальным снапшотом контролов (значения после нормализации PATCH);
 - карточку Orders & Positions с табами «Open Orders», «Positions» (кнопки Close по каждой строке) и «Fills», а также кнопки Cancel All по venue;
-- карточку Events с бейджами уровней (info/warning/error), фильтром и кнопкой догрузки старых записей через `/api/ui/events`;
+- карточку Events с фильтрами по venue/level/search, отображением общего количества записей, кнопкой **Download CSV** (переход к `/api/ui/events/export`) и кнопкой догрузки через `/api/ui/events`;
 - карточку Exposures с подробной таблицей позиций (добавлен столбец `venue_type`) и мини-таблицей Balances с итоговой суммой USDT.
 
 ## 3. CLI и планировщик
@@ -66,6 +68,17 @@ python -m app.cli loop --env paper --cycles 10
 ```
 
 Без флага `--cycles` процесс работает бесконечно; события (`loop_cycle`, `loop_plan_unviable`) пишутся в `data/ledger.db`.
+
+### Экспорт через CLI
+
+Отдельный модуль `api_cli.py` позволяет выгружать события и портфель в артефакты без открытия UI:
+
+```bash
+python -m api_cli events --limit 500 --format csv --venue binance-um --out artifacts/events.csv
+python -m api_cli portfolio --format json --out artifacts/portfolio.json
+```
+
+Поддерживаются все параметры фильтрации `/api/ui/events` (`--level`, `--search`, `--since`, `--until`, `--symbol`). По умолчанию база API — `http://localhost:8000`, изменяется флагом `--base-url`.
 
 ## 4. Леджер и журнал
 

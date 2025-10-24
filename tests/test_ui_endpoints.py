@@ -56,7 +56,10 @@ def test_ui_state_and_controls(client):
     assert "items" in events_block
     assert events_block.get("limit") == 100
     assert events_block.get("offset") == 0
-    assert len(events_block["items"]) <= 100
+    assert events_block.get("order") in {"asc", "desc"}
+    assert "total" in events_block
+    assert len(events_block["items"]) <= events_block["limit"]
+    assert events_block["total"] >= len(events_block["items"])
     risk_block = state_payload["risk"]
     assert isinstance(risk_block, dict)
     assert "limits" in risk_block
@@ -338,12 +341,17 @@ def test_ui_events_endpoint_pagination(client):
     first_page = resp.json()
     assert first_page["limit"] == 2
     assert first_page["offset"] == 0
+    assert first_page["total"] == 5
+    assert first_page["has_more"] is True
     assert len(first_page["items"]) == 2
+    assert "message" in first_page["items"][0]
+    assert "type" in first_page["items"][0]
 
     resp_next = client.get("/api/ui/events", params={"offset": first_page["next_offset"], "limit": 2})
     assert resp_next.status_code == 200
     next_page = resp_next.json()
     assert next_page["offset"] == first_page["next_offset"]
+    assert next_page["total"] == first_page["total"]
     assert len(next_page["items"]) <= 2
 
 

@@ -232,12 +232,31 @@
         font-size: 0.75rem;
         color: rgba(148, 163, 184, 0.85);
       }
-      .event-code {
-        font-weight: 600;
+      .event-context {
+        display: grid;
+        gap: 0.35rem;
       }
-      .event-payload {
+      .event-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        color: rgba(148, 163, 184, 0.95);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .event-meta span {
+        background: rgba(148, 163, 184, 0.2);
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+      }
+      .event-meta span.type {
+        background: rgba(56, 189, 248, 0.2);
+        color: #38bdf8;
+      }
+      .event-message {
         font-size: 0.8rem;
-        color: rgba(226, 232, 240, 0.85);
+        color: rgba(226, 232, 240, 0.88);
         word-break: break-word;
       }
       .event-controls {
@@ -248,15 +267,43 @@
         flex-wrap: wrap;
         margin-bottom: 0.75rem;
       }
+      .event-filters {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        align-items: flex-end;
+      }
       .event-filter {
         display: flex;
-        align-items: center;
-        gap: 0.5rem;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+      .event-filter label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(148, 163, 184, 0.85);
+      }
+      .event-filter input,
+      .event-filter select {
+        background: rgba(148, 163, 184, 0.15);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        border-radius: 6px;
+        color: #f8fafc;
+        padding: 0.35rem 0.55rem;
+        font-size: 0.85rem;
+      }
+      .event-filter input::placeholder {
+        color: rgba(148, 163, 184, 0.7);
       }
       .event-actions {
         display: flex;
         align-items: center;
         gap: 0.5rem;
+      }
+      .events-meta {
+        font-size: 0.75rem;
+        color: rgba(148, 163, 184, 0.85);
       }
       .events-meta {
         font-size: 0.75rem;
@@ -542,17 +589,28 @@
       <section class="card">
         <h2>Events</h2>
         <div class="event-controls">
-          <div class="event-filter">
-            <label for="eventFilter" class="muted" style="font-size:0.85rem;">Level</label>
-            <select id="eventFilter">
-              <option value="all">All</option>
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="error">Error</option>
-            </select>
+          <div class="event-filters">
+            <div class="event-filter">
+              <label for="eventVenue">Venue</label>
+              <input id="eventVenue" type="text" placeholder="e.g. binance-um" />
+            </div>
+            <div class="event-filter">
+              <label for="eventLevel">Level</label>
+              <select id="eventLevel">
+                <option value="all">All</option>
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="error">Error</option>
+              </select>
+            </div>
+            <div class="event-filter">
+              <label for="eventSearch">Search</label>
+              <input id="eventSearch" type="text" placeholder="Message contains" />
+            </div>
           </div>
           <div class="event-actions">
             <span id="eventsMeta" class="events-meta"></span>
+            <button id="downloadEventsBtn" style="padding:0.4rem 0.8rem;">Download CSV</button>
             <button id="loadMoreEventsBtn" class="secondary" style="padding:0.4rem 0.8rem;">Load more</button>
           </div>
         </div>
@@ -630,7 +688,10 @@
       const riskCurrentEl = document.getElementById('riskCurrent');
       const riskBreachesEl = document.getElementById('riskBreaches');
       const eventsContainer = document.getElementById('events');
-      const eventFilterSelect = document.getElementById('eventFilter');
+      const eventLevelSelect = document.getElementById('eventLevel');
+      const eventVenueInput = document.getElementById('eventVenue');
+      const eventSearchInput = document.getElementById('eventSearch');
+      const downloadEventsBtn = document.getElementById('downloadEventsBtn');
       const controlValuesEl = document.getElementById('controlValues');
       const eventsMetaEl = document.getElementById('eventsMeta');
       const loadMoreEventsBtn = document.getElementById('loadMoreEventsBtn');
@@ -648,8 +709,12 @@
 
       const state = {
         env: 'paper',
-        events: [],
-        eventsPagination: { limit: EVENTS_LIMIT, next_offset: 0, has_more: false },
+        eventsItems: [],
+        eventsPage: { total: 0, offset: 0, limit: EVENTS_LIMIT, order: 'desc', has_more: false },
+        eventsFilters: { level: 'all', venue: '', search: '' },
+        eventsHasMore: false,
+        eventsNextOffset: 0,
+        eventsLocked: false,
         control: null,
         secret: null,
         orders: { open_orders: [], positions: [], fills: [] },
@@ -681,6 +746,84 @@
         const numeric = Number(value);
         const cls = numeric >= 0 ? 'good' : 'bad';
         return `<span class="${cls}">${formatNumber(numeric, digits)}</span>`;
+      };
+
+      const escapeHtml = (value) => {
+        if (value === null || value === undefined) {
+          return '';
+        }
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      };
+
+      const debounce = (fn, delay = 300) => {
+        let timer = null;
+        return (...args) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => fn(...args), delay);
+        };
+      };
+
+      const eventsFiltersAreDefault = () =>
+        state.eventsFilters.level === 'all' && !state.eventsFilters.venue && !state.eventsFilters.search;
+
+      const syncEventsLock = () => {
+        const baseLimit = Number(state.eventsPage?.limit ?? EVENTS_LIMIT);
+        state.eventsLocked = !eventsFiltersAreDefault() || state.eventsItems.length > baseLimit;
+      };
+
+      const buildEventsParams = (overrides = {}) => {
+        const params = new URLSearchParams();
+        const limitValue = Math.min(
+          Number(overrides.limit ?? state.eventsPage?.limit ?? EVENTS_LIMIT) || EVENTS_LIMIT,
+          1000
+        );
+        params.set('limit', limitValue);
+        const offsetValue = Math.max(0, Number(overrides.offset ?? 0));
+        params.set('offset', offsetValue);
+        const orderValue = String(overrides.order ?? state.eventsPage?.order ?? 'desc').toLowerCase();
+        params.set('order', orderValue);
+        const levelValue = overrides.level ?? state.eventsFilters.level;
+        if (levelValue && levelValue !== 'all') {
+          params.set('level', levelValue);
+        }
+        const venueValue = overrides.venue ?? state.eventsFilters.venue;
+        if (venueValue) {
+          params.set('venue', venueValue);
+        }
+        const searchValue = overrides.search ?? state.eventsFilters.search;
+        if (searchValue) {
+          params.set('search', searchValue);
+        }
+        if (overrides.format) {
+          params.set('format', overrides.format);
+        }
+        if (overrides.since) {
+          params.set('since', overrides.since);
+        }
+        if (overrides.until) {
+          params.set('until', overrides.until);
+        }
+        return params;
+      };
+
+      const buildEventsExportUrl = () => {
+        const maxLimit = Math.min(
+          Number(state.eventsPage?.total ?? state.eventsPage?.limit ?? EVENTS_LIMIT) || EVENTS_LIMIT,
+          1000
+        );
+        const params = buildEventsParams({ offset: 0, limit: maxLimit, format: 'csv' });
+        const url = new URL('/api/ui/events/export', window.location.origin);
+        params.forEach((value, key) => url.searchParams.set(key, value));
+        return url.toString();
+      };
+
+      const updateEventsDownloadState = () => {
+        if (!downloadEventsBtn) return;
+        downloadEventsBtn.disabled = state.eventsItems.length === 0;
+        downloadEventsBtn.setAttribute('data-href', buildEventsExportUrl());
       };
 
       const activateTab = (name) => {
@@ -893,63 +1036,86 @@
       };
 
       const renderEvents = () => {
-        const filter = eventFilterSelect.value;
-        if (!Array.isArray(state.events)) {
-          eventsContainer.innerHTML = '<div class="muted">No events recorded</div>';
-          if (eventsMetaEl) eventsMetaEl.textContent = '';
-          if (loadMoreEventsBtn) loadMoreEventsBtn.disabled = true;
-          return;
+        const rows = Array.isArray(state.eventsItems) ? state.eventsItems : [];
+        if (!rows.length) {
+          eventsContainer.innerHTML = '<div class="muted">No events matching filters</div>';
+        } else {
+          const html = rows
+            .map((event) => {
+              const levelText = String(event.level || 'INFO').toLowerCase();
+              const badgeClass = levelText.startsWith('error')
+                ? 'badge-error'
+                : levelText.startsWith('warning')
+                  ? 'badge-warning'
+                  : 'badge-info';
+              const ts = event.ts ? new Date(event.ts).toLocaleString() : '';
+              const venue = event.venue ? escapeHtml(event.venue) : '—';
+              const symbol = event.symbol ? `<span class="event-meta-item">${escapeHtml(event.symbol)}</span>` : '';
+              const type = event.type || event.code ? `<span class="type">${escapeHtml(event.type || event.code)}</span>` : '';
+              const messageRaw = event.message ? escapeHtml(event.message) : '';
+              const messageHtml = messageRaw || '<span class="muted">No details</span>';
+              return `
+                <div class="event-row">
+                  <div class="event-time">${ts}</div>
+                  <span class="badge ${badgeClass}">${levelText}</span>
+                  <div class="event-context">
+                    <div class="event-meta">
+                      <span class="event-meta-item">${venue}</span>
+                      ${symbol}
+                      ${type}
+                    </div>
+                    <div class="event-message">${messageHtml}</div>
+                  </div>
+                </div>`;
+            })
+            .join('');
+          eventsContainer.innerHTML = html;
         }
-        const filtered = state.events.filter((event) => {
-          if (filter === 'all') return true;
-          return String(event.level || '').toLowerCase().startsWith(filter);
-        });
-        if (!filtered.length) {
-          eventsContainer.innerHTML = '<div class="muted">No events for selected level</div>';
-          if (eventsMetaEl) {
-            const totalLoaded = state.events.length;
-            eventsMetaEl.textContent = totalLoaded ? `${totalLoaded} loaded` : '';
-          }
-          if (loadMoreEventsBtn) {
-            loadMoreEventsBtn.disabled = !state.eventsPagination?.has_more;
-            loadMoreEventsBtn.textContent = state.eventsPagination?.has_more ? 'Load more' : 'No more';
-          }
-          return;
-        }
-        const rows = filtered
-          .map((event) => {
-            const level = String(event.level || 'INFO').toLowerCase();
-            const badgeClass = level.startsWith('error')
-              ? 'badge-error'
-              : level.startsWith('warning')
-                ? 'badge-warning'
-                : 'badge-info';
-            const payload = event.payload ? JSON.stringify(event.payload) : '';
-            const ts = event.ts ? new Date(event.ts).toLocaleString() : '';
-            return `
-              <div class="event-row">
-                <div class="event-time">${ts}</div>
-                <span class="badge ${badgeClass}">${level}</span>
-                <div class="event-code">${event.code || ''}</div>
-                <div class="event-payload">${payload}</div>
-              </div>`;
-          })
-          .join('');
-        eventsContainer.innerHTML = rows;
         if (eventsMetaEl) {
-          const totalLoaded = state.events.length;
-          const showing = filtered.length;
-          const suffix = showing !== totalLoaded ? ` · filtered ${showing}` : '';
-          eventsMetaEl.textContent = totalLoaded ? `${totalLoaded} loaded${suffix}` : '';
+          const totalLoaded = state.eventsItems.length;
+          const total = Number(state.eventsPage?.total ?? totalLoaded);
+          eventsMetaEl.textContent = total ? `Showing ${totalLoaded} of ${total}` : `${totalLoaded} loaded`;
         }
         if (loadMoreEventsBtn) {
-          const hasMore = Boolean(state.eventsPagination?.has_more);
-          loadMoreEventsBtn.disabled = !hasMore;
-          loadMoreEventsBtn.textContent = hasMore ? 'Load more' : 'No more';
+          loadMoreEventsBtn.disabled = !state.eventsHasMore;
+          loadMoreEventsBtn.textContent = state.eventsHasMore ? 'Load more' : 'No more';
         }
+        updateEventsDownloadState();
       };
-
-      eventFilterSelect.addEventListener('change', renderEvents);
+      if (eventLevelSelect) {
+        eventLevelSelect.value = state.eventsFilters.level;
+        eventLevelSelect.addEventListener('change', async () => {
+          state.eventsFilters.level = eventLevelSelect.value || 'all';
+          await fetchEvents({ offset: 0, append: false });
+        });
+      }
+      if (eventVenueInput) {
+        eventVenueInput.value = state.eventsFilters.venue;
+        const handleVenueInput = debounce(async (value) => {
+          state.eventsFilters.venue = value.trim();
+          await fetchEvents({ offset: 0, append: false });
+        });
+        eventVenueInput.addEventListener('input', (event) => {
+          handleVenueInput(event.target.value || '');
+        });
+      }
+      if (eventSearchInput) {
+        eventSearchInput.value = state.eventsFilters.search;
+        const handleSearchInput = debounce(async (value) => {
+          state.eventsFilters.search = value.trim();
+          await fetchEvents({ offset: 0, append: false });
+        });
+        eventSearchInput.addEventListener('input', (event) => {
+          handleSearchInput(event.target.value || '');
+        });
+      }
+      if (downloadEventsBtn) {
+        downloadEventsBtn.addEventListener('click', () => {
+          if (downloadEventsBtn.disabled) return;
+          const href = downloadEventsBtn.getAttribute('data-href') || buildEventsExportUrl();
+          window.open(href, '_blank');
+        });
+      }
       if (loadMoreEventsBtn) {
         loadMoreEventsBtn.addEventListener('click', async () => {
           await loadMoreEvents();
@@ -1158,16 +1324,25 @@
           const data = await stateResp.json();
           state.control = data.control || state.control;
           const eventsBlock = data.events || {};
-          const items = Array.isArray(eventsBlock.items) ? eventsBlock.items : [];
-          state.events = items.slice();
-          const nextOffset = Number(eventsBlock.next_offset ?? items.length);
-          const limit = Number(eventsBlock.limit ?? EVENTS_LIMIT);
-          const count = Number(eventsBlock.count ?? items.length);
-          state.eventsPagination = {
-            limit,
-            next_offset: nextOffset,
-            has_more: count >= limit && items.length > 0,
+          const eventItems = Array.isArray(eventsBlock.items) ? eventsBlock.items : [];
+          const eventTotal = Number(eventsBlock.total ?? eventItems.length);
+          const eventLimit = Number(eventsBlock.limit ?? EVENTS_LIMIT);
+          const eventOffset = Number(eventsBlock.offset ?? 0);
+          const eventOrder = eventsBlock.order || state.eventsPage.order || 'desc';
+          const eventHasMore = Boolean(eventsBlock.has_more);
+          const eventNext = Number(eventsBlock.next_offset ?? eventOffset + eventItems.length);
+          state.eventsPage = {
+            total: eventTotal,
+            offset: eventOffset,
+            limit: eventLimit,
+            order: eventOrder,
           };
+          state.eventsHasMore = eventHasMore;
+          state.eventsNextOffset = eventNext;
+          if (!state.eventsLocked && eventsFiltersAreDefault()) {
+            state.eventsItems = eventItems.slice();
+            syncEventsLock();
+          }
           document.getElementById('mode').textContent = `Mode: ${data.mode}`;
           const env = String((data.flags && (data.flags.ENV || data.flags.MODE)) || '').toLowerCase();
           state.env = env || state.env;
@@ -1223,41 +1398,49 @@
         return payload;
       };
 
-      const loadMoreEvents = async () => {
-        const pagination = state.eventsPagination || {};
-        const nextOffset = Number.isFinite(pagination.next_offset) ? pagination.next_offset : state.events.length;
-        const limit = Number.isFinite(pagination.limit) ? pagination.limit : EVENTS_LIMIT;
+      const fetchEvents = async ({ offset = 0, append = false } = {}) => {
+        const params = buildEventsParams({ offset });
         if (loadMoreEventsBtn) {
           loadMoreEventsBtn.disabled = true;
         }
         try {
-          const resp = await fetch(`/api/ui/events?offset=${nextOffset}&limit=${limit}`);
+          const resp = await fetch(`/api/ui/events?${params.toString()}`);
           if (!resp.ok) {
             throw new Error('failed to load events');
           }
           const page = await resp.json();
           const items = Array.isArray(page.items) ? page.items : [];
-          if (items.length) {
-            state.events = state.events.concat(items);
+          if (append) {
+            state.eventsItems = state.eventsItems.concat(items);
+          } else {
+            state.eventsItems = items;
           }
-          const pageLimit = Number(page.limit ?? limit);
-          const pageCount = Number(page.count ?? items.length);
-          const pageNext = Number(page.next_offset ?? nextOffset + items.length);
-          state.eventsPagination = {
-            limit: pageLimit,
-            next_offset: pageNext,
-            has_more: pageCount >= pageLimit && items.length > 0,
+          state.eventsPage = {
+            total: Number(page.total ?? state.eventsItems.length),
+            offset: Number(page.offset ?? offset),
+            limit: Number(page.limit ?? state.eventsPage.limit ?? EVENTS_LIMIT),
+            order: page.order || state.eventsPage.order || 'desc',
           };
+          state.eventsHasMore = Boolean(page.has_more);
+          state.eventsNextOffset = Number(page.next_offset ?? state.eventsPage.offset + items.length);
+          syncEventsLock();
           renderEvents();
         } catch (error) {
-          console.error('Failed to load more events', error);
-          showToast('Failed to load more events', 'error');
+          console.error('Failed to load events', error);
+          showToast('Failed to load events', 'error');
         } finally {
           if (loadMoreEventsBtn) {
-            loadMoreEventsBtn.disabled = !state.eventsPagination?.has_more;
-            loadMoreEventsBtn.textContent = state.eventsPagination?.has_more ? 'Load more' : 'No more';
+            loadMoreEventsBtn.disabled = !state.eventsHasMore;
+            loadMoreEventsBtn.textContent = state.eventsHasMore ? 'Load more' : 'No more';
           }
         }
+      };
+
+      const loadMoreEvents = async () => {
+        const nextOffset = Number.isFinite(state.eventsNextOffset)
+          ? Number(state.eventsNextOffset)
+          : state.eventsItems.length;
+        await fetchEvents({ offset: nextOffset, append: true });
       };
 
       const submitConfig = async (event) => {

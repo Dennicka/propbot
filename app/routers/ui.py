@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, conint, confloat
 
 from .. import ledger
@@ -73,15 +77,12 @@ class CloseExposurePayload(BaseModel):
 DEFAULT_EVENT_LIMIT = 100
 
 
-def _event_page(*, offset: int = 0, limit: int = DEFAULT_EVENT_LIMIT) -> dict:
-    items = ledger.fetch_events(limit=limit, offset=offset)
-    return {
-        "items": items,
-        "offset": offset,
-        "limit": limit,
-        "count": len(items),
-        "next_offset": offset + len(items),
-    }
+def _event_page(*, offset: int = 0, limit: int = DEFAULT_EVENT_LIMIT, order: str = "desc") -> dict:
+    try:
+        page = ledger.fetch_events_page(offset=offset, limit=limit, order=order)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return page
 
 
 @router.get("/state")
@@ -177,9 +178,184 @@ async def patch_control(payload: ControlPatchPayload) -> dict:
     return {"control": control_as_dict(), "changes": changes}
 
 
+def _clean_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 @router.get("/events")
-async def events(offset: int = Query(0, ge=0), limit: int = Query(DEFAULT_EVENT_LIMIT, ge=1, le=500)) -> dict:
-    return _event_page(offset=offset, limit=limit)
+async def events(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(DEFAULT_EVENT_LIMIT, ge=1, le=1_000),
+    order: str = Query("desc"),
+    venue: str | None = Query(None),
+    symbol: str | None = Query(None),
+    level: str | None = Query(None),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    search: str | None = Query(None),
+) -> dict:
+    try:
+        page = ledger.fetch_events_page(
+            offset=offset,
+            limit=limit,
+            order=order,
+            venue=_clean_str(venue),
+            symbol=_clean_str(symbol),
+            level=_clean_str(level),
+            since=since,
+            until=until,
+            search=_clean_str(search),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return page
+
+
+def _events_csv(items: list[dict[str, Any]]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ts", "venue", "type", "level", "symbol", "message"])
+    for item in items:
+        writer.writerow(
+            [
+                item.get("ts", ""),
+                item.get("venue", "") or "",
+                item.get("type", "") or "",
+                item.get("level", "") or "",
+                item.get("symbol", "") or "",
+                item.get("message", "") or "",
+            ]
+        )
+    return output.getvalue()
+
+
+@router.get("/events/export")
+async def events_export(
+    format: str = Query("csv"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(1_000, ge=1, le=1_000),
+    order: str = Query("desc"),
+    venue: str | None = Query(None),
+    symbol: str | None = Query(None),
+    level: str | None = Query(None),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    search: str | None = Query(None),
+) -> Response:
+    fmt = (format or "csv").strip().lower()
+    if fmt not in {"csv", "json"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json")
+    try:
+        page = ledger.fetch_events_page(
+            offset=offset,
+            limit=limit,
+            order=order,
+            venue=_clean_str(venue),
+            symbol=_clean_str(symbol),
+            level=_clean_str(level),
+            since=since,
+            until=until,
+            search=_clean_str(search),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    items = page["items"]
+    if fmt == "json":
+        return JSONResponse(content=items)
+    csv_body = _events_csv(items)
+    response = Response(content=csv_body, media_type="text/csv")
+    response.headers["Content-Disposition"] = 'attachment; filename="events.csv"'
+    return response
+
+
+def _format_decimal(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (int,)):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.10g}"
+    return str(value)
+
+
+@router.get("/portfolio/export")
+async def portfolio_export(format: str = Query("csv")) -> Response:
+    fmt = (format or "csv").strip().lower()
+    if fmt not in {"csv", "json"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json")
+    snapshot = await portfolio.snapshot()
+    positions_payload = [
+        {
+            "venue": position.venue,
+            "symbol": position.symbol,
+            "venue_type": position.venue_type,
+            "qty": position.qty,
+            "notional": position.notional,
+            "entry": position.entry_px,
+            "mark": position.mark_px,
+            "upnl": position.upnl,
+            "rpnl": position.rpnl,
+        }
+        for position in snapshot.positions
+    ]
+    balances_payload = [
+        {
+            "venue": balance.venue,
+            "asset": balance.asset,
+            "free": balance.free,
+            "locked": balance.total - balance.free,
+            "total": balance.total,
+        }
+        for balance in snapshot.balances
+    ]
+    if fmt == "json":
+        return JSONResponse(
+            content={
+                "positions": positions_payload,
+                "balances": balances_payload,
+                "pnl_totals": snapshot.pnl_totals,
+                "notional_total": snapshot.notional_total,
+            }
+        )
+    lines: list[str] = ["[positions]"]
+    lines.append("venue,symbol,qty,notional,entry,mark,upnl,rpnl")
+    for entry in positions_payload:
+        lines.append(
+            ",".join(
+                [
+                    entry.get("venue", "") or "",
+                    entry.get("symbol", "") or "",
+                    _format_decimal(entry.get("qty")),
+                    _format_decimal(entry.get("notional")),
+                    _format_decimal(entry.get("entry")),
+                    _format_decimal(entry.get("mark")),
+                    _format_decimal(entry.get("upnl")),
+                    _format_decimal(entry.get("rpnl")),
+                ]
+            )
+        )
+    lines.append("")
+    lines.append("[balances]")
+    lines.append("venue,asset,free,locked,total")
+    for entry in balances_payload:
+        lines.append(
+            ",".join(
+                [
+                    entry.get("venue", "") or "",
+                    entry.get("asset", "") or "",
+                    _format_decimal(entry.get("free")),
+                    _format_decimal(entry.get("locked")),
+                    _format_decimal(entry.get("total")),
+                ]
+            )
+        )
+    csv_body = "\n".join(lines) + "\n"
+    response = Response(content=csv_body, media_type="text/csv")
+    response.headers["Content-Disposition"] = 'attachment; filename="portfolio.csv"'
+    return response
 
 
 @router.post("/secret")
