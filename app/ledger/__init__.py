@@ -436,11 +436,19 @@ def fetch_fills_since(since: datetime | str | None = None) -> List[Dict[str, obj
     return [dict(row) for row in rows]
 
 
-def fetch_events(limit: int = 50) -> List[Dict[str, object]]:
+def fetch_events(limit: int = 50, offset: int = 0) -> List[Dict[str, object]]:
+    try:
+        limit_value = max(0, int(limit))
+    except (TypeError, ValueError):
+        limit_value = 0
+    try:
+        offset_value = max(0, int(offset))
+    except (TypeError, ValueError):
+        offset_value = 0
     conn = _connect()
     rows = conn.execute(
-        "SELECT ts, level, code, payload FROM events ORDER BY id DESC LIMIT ?",
-        (limit,),
+        "SELECT ts, level, code, payload FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
+        (limit_value, offset_value),
     ).fetchall()
     events: List[Dict[str, object]] = []
     for row in rows:

@@ -36,14 +36,18 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `POST /api/ui/close_exposure` — запрос на закрытие экспозиции (через `hedge.flatten`).
 - `GET /api/ui/plan/last` — последний сохранённый план.
 - `PATCH /api/ui/control` — частичное обновление runtime-параметров (только `paper`/`testnet` + `SAFE_MODE=true`).
+- `GET /api/ui/events` — страница журнала событий с пагинацией (`offset`, `limit`, по умолчанию 100 последних записей`).
 - `GET /api/risk/state` — агрегированное состояние риск-монитора (позиций и сработавших лимитов).
+
+Эндпоинт `PATCH /api/ui/control` нормализует входящие значения и валидирует диапазоны: `max_slippage_bps ∈ [0, 50]`, `min_spread_bps ∈ [0, 100]`, `order_notional_usdt ∈ [1, 1_000_000]`. Поля с `null` пропускаются без ошибок. После применения изменения сохраняются в файл `data/runtime_state.json`, и сервис подхватывает последний снапшот контролов при рестарте.
 
 Веб-страница «System Status» доступна на `http://localhost:8000/`. Она отображает основные флаги, экспозиции, PnL и журнал событий, а также включает:
 
 - кнопку **Edit Config** (панель PATCH `/api/ui/control` с валидацией и ограничениями по профилю);
+- карточку Runtime Flags с актуальным снапшотом контролов (значения после нормализации PATCH);
 - карточку Orders & Positions с табами «Open Orders», «Positions» (кнопки Close по каждой строке) и «Fills», а также кнопки Cancel All по venue;
-- карточку Events с бейджами уровней (info/warning/error) и фильтром;
-- карточку Exposures с подробной таблицей позиций (venue, symbol, qty, notional, entry, mark, uPnL, rPnL) и мини-таблицей Balances.
+- карточку Events с бейджами уровней (info/warning/error), фильтром и кнопкой догрузки старых записей через `/api/ui/events`;
+- карточку Exposures с подробной таблицей позиций (добавлен столбец `venue_type`) и мини-таблицей Balances с итоговой суммой USDT.
 
 ## 3. CLI и планировщик
 

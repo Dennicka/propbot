@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app import ledger
+from app.services import runtime
 from app.services.runtime import get_state
 
 
@@ -50,11 +51,18 @@ def test_ui_state_and_controls(client):
     assert "risk_reasons" in state_payload
     assert "control" in state_payload
     assert state_payload["control"]["safe_mode"] is True
+    events_block = state_payload["events"]
+    assert isinstance(events_block, dict)
+    assert "items" in events_block
+    assert events_block.get("limit") == 100
+    assert events_block.get("offset") == 0
+    assert len(events_block["items"]) <= 100
     risk_block = state_payload["risk"]
     assert isinstance(risk_block, dict)
     assert "limits" in risk_block
     assert "current" in risk_block
     assert state_payload["exposures"], "paper environment exposures should not be empty"
+    assert all("venue_type" in entry for entry in state_payload["exposures"])
     assert any(entry["symbol"].upper() == "BTCUSDT" for entry in state_payload["exposures"])
     pnl_snapshot = state_payload["pnl"]
     for key in ("realized", "unrealized", "total"):
@@ -64,7 +72,7 @@ def test_ui_state_and_controls(client):
     assert portfolio_data["pnl_totals"].keys() >= {"realized", "unrealized", "total"}
     if portfolio_data["positions"]:
         first_pos = portfolio_data["positions"][0]
-        for field in ("venue", "symbol", "qty", "notional", "entry_px", "mark_px", "upnl", "rpnl"):
+        for field in ("venue", "venue_type", "symbol", "qty", "notional", "entry_px", "mark_px", "upnl", "rpnl"):
             assert field in first_pos
     if portfolio_data["balances"]:
         first_balance = portfolio_data["balances"][0]
@@ -147,6 +155,7 @@ def test_ui_state_and_controls(client):
     assert testnet_state.status_code == 200
     testnet_payload = testnet_state.json()
     assert testnet_payload["exposures"], "testnet environment exposures should not be empty"
+    assert all("venue_type" in entry for entry in testnet_payload["exposures"])
     assert any(entry["symbol"].upper() == "ETHUSDT" for entry in testnet_payload["exposures"])
     for key in ("realized", "unrealized", "total"):
         assert key in testnet_payload["pnl"]
@@ -222,6 +231,11 @@ def test_patch_control_applies_and_reflected_in_state(client):
     state = get_state()
     state.control.environment = "paper"
     state.control.safe_mode = True
+    state.control.order_notional_usdt = 50.0
+    state.control.min_spread_bps = 0.0
+    state.control.max_slippage_bps = 2
+    state.control.loop_venues = []
+    state.control.dry_run = False
     state.control.loop_pair = "BTCUSDT"
     payload = {
         "order_notional_usdt": 123.45,
@@ -271,8 +285,66 @@ def test_events_levels_and_filtering(client):
     ledger.record_event(level="ERROR", code="execution_failed", payload={"order": 1})
     resp = client.get("/api/ui/state")
     assert resp.status_code == 200
-    levels = {entry["level"] for entry in resp.json()["events"]}
+    page = resp.json()["events"]
+    levels = {entry["level"] for entry in page["items"]}
     assert {"INFO", "WARNING", "ERROR"} <= levels
+
+
+def test_ui_control_patch_endpoint_persistence(client, monkeypatch, tmp_path):
+    runtime_path = tmp_path / "runtime_state.json"
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
+    runtime.reset_for_tests()
+
+    patch_payload = {
+        "order_notional_usdt": 1500,
+        "max_slippage_bps": 5,
+        "min_spread_bps": 12,
+    }
+
+    resp = client.patch("/api/ui/control", json=patch_payload)
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["control"]["order_notional_usdt"] == pytest.approx(1500)
+    assert payload["control"]["max_slippage_bps"] == 5
+    assert payload["control"]["min_spread_bps"] == pytest.approx(12)
+    assert runtime_path.exists()
+
+    runtime.reset_for_tests()
+    state = get_state()
+    assert state.control.order_notional_usdt == pytest.approx(1500)
+    assert state.control.max_slippage_bps == 5
+    assert state.control.min_spread_bps == pytest.approx(12)
+
+
+def test_ui_control_patch_endpoint_validation(client):
+    resp = client.patch("/api/ui/control", json={"max_slippage_bps": 100})
+    assert resp.status_code == 422
+
+    resp = client.patch("/api/ui/control", json={"order_notional_usdt": 0.5})
+    assert resp.status_code == 422
+
+    resp = client.patch("/api/ui/control", json={"order_notional_usdt": None})
+    assert resp.status_code == 200
+    assert resp.json()["changes"] == {}
+
+
+def test_ui_events_endpoint_pagination(client):
+    ledger.reset()
+    for idx in range(5):
+        ledger.record_event(level="INFO", code=f"evt_{idx}", payload={"idx": idx})
+
+    resp = client.get("/api/ui/events", params={"limit": 2})
+    assert resp.status_code == 200
+    first_page = resp.json()
+    assert first_page["limit"] == 2
+    assert first_page["offset"] == 0
+    assert len(first_page["items"]) == 2
+
+    resp_next = client.get("/api/ui/events", params={"offset": first_page["next_offset"], "limit": 2})
+    assert resp_next.status_code == 200
+    next_page = resp_next.json()
+    assert next_page["offset"] == first_page["next_offset"]
+    assert len(next_page["items"]) <= 2
 
 
 def test_risk_state_endpoint(client):

@@ -25,6 +25,7 @@ def _env_flag(name: str) -> bool:
 @dataclass(frozen=True)
 class PortfolioPosition:
     venue: str
+    venue_type: str
     symbol: str
     qty: float
     notional: float
@@ -36,6 +37,7 @@ class PortfolioPosition:
     def as_dict(self) -> Dict[str, object]:
         return {
             "venue": self.venue,
+            "venue_type": self.venue_type,
             "symbol": self.symbol,
             "qty": self.qty,
             "notional": self.notional,
@@ -48,6 +50,7 @@ class PortfolioPosition:
     def as_legacy_exposure(self) -> Dict[str, object]:
         return {
             "venue": self.venue,
+            "venue_type": self.venue_type,
             "symbol": self.symbol,
             "qty": self.qty,
             "avg_entry": self.entry_px,
@@ -153,6 +156,7 @@ def _paper_exposures() -> List[Dict[str, object]]:
         exposures.append(
             {
                 "venue": row.get("venue"),
+                "venue_type": "paper",
                 "symbol": row.get("symbol"),
                 "qty": qty,
                 "avg_entry": avg_price,
@@ -259,9 +263,11 @@ def _build_positions(
         notional = abs(qty) * mark
         upnl = (mark - entry) * qty
         rpnl = float(realized_by_symbol.get(symbol, 0.0))
+        venue_type = str(row.get("venue_type") or venue or "paper")
         positions.append(
             PortfolioPosition(
                 venue=venue,
+                venue_type=venue_type,
                 symbol=symbol,
                 qty=qty,
                 notional=notional,

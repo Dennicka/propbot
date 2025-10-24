@@ -121,6 +121,27 @@
       .risk-metric span.value {
         font-weight: 600;
       }
+      .control-values {
+        margin-top: 0.75rem;
+        display: grid;
+        gap: 0.35rem;
+        font-size: 0.85rem;
+      }
+      .control-entry {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+      .control-entry span.key {
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-size: 0.75rem;
+        color: rgba(148, 163, 184, 0.85);
+      }
+      .control-entry span.value {
+        font-weight: 600;
+        text-align: right;
+      }
       .good {
         color: #4ade80;
       }
@@ -221,10 +242,32 @@
       }
       .event-controls {
         display: flex;
-        justify-content: flex-end;
+        justify-content: space-between;
         align-items: center;
         gap: 0.5rem;
+        flex-wrap: wrap;
         margin-bottom: 0.75rem;
+      }
+      .event-filter {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .event-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .events-meta {
+        font-size: 0.75rem;
+        color: rgba(148, 163, 184, 0.85);
+      }
+      .total-row {
+        border-top: 1px solid rgba(248, 250, 252, 0.2);
+        font-weight: 600;
+      }
+      .total-row td {
+        padding-top: 0.45rem;
       }
       select {
         background: rgba(15, 23, 42, 0.6);
@@ -360,6 +403,7 @@
       <section class="card">
         <h2>Runtime Flags</h2>
         <div id="flags"></div>
+        <div id="controlValues" class="control-values muted"></div>
       </section>
       <section class="card">
         <h2>Exposures</h2>
@@ -368,6 +412,7 @@
             <thead>
               <tr>
                 <th>Venue</th>
+                <th>Venue Type</th>
                 <th>Symbol</th>
                 <th>Qty</th>
                 <th>Notional</th>
@@ -497,13 +542,19 @@
       <section class="card">
         <h2>Events</h2>
         <div class="event-controls">
-          <label for="eventFilter" class="muted" style="font-size:0.85rem;">Level</label>
-          <select id="eventFilter">
-            <option value="all">All</option>
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="error">Error</option>
-          </select>
+          <div class="event-filter">
+            <label for="eventFilter" class="muted" style="font-size:0.85rem;">Level</label>
+            <select id="eventFilter">
+              <option value="all">All</option>
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="error">Error</option>
+            </select>
+          </div>
+          <div class="event-actions">
+            <span id="eventsMeta" class="events-meta"></span>
+            <button id="loadMoreEventsBtn" class="secondary" style="padding:0.4rem 0.8rem;">Load more</button>
+          </div>
         </div>
         <div id="events" class="events-list"></div>
       </section>
@@ -580,6 +631,9 @@
       const riskBreachesEl = document.getElementById('riskBreaches');
       const eventsContainer = document.getElementById('events');
       const eventFilterSelect = document.getElementById('eventFilter');
+      const controlValuesEl = document.getElementById('controlValues');
+      const eventsMetaEl = document.getElementById('eventsMeta');
+      const loadMoreEventsBtn = document.getElementById('loadMoreEventsBtn');
       const toastEl = document.getElementById('toast');
       const modalBackdrop = document.getElementById('modalBackdrop');
       const configModal = document.getElementById('configModal');
@@ -590,9 +644,12 @@
       const tabButtons = Array.from(document.querySelectorAll('[data-tab-target]'));
       const tabPanels = Array.from(document.querySelectorAll('[data-tab-panel]'));
 
+      const EVENTS_LIMIT = 100;
+
       const state = {
         env: 'paper',
         events: [],
+        eventsPagination: { limit: EVENTS_LIMIT, next_offset: 0, has_more: false },
         control: null,
         secret: null,
         orders: { open_orders: [], positions: [], fills: [] },
@@ -802,10 +859,45 @@
             : 'Cancel-all requires testnet environment';
       };
 
+      const renderControlSnapshot = (control) => {
+        if (!controlValuesEl) return;
+        if (!control || typeof control !== 'object') {
+          controlValuesEl.innerHTML = '<div class="muted">Control unavailable</div>';
+          return;
+        }
+        const entries = Object.entries(control).filter(([key]) => key !== 'approvals');
+        if (!entries.length) {
+          controlValuesEl.innerHTML = '<div class="muted">Control unavailable</div>';
+          return;
+        }
+        const html = entries
+          .map(([key, value]) => {
+            let display = '—';
+            if (Array.isArray(value)) {
+              display = value.length ? value.join(', ') : '—';
+            } else if (value === null || value === undefined) {
+              display = '—';
+            } else if (typeof value === 'object') {
+              display = JSON.stringify(value);
+            } else if (typeof value === 'boolean') {
+              display = value ? 'enabled' : 'disabled';
+            } else if (typeof value === 'number') {
+              display = formatNumber(value, Math.abs(value) < 1 ? 4 : 2);
+            } else {
+              display = String(value);
+            }
+            return `<div class="control-entry"><span class="key">${key}</span><span class="value">${display}</span></div>`;
+          })
+          .join('');
+        controlValuesEl.innerHTML = html;
+      };
+
       const renderEvents = () => {
         const filter = eventFilterSelect.value;
         if (!Array.isArray(state.events)) {
           eventsContainer.innerHTML = '<div class="muted">No events recorded</div>';
+          if (eventsMetaEl) eventsMetaEl.textContent = '';
+          if (loadMoreEventsBtn) loadMoreEventsBtn.disabled = true;
           return;
         }
         const filtered = state.events.filter((event) => {
@@ -814,6 +906,14 @@
         });
         if (!filtered.length) {
           eventsContainer.innerHTML = '<div class="muted">No events for selected level</div>';
+          if (eventsMetaEl) {
+            const totalLoaded = state.events.length;
+            eventsMetaEl.textContent = totalLoaded ? `${totalLoaded} loaded` : '';
+          }
+          if (loadMoreEventsBtn) {
+            loadMoreEventsBtn.disabled = !state.eventsPagination?.has_more;
+            loadMoreEventsBtn.textContent = state.eventsPagination?.has_more ? 'Load more' : 'No more';
+          }
           return;
         }
         const rows = filtered
@@ -836,9 +936,25 @@
           })
           .join('');
         eventsContainer.innerHTML = rows;
+        if (eventsMetaEl) {
+          const totalLoaded = state.events.length;
+          const showing = filtered.length;
+          const suffix = showing !== totalLoaded ? ` · filtered ${showing}` : '';
+          eventsMetaEl.textContent = totalLoaded ? `${totalLoaded} loaded${suffix}` : '';
+        }
+        if (loadMoreEventsBtn) {
+          const hasMore = Boolean(state.eventsPagination?.has_more);
+          loadMoreEventsBtn.disabled = !hasMore;
+          loadMoreEventsBtn.textContent = hasMore ? 'Load more' : 'No more';
+        }
       };
 
       eventFilterSelect.addEventListener('change', renderEvents);
+      if (loadMoreEventsBtn) {
+        loadMoreEventsBtn.addEventListener('click', async () => {
+          await loadMoreEvents();
+        });
+      }
       const renderOrders = (orders, env) => {
         const rows = Array.isArray(orders) ? orders : [];
         openOrdersBody.innerHTML = rows.length
@@ -940,6 +1056,7 @@
           ? portfolioPositions
               .map((row) => {
                 const venue = row.venue ?? '';
+                const venueType = row.venue_type ?? state.env ?? '';
                 const symbol = row.symbol ?? '';
                 const qty = Number(row.qty ?? row.base_qty ?? 0);
                 const entry = Number(row.entry_px ?? row.avg_entry ?? row.avg_price ?? 0);
@@ -950,6 +1067,7 @@
                 return `
                   <tr>
                     <td>${venue}</td>
+                    <td>${venueType}</td>
                     <td>${symbol}</td>
                     <td>${formatNumber(qty, 4)}</td>
                     <td>${formatNumber(notional)}</td>
@@ -960,20 +1078,37 @@
                   </tr>`;
               })
               .join('')
-          : '<tr><td colspan="8" class="muted">No positions</td></tr>';
+          : '<tr><td colspan="9" class="muted">No positions</td></tr>';
 
         const balances = Array.isArray(portfolioData.balances) ? portfolioData.balances : [];
-        balancesBody.innerHTML = balances.length
-          ? balances
-              .map((row) => `
-                  <tr>
-                    <td>${row.venue ?? ''}</td>
-                    <td>${row.asset ?? ''}</td>
-                    <td>${formatNumber(row.free ?? row.qty ?? 0, 4)}</td>
-                    <td>${formatNumber(row.total ?? row.balance ?? row.qty ?? 0, 4)}</td>
-                  </tr>`)
-              .join('')
-          : '<tr><td colspan="4" class="muted">No balances</td></tr>';
+        if (balances.length) {
+          let usdtTotal = 0;
+          const rowsHtml = balances
+            .map((row) => {
+              const asset = String(row.asset ?? '').toUpperCase();
+              const freeValue = Number(row.free ?? row.qty ?? 0);
+              const totalValue = Number(row.total ?? row.balance ?? row.qty ?? 0);
+              if (asset === 'USDT') {
+                usdtTotal += totalValue;
+              }
+              return `
+                <tr>
+                  <td>${row.venue ?? ''}</td>
+                  <td>${asset}</td>
+                  <td>${formatNumber(freeValue, 4)}</td>
+                  <td>${formatNumber(totalValue, 4)}</td>
+                </tr>`;
+            })
+            .join('');
+          const totalRow = `
+            <tr class="total-row">
+              <td colspan="2">Total USDT</td>
+              <td colspan="2">${formatNumber(usdtTotal, 4)}</td>
+            </tr>`;
+          balancesBody.innerHTML = rowsHtml + totalRow;
+        } else {
+          balancesBody.innerHTML = '<tr><td colspan="4" class="muted">No balances</td></tr>';
+        }
 
         const pnl = portfolioData.pnl_totals || data.pnl || {};
         const totalPnl = Number(pnl.total ?? 0);
@@ -1022,7 +1157,17 @@
           }
           const data = await stateResp.json();
           state.control = data.control || state.control;
-          state.events = Array.isArray(data.events) ? data.events : [];
+          const eventsBlock = data.events || {};
+          const items = Array.isArray(eventsBlock.items) ? eventsBlock.items : [];
+          state.events = items.slice();
+          const nextOffset = Number(eventsBlock.next_offset ?? items.length);
+          const limit = Number(eventsBlock.limit ?? EVENTS_LIMIT);
+          const count = Number(eventsBlock.count ?? items.length);
+          state.eventsPagination = {
+            limit,
+            next_offset: nextOffset,
+            has_more: count >= limit && items.length > 0,
+          };
           document.getElementById('mode').textContent = `Mode: ${data.mode}`;
           const env = String((data.flags && (data.flags.ENV || data.flags.MODE)) || '').toLowerCase();
           state.env = env || state.env;
@@ -1030,6 +1175,7 @@
             .map(([key, value]) => `<div>${key}: <strong>${value}</strong></div>`)
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
+          renderControlSnapshot(state.control);
           renderRisk(data.risk);
 
           if (secretResp.ok) {
@@ -1075,6 +1221,43 @@
         payload.two_man_rule = configForm.elements['two_man_rule'].checked;
         payload.auto_loop = configForm.elements['auto_loop'].checked;
         return payload;
+      };
+
+      const loadMoreEvents = async () => {
+        const pagination = state.eventsPagination || {};
+        const nextOffset = Number.isFinite(pagination.next_offset) ? pagination.next_offset : state.events.length;
+        const limit = Number.isFinite(pagination.limit) ? pagination.limit : EVENTS_LIMIT;
+        if (loadMoreEventsBtn) {
+          loadMoreEventsBtn.disabled = true;
+        }
+        try {
+          const resp = await fetch(`/api/ui/events?offset=${nextOffset}&limit=${limit}`);
+          if (!resp.ok) {
+            throw new Error('failed to load events');
+          }
+          const page = await resp.json();
+          const items = Array.isArray(page.items) ? page.items : [];
+          if (items.length) {
+            state.events = state.events.concat(items);
+          }
+          const pageLimit = Number(page.limit ?? limit);
+          const pageCount = Number(page.count ?? items.length);
+          const pageNext = Number(page.next_offset ?? nextOffset + items.length);
+          state.eventsPagination = {
+            limit: pageLimit,
+            next_offset: pageNext,
+            has_more: pageCount >= pageLimit && items.length > 0,
+          };
+          renderEvents();
+        } catch (error) {
+          console.error('Failed to load more events', error);
+          showToast('Failed to load more events', 'error');
+        } finally {
+          if (loadMoreEventsBtn) {
+            loadMoreEventsBtn.disabled = !state.eventsPagination?.has_more;
+            loadMoreEventsBtn.textContent = state.eventsPagination?.has_more ? 'Load more' : 'No more';
+          }
+        }
       };
 
       const submitConfig = async (event) => {
