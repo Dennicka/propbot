@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, conint, confloat
+from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
 from ..security import require_token
@@ -46,6 +46,8 @@ class SecretUpdate(BaseModel):
 
 
 class ControlPatchPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     min_spread_bps: confloat(ge=0.0) | None = Field(default=None, description="Minimum spread in bps")
     max_slippage_bps: conint(ge=0, le=1_000) | None = Field(default=None, description="Maximum allowed slippage in bps")
     order_notional_usdt: confloat(gt=0.0) | None = Field(default=None, description="Order notional in USDT")
@@ -56,23 +58,18 @@ class ControlPatchPayload(BaseModel):
     loop_pair: str | None = Field(default=None, description="Override loop symbol")
     loop_venues: list[str] | None = Field(default=None, description="Override loop venues")
 
-    class Config:
-        extra = "ignore"
-
 
 class CancelAllPayload(BaseModel):
-    venue: str | None = Field(default=None, description="Limit cancel-all to a specific venue")
+    model_config = ConfigDict(extra="forbid")
 
-    class Config:
-        extra = "forbid"
+    venue: str | None = Field(default=None, description="Limit cancel-all to a specific venue")
 
 
 class CloseExposurePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     venue: str | None = Field(default=None, description="Venue of the position to flatten")
     symbol: str | None = Field(default=None, description="Symbol of the position to flatten")
-
-    class Config:
-        extra = "forbid"
 
 
 DEFAULT_EVENT_LIMIT = 100

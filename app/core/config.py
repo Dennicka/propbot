@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RateLimitConfig(BaseModel):
@@ -65,13 +64,13 @@ class DerivVenueConfig(BaseModel):
     position_mode: str = "hedge"
     routing: DerivRoutingConfig
 
-    @validator("position_mode")
+    @field_validator("position_mode")
     def validate_mode(cls, v: str) -> str:
         if v not in {"hedge", "one_way"}:
             raise ValueError("position_mode must be hedge or one_way")
         return v
 
-    @validator("margin_type")
+    @field_validator("margin_type")
     def validate_margin(cls, v: str) -> str:
         if v not in {"isolated", "cross"}:
             raise ValueError("margin_type must be isolated or cross")
@@ -96,7 +95,7 @@ class ArbitragePolicies(BaseModel):
     post_only_maker: bool = False
     partial_fill_policy: str = "reject_if_unhedged"
 
-    @validator("partial_fill_policy")
+    @field_validator("partial_fill_policy")
     def validate_policy(cls, v: str) -> str:
         allowed = {"reject_if_unhedged", "hedge_remaining"}
         if v not in allowed:
@@ -113,7 +112,7 @@ class ArbitrageConfig(BaseModel):
     post_only_maker: bool = False
     partial_fill_policy: str = "reject_if_unhedged"
 
-    @validator("partial_fill_policy")
+    @field_validator("partial_fill_policy")
     def validate_policy(cls, v: str) -> str:
         allowed = {"reject_if_unhedged", "hedge_remaining"}
         if v not in allowed:
@@ -130,7 +129,7 @@ class FeesConfig(BaseModel):
     source: str = "auto"
     manual: Dict[str, FeesManualConfig] = Field(default_factory=dict)
 
-    @validator("source")
+    @field_validator("source")
     def validate_source(cls, v: str) -> str:
         allowed = {"auto", "manual"}
         if v not in allowed:
@@ -194,11 +193,11 @@ def load_yaml(path: Path) -> dict:
 def load_app_config(path: str | Path) -> LoadedConfig:
     cfg_path = Path(path)
     payload = load_yaml(cfg_path)
-    app_cfg = AppConfig.parse_obj(payload)
+    app_cfg = AppConfig.model_validate(payload)
 
     thresholds: StatusThresholds | None = None
     if app_cfg.status_thresholds_file:
         thresh_path = (cfg_path.parent / app_cfg.status_thresholds_file).resolve()
-        thresholds = StatusThresholds.parse_obj(load_yaml(thresh_path))
+        thresholds = StatusThresholds.model_validate(load_yaml(thresh_path))
 
     return LoadedConfig(path=cfg_path, data=app_cfg, thresholds=thresholds)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, root_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..security import require_token
 from ..services import arbitrage
@@ -20,7 +20,7 @@ class PreviewRequest(BaseModel):
     notional: float | None = None
     slippage_bps: int | None = Field(default=None, alias="used_slippage_bps")
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
     def _alias_pair(cls, values: Dict[str, object]) -> Dict[str, object]:
         symbol = values.get("symbol")
         pair = values.get("pair")
