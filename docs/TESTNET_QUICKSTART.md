@@ -61,6 +61,13 @@ docker compose up -d           # pulls ghcr.io/$REPO/propbot:main by default
 docker compose logs -f app
 ```
 
+To start a specific published release without using Make targets, set the tag explicitly:
+
+```bash
+export REPO=my-org
+TAG=v0.1.0 docker compose -f docker-compose.yml up -d
+```
+
 Make targets accept the same variables and keep the long-running helpers available:
 
 ```bash
@@ -82,6 +89,20 @@ BUILD_LOCAL=1 make up
 BUILD_LOCAL=1 make down
 IMAGE=propbot:test make docker-build   # manual build with a custom tag
 ```
+
+### GitHub Actions smoke test
+
+The **Compose smoke test** workflow ensures the published image boots and serves `/docs` together with `/api/ui/state`. It runs automatically whenever a release is published and can be dispatched manually with an optional `tag` input (defaults to `latest`).
+
+### Release helper target
+
+Use the Make target to create and push annotated release tags:
+
+```bash
+make release TAG=0.1.1
+```
+
+Tags are pushed to `origin` by default; provide `REMOTE=...` to override the remote.
 
 Constraints:
 

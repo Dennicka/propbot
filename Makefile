@@ -1,10 +1,14 @@
-.PHONY: venv fmt lint typecheck test run kill alembic-init alembic-rev alembic-up dryrun.once dryrun.loop docker-login docker-build docker-push docker-run-image docker-release up down logs curl-health
+.PHONY: venv fmt lint typecheck test run kill \
+        alembic-init alembic-rev alembic-up dryrun.once dryrun.loop \
+        docker-login docker-build docker-push docker-run-image docker-release \
+        up down logs curl-health release
 
 VENV=.venv
 PY=$(VENV)/bin/python
 PIP=$(VENV)/bin/pip
 UVICORN=$(VENV)/bin/uvicorn
 PYTEST=$(VENV)/bin/pytest
+REMOTE ?= origin
 
 venv:
 	python3 -m venv $(VENV)
@@ -78,3 +82,18 @@ logs:
 
 curl-health:
         curl -i http://localhost:8000/healthz
+
+release:
+        @: $${TAG:?set TAG to the version number, e.g. make release TAG=0.1.1}
+        @if [ -n "$$(git status --porcelain)" ]; then \
+                echo "Working tree must be clean before tagging"; \
+                exit 1; \
+        fi
+        @if git rev-parse "v$(TAG)" >/dev/null 2>&1; then \
+                echo "Tag v$(TAG) already exists"; \
+                exit 1; \
+        fi
+        @echo "Tagging release v$(TAG)"
+        git tag -a v$(TAG) -m "Release v$(TAG)"
+        git push $(REMOTE) v$(TAG)
+        @echo "Release tag v$(TAG) pushed to $(REMOTE)."
