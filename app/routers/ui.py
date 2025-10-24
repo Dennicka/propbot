@@ -6,12 +6,11 @@ import io
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
-from ..security import require_token
 from ..services.loop import (
     cancel_all_orders,
     hold_loop,
@@ -152,7 +151,7 @@ async def secret_state() -> dict:
     return _secret_payload(state)
 
 
-@router.patch("/control", dependencies=[Depends(require_token)])
+@router.patch("/control")
 async def patch_control(payload: ControlPatchPayload) -> dict:
     state = get_state()
     environment = str(state.control.environment or "").lower()
@@ -390,7 +389,7 @@ async def orders_snapshot() -> dict:
     }
 
 
-@router.post("/hold", dependencies=[Depends(require_token)])
+@router.post("/hold")
 async def hold() -> dict:
     await hold_loop()
     set_mode("HOLD")
@@ -399,7 +398,7 @@ async def hold() -> dict:
     return {"mode": state.control.mode, "ts": _ts()}
 
 
-@router.post("/resume", dependencies=[Depends(require_token)])
+@router.post("/resume")
 async def resume() -> dict:
     state = get_state()
     if state.control.safe_mode:
@@ -411,14 +410,14 @@ async def resume() -> dict:
     return {"mode": state.control.mode, "ts": _ts()}
 
 
-@router.post("/stop", dependencies=[Depends(require_token)])
+@router.post("/stop")
 async def stop() -> dict:
     loop_state = await stop_loop()
     ledger.record_event(level="INFO", code="loop_stop_requested", payload={"status": loop_state.status})
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
-@router.post("/reset", dependencies=[Depends(require_token)])
+@router.post("/reset")
 async def reset() -> dict:
     await hold_loop()
     loop_state = await reset_loop()
@@ -441,17 +440,17 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     return {"result": result, "ts": _ts()}
 
 
-@router.post("/cancel_all", dependencies=[Depends(require_token)])
+@router.post("/cancel_all")
 async def cancel_all_ui(payload: CancelAllPayload | None = None) -> dict:
     return await _cancel_all_payload(payload)
 
 
-@router.post("/cancel-all", dependencies=[Depends(require_token)])
+@router.post("/cancel-all")
 async def cancel_all(payload: CancelAllPayload | None = None) -> dict:
     return await _cancel_all_payload(payload)
 
 
-@router.post("/kill", dependencies=[Depends(require_token)])
+@router.post("/kill")
 async def kill_switch() -> dict:
     state = get_state()
     state.control.safe_mode = True
@@ -468,7 +467,7 @@ async def kill_switch() -> dict:
     }
 
 
-@router.post("/close_exposure", dependencies=[Depends(require_token)])
+@router.post("/close_exposure")
 async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     state = get_state()
     runtime = state.derivatives

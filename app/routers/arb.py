@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..security import require_token
 from ..services import arbitrage
 from ..services.runtime import get_state, set_last_execution, set_last_plan
 
@@ -76,7 +75,7 @@ async def preview(request: PreviewRequest) -> dict:
     return plan_dict
 
 
-@router.post("/execute", dependencies=[Depends(require_token)])
+@router.post("/execute")
 async def execute(plan_body: PlanModel) -> dict:
     state = get_state()
     if state.control.safe_mode:
