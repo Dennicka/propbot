@@ -414,14 +414,14 @@ async def resume() -> dict:
     return {"mode": state.control.mode, "ts": _ts()}
 
 
-@router.post("/stop")
+@router.post("/stop", dependencies=[Depends(require_token)])
 async def stop() -> dict:
     loop_state = await stop_loop()
     ledger.record_event(level="INFO", code="loop_stop_requested", payload={"status": loop_state.status})
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
-@router.post("/reset")
+@router.post("/reset", dependencies=[Depends(require_token)])
 async def reset() -> dict:
     await hold_loop()
     loop_state = await reset_loop()
@@ -454,7 +454,7 @@ async def cancel_all(payload: CancelAllPayload | None = None) -> dict:
     return await _cancel_all_payload(payload)
 
 
-@router.post("/kill")
+@router.post("/kill", dependencies=[Depends(require_token)])
 async def kill_switch() -> dict:
     state = get_state()
     state.control.safe_mode = True
@@ -471,7 +471,7 @@ async def kill_switch() -> dict:
     }
 
 
-@router.post("/close_exposure")
+@router.post("/close_exposure", dependencies=[Depends(require_token)])
 async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     state = get_state()
     runtime = state.derivatives

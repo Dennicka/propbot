@@ -55,12 +55,10 @@ def _write_output(text: str, out_path: Path | None) -> None:
     out_path.write_text(text, encoding="utf-8")
 
 
-def _auth_headers(token: str | None, method: str) -> dict[str, str] | None:
+def _auth_headers(token: str | None) -> dict[str, str] | None:
     if not token:
         return None
-    if method.upper() in {"POST", "PATCH", "DELETE"}:
-        return {"Authorization": f"Bearer {token}"}
-    return None
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _events_command(args: argparse.Namespace) -> int:
@@ -75,7 +73,7 @@ def _events_command(args: argparse.Namespace) -> int:
         if value:
             params[key] = value
     url = _build_url(args.base_url, "/api/ui/events/export")
-    response = _perform_get(url, params, headers=_auth_headers(args.api_token, "GET"))
+    response = _perform_get(url, params, headers=_auth_headers(args.api_token))
     text = _to_text(response, args.format)
     _write_output(text, args.out)
     if args.out:
@@ -86,7 +84,7 @@ def _events_command(args: argparse.Namespace) -> int:
 def _portfolio_command(args: argparse.Namespace) -> int:
     params = {"format": args.format}
     url = _build_url(args.base_url, "/api/ui/portfolio/export")
-    response = _perform_get(url, params, headers=_auth_headers(args.api_token, "GET"))
+    response = _perform_get(url, params, headers=_auth_headers(args.api_token))
     text = _to_text(response, args.format)
     _write_output(text, args.out)
     if args.out:
@@ -100,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--api-token",
         default=None,
-        help="Bearer token for mutating API calls (falls back to API_TOKEN env)",
+        help="Bearer token for API calls (falls back to PROPBOT_API_TOKEN or API_TOKEN env)",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -130,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "api_token", None):
-        env_token = os.getenv("API_TOKEN")
+        env_token = os.getenv("PROPBOT_API_TOKEN") or os.getenv("API_TOKEN")
         if env_token:
             args.api_token = env_token
     try:

@@ -16,12 +16,14 @@ def is_auth_enabled() -> bool:
     return _truthy(os.getenv("AUTH_ENABLED"))
 
 
+def _expected_token() -> str | None:
+    return os.getenv("API_TOKEN")
+
+
 def require_token(request: Request) -> None:
-    if request.method in {"GET", "HEAD", "OPTIONS"}:
-        return
     if not is_auth_enabled():
         return
-    expected_token = os.getenv("API_TOKEN")
+    expected_token = _expected_token()
     if not expected_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     auth_header = request.headers.get("Authorization")
