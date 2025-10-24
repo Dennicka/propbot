@@ -22,3 +22,9 @@ def client() -> TestClient:
         # event loop already running in this thread; skip explicit hold
         pass
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_auth_env(monkeypatch):
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+    monkeypatch.delenv("API_TOKEN", raising=False)

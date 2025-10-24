@@ -6,11 +6,12 @@ import io
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, conint, confloat
 
 from .. import ledger
+from ..security import require_token
 from ..services.loop import (
     cancel_all_orders,
     hold_loop,
@@ -154,7 +155,7 @@ async def secret_state() -> dict:
     return _secret_payload(state)
 
 
-@router.patch("/control")
+@router.patch("/control", dependencies=[Depends(require_token)])
 async def patch_control(payload: ControlPatchPayload) -> dict:
     state = get_state()
     environment = str(state.control.environment or "").lower()
@@ -392,7 +393,7 @@ async def orders_snapshot() -> dict:
     }
 
 
-@router.post("/hold")
+@router.post("/hold", dependencies=[Depends(require_token)])
 async def hold() -> dict:
     await hold_loop()
     set_mode("HOLD")
@@ -401,7 +402,7 @@ async def hold() -> dict:
     return {"mode": state.control.mode, "ts": _ts()}
 
 
-@router.post("/resume")
+@router.post("/resume", dependencies=[Depends(require_token)])
 async def resume() -> dict:
     state = get_state()
     if state.control.safe_mode:
@@ -443,12 +444,12 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     return {"result": result, "ts": _ts()}
 
 
-@router.post("/cancel_all")
+@router.post("/cancel_all", dependencies=[Depends(require_token)])
 async def cancel_all_ui(payload: CancelAllPayload | None = None) -> dict:
     return await _cancel_all_payload(payload)
 
 
-@router.post("/cancel-all")
+@router.post("/cancel-all", dependencies=[Depends(require_token)])
 async def cancel_all(payload: CancelAllPayload | None = None) -> dict:
     return await _cancel_all_payload(payload)
 

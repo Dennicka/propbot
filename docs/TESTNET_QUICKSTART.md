@@ -19,6 +19,36 @@ curl -X PATCH http://localhost:8000/api/ui/control \
       }'
 ```
 
+When mutating endpoints need to be locked down, export a shared token before starting the API:
+
+```bash
+export AUTH_ENABLED=true
+export API_TOKEN="super-secret-token"
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Every `POST`/`PATCH` request must then include the bearer header:
+
+```bash
+curl -X PATCH http://localhost:8000/api/ui/control \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "order_notional_usdt": 150,
+        "min_spread_bps": 1.5,
+        "max_slippage_bps": 8,
+        "loop_pair": "ETHUSDT",
+        "loop_venues": ["binance-um", "okx-perp"],
+        "dry_run_only": true
+      }'
+```
+
+The helper CLI accepts the same token via `--api-token` (falls back to `API_TOKEN`) and forwards it to mutating endpoints when those commands are added:
+
+```bash
+python -m api_cli events --base-url http://localhost:8000 --api-token "$API_TOKEN"
+```
+
 Constraints:
 
 - Available only when `ENV`/`PROFILE` is `paper` or `testnet`.

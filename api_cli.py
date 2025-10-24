@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -20,9 +21,14 @@ def _build_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}{path}" if path.startswith('/') else f"{base_url.rstrip('/')}/{path}"
 
 
-def _perform_get(url: str, params: dict[str, Any]) -> requests.Response:
+def _perform_get(
+    url: str, params: dict[str, Any], headers: dict[str, str] | None = None
+) -> requests.Response:
     try:
-        response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        request_kwargs: dict[str, Any] = {"params": params, "timeout": REQUEST_TIMEOUT}
+        if headers:
+            request_kwargs["headers"] = headers
+        response = requests.get(url, **request_kwargs)
     except requests.RequestException as exc:  # pragma: no cover - defensive
         raise CLIError(f"Request failed: {exc}") from exc
     if response.status_code >= 400:
@@ -49,6 +55,14 @@ def _write_output(text: str, out_path: Path | None) -> None:
     out_path.write_text(text, encoding="utf-8")
 
 
+def _auth_headers(token: str | None, method: str) -> dict[str, str] | None:
+    if not token:
+        return None
+    if method.upper() in {"POST", "PATCH", "DELETE"}:
+        return {"Authorization": f"Bearer {token}"}
+    return None
+
+
 def _events_command(args: argparse.Namespace) -> int:
     params: dict[str, Any] = {
         "format": args.format,
@@ -61,7 +75,7 @@ def _events_command(args: argparse.Namespace) -> int:
         if value:
             params[key] = value
     url = _build_url(args.base_url, "/api/ui/events/export")
-    response = _perform_get(url, params)
+    response = _perform_get(url, params, headers=_auth_headers(args.api_token, "GET"))
     text = _to_text(response, args.format)
     _write_output(text, args.out)
     if args.out:
@@ -72,7 +86,7 @@ def _events_command(args: argparse.Namespace) -> int:
 def _portfolio_command(args: argparse.Namespace) -> int:
     params = {"format": args.format}
     url = _build_url(args.base_url, "/api/ui/portfolio/export")
-    response = _perform_get(url, params)
+    response = _perform_get(url, params, headers=_auth_headers(args.api_token, "GET"))
     text = _to_text(response, args.format)
     _write_output(text, args.out)
     if args.out:
@@ -83,6 +97,11 @@ def _portfolio_command(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PropBot API export CLI")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Base URL of the PropBot API")
+    parser.add_argument(
+        "--api-token",
+        default=None,
+        help="Bearer token for mutating API calls (falls back to API_TOKEN env)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     events_parser = subparsers.add_parser("events", help="Export UI events")
@@ -110,6 +129,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not getattr(args, "api_token", None):
+        env_token = os.getenv("API_TOKEN")
+        if env_token:
+            args.api_token = env_token
     try:
         func: Callable[[argparse.Namespace], int] = getattr(args, "func")
     except AttributeError as exc:  # pragma: no cover - defensive
