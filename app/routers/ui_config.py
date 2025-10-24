@@ -31,7 +31,7 @@ def validate_config(payload: ConfigPayload) -> dict:
         data = yaml.safe_load(payload.yaml_text)
         if not isinstance(data, dict):
             raise ValueError("root must be a mapping")
-        AppConfig.parse_obj(data)
+        AppConfig.model_validate(data)
         return {"ok": True, "msg": "valid"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid config: {exc}")
