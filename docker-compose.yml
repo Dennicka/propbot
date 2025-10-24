@@ -2,8 +2,11 @@ version: "3.9"
 
 services:
   app:
-    build: .
-    image: propbot:local
+    image: ghcr.io/${REPO:?err}/propbot:${TAG:-main}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: ${PULL_POLICY:-always}
     container_name: propbot_app
     env_file: .env
     ports:

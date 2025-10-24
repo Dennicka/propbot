@@ -1,4 +1,4 @@
-.PHONY: venv fmt lint typecheck test run kill alembic-init alembic-rev alembic-up dryrun.once dryrun.loop docker-build up down logs curl-health
+.PHONY: venv fmt lint typecheck test run kill alembic-init alembic-rev alembic-up dryrun.once dryrun.loop docker-login docker-build docker-push docker-run-image docker-release up down logs curl-health
 
 VENV=.venv
 PY=$(VENV)/bin/python
@@ -46,11 +46,29 @@ alembic-rev:
 alembic-up:
         $(PY) -m alembic upgrade head
 
+docker-login:
+        @: $${GHCR_USERNAME:?set GHCR_USERNAME for docker login}
+        @: $${GHCR_TOKEN:?set GHCR_TOKEN for docker login}
+        echo "$$GHCR_TOKEN" | docker login ghcr.io -u "$$GHCR_USERNAME" --password-stdin
+
 docker-build:
-        docker build -t propbot:local .
+        docker build -t $${IMAGE:-propbot:local} .
+
+docker-push:
+        docker push $${IMAGE:?set IMAGE to ghcr.io/<owner>/propbot:<tag>}
+
+docker-run-image:
+        docker run --rm -p 8000:8000 $${IMAGE:-ghcr.io/${REPO:?set REPO to your GitHub org}/propbot:${TAG:-main}}
+
+docker-release:
+        docker buildx build --platform linux/amd64,linux/arm64 -t $${IMAGE:?set IMAGE to ghcr.io/<owner>/propbot:<tag>} --push .
 
 up:
-        docker compose up -d
+        if [ "$(BUILD_LOCAL)" = "1" ]; then \
+          IMAGE=$${IMAGE:-propbot:local} PULL_POLICY=never docker compose up -d --build; \
+        else \
+          docker compose up -d; \
+        fi
 
 down:
         docker compose down
