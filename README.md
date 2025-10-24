@@ -132,3 +132,11 @@ make dryrun.loop  # непрерывный dry-run
 - `docs/DERIV_SETUP_GUIDE.md` — обновлённая инструкция по настройке тестнета и проверке SAFE_MODE.
 - `docs/TESTNET_QUICKSTART_RU.md` — быстрый запуск Binance UM / OKX testnet с флагом `ENABLE_PLACE_TEST_ORDERS`.
 - `CODEX_TASK_TEST_BOT_MVP.md` — исходная постановка задания.
+
+## 9. Обновление до Pydantic v2
+
+- Вся валидация и сериализация переводится на Pydantic v2. Используйте `model_dump()` вместо устаревшего `dict()` и `model_validate()`/`TypeAdapter` вместо `parse_obj`/`parse_raw`.
+- Конфигурация моделей теперь задаётся через `model_config = ConfigDict(...)`; параметры `class Config:` и `orm_mode` более не поддерживаются.
+- Поля с `Field(..., validate_default=True)` требуют явного флага `validate_default=True`, если важно проверять дефолтные значения.
+- Проверьте кастомные валидаторы: декораторы `@model_validator` и `@field_validator` заменяют `@root_validator`/`@validator` и принимают другие сигнатуры.
+- Используйте `.model_dump()`/`.model_dump_json()` в местах сериализации для API/UI; старые методы вызовут предупреждения или ошибки.
