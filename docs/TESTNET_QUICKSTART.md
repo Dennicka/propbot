@@ -49,6 +49,18 @@ The helper CLI accepts the same token via `--api-token` (falls back to `API_TOKE
 python -m api_cli events --base-url http://localhost:8000 --api-token "$API_TOKEN"
 ```
 
+## Deploy with Docker/Compose
+
+```bash
+make docker-build   # build propbot:local image
+make up             # start the service in detached mode
+make curl-health    # GET /healthz (expects HTTP 200)
+make logs           # follow container logs
+make down           # stop and remove the compose stack
+```
+
+The local `./data` directory is mounted into the container as `/app/data`, so files such as `runtime_state.json` and `ledger.db` persist across restarts.
+
 Constraints:
 
 - Available only when `ENV`/`PROFILE` is `paper` or `testnet`.
