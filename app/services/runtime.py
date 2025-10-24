@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
+from pathlib import Path
 from typing import Dict, List, Mapping, Tuple
 
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
@@ -16,6 +18,13 @@ DEFAULT_CONFIG_PATHS = {
     "testnet": "configs/config.testnet.yaml",
     "live": "configs/config.live.yaml",
 }
+
+
+def _runtime_state_path() -> Path:
+    override = os.environ.get("RUNTIME_STATE_PATH")
+    if override:
+        return Path(override)
+    return Path("data/runtime_state.json")
 
 
 def _resolve_config_path() -> str:
@@ -300,6 +309,17 @@ class RuntimeState:
     risk: RiskState = field(default_factory=RiskState)
 
 
+def _sync_loop_from_control(state: RuntimeState) -> None:
+    loop_config = state.loop_config
+    loop_config.pair = state.control.loop_pair
+    loop_config.venues = list(state.control.loop_venues)
+    loop_config.notional_usdt = state.control.order_notional_usdt
+    loop_state = state.loop
+    loop_state.pair = state.control.loop_pair
+    loop_state.venues = list(state.control.loop_venues)
+    loop_state.notional_usdt = state.control.order_notional_usdt
+
+
 def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
     guards_cfg: GuardsConfig | None = cfg.data.guards
     defaults = {
@@ -416,7 +436,7 @@ def _bootstrap_runtime() -> RuntimeState:
             max_daily_loss_usdt=_env_optional_float("MAX_DAILY_LOSS_USDT"),
         )
     )
-    return RuntimeState(
+    state = RuntimeState(
         config=loaded,
         guards=guards,
         control=control,
@@ -434,10 +454,10 @@ def _bootstrap_runtime() -> RuntimeState:
         open_orders=[],
         risk=risk_state,
     )
+    _sync_loop_from_control(state)
+    return state
 
 
-_STATE = _bootstrap_runtime()
-_STATE_LOCK = threading.RLock()
 
 
 def get_state() -> RuntimeState:
@@ -461,20 +481,18 @@ def get_loop_state() -> LoopState:
 
 
 def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float) -> LoopState:
+    persist_snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
         state = get_state()
         state.control.loop_pair = pair.upper() if pair else None
         state.control.loop_venues = [str(entry) for entry in venues]
         state.control.order_notional_usdt = float(notional_usdt)
-        loop_config = state.loop_config
-        loop_config.pair = state.control.loop_pair
-        loop_config.venues = list(state.control.loop_venues)
-        loop_config.notional_usdt = state.control.order_notional_usdt
-        loop_state = get_loop_state()
-        loop_state.pair = state.control.loop_pair
-        loop_state.venues = list(state.control.loop_venues)
-        loop_state.notional_usdt = state.control.order_notional_usdt
-        return loop_state
+        _sync_loop_from_control(state)
+        persist_snapshot = asdict(state.control)
+        loop_state = state.loop
+    if persist_snapshot is not None:
+        _persist_control_snapshot(persist_snapshot)
+    return loop_state
 
 
 def update_loop_summary(summary: Dict[str, object]) -> None:
@@ -559,6 +577,9 @@ def reset_for_tests() -> None:
     global _STATE
     with _STATE_LOCK:
         _STATE = _bootstrap_runtime()
+        _load_persisted_control(_STATE.control)
+        _sync_loop_from_control(_STATE)
+        _STATE.control.safe_mode = True
         _STATE.control.dry_run = False
     globals()["_STATE"] = _STATE
 
@@ -581,6 +602,23 @@ def _normalise_loop_inputs(
 
 
 def apply_control_patch(patch: Mapping[str, object]) -> Tuple[ControlState, Dict[str, object]]:
+    normalised_patch = _normalise_control_patch(patch)
+    updates: Dict[str, object] = {}
+    persist_snapshot: Dict[str, object] | None = None
+    with _STATE_LOCK:
+        control = _STATE.control
+        updates = _apply_control_updates(control, normalised_patch)
+        if updates:
+            _sync_loop_from_control(_STATE)
+            persist_snapshot = asdict(control)
+    if persist_snapshot is not None:
+        _persist_control_snapshot(persist_snapshot)
+    return _STATE.control, updates
+
+
+def _normalise_control_patch(patch: Mapping[str, object]) -> Dict[str, object]:
+    if not isinstance(patch, Mapping):
+        raise ValueError("control patch payload must be a mapping")
     allowed_fields = {
         "min_spread_bps",
         "max_slippage_bps",
@@ -592,73 +630,149 @@ def apply_control_patch(patch: Mapping[str, object]) -> Tuple[ControlState, Dict
         "loop_pair",
         "loop_venues",
     }
-    updates: Dict[str, object] = {}
-    with _STATE_LOCK:
-        control = _STATE.control
-        for field, value in patch.items():
-            if field not in allowed_fields:
-                continue
-            if field == "dry_run_only":
-                normalised = bool(value)
-                if control.dry_run != normalised:
-                    control.dry_run = normalised
-                    updates[field] = normalised
-                continue
-            if field == "safe_mode":
-                normalised = bool(value)
-                if control.safe_mode != normalised:
-                    control.safe_mode = normalised
-                    updates[field] = normalised
-                continue
-            if field == "two_man_rule":
-                normalised = bool(value)
-                if control.two_man_rule != normalised:
-                    control.two_man_rule = normalised
-                    updates[field] = normalised
-                continue
-            if field == "auto_loop":
-                normalised = bool(value)
-                if control.auto_loop != normalised:
-                    control.auto_loop = normalised
-                    updates[field] = normalised
-                continue
-            if field == "max_slippage_bps":
-                normalised = int(value)
-                if control.max_slippage_bps != normalised:
-                    control.max_slippage_bps = normalised
-                    updates[field] = normalised
-                continue
-            if field == "order_notional_usdt":
-                normalised = float(value)
-                if control.order_notional_usdt != normalised:
-                    control.order_notional_usdt = normalised
-                    updates[field] = normalised
-                continue
-            if field == "min_spread_bps":
-                normalised = float(value)
-                if control.min_spread_bps != normalised:
-                    control.min_spread_bps = normalised
-                    updates[field] = normalised
-                continue
-            if field == "loop_pair":
-                pair, _, _ = _normalise_loop_inputs(loop_pair=str(value))
-                if control.loop_pair != pair:
-                    control.loop_pair = pair
-                    updates[field] = pair
-                continue
-            if field == "loop_venues":
-                _, venues, _ = _normalise_loop_inputs(loop_venues=list(value) if value is not None else [])
-                if control.loop_venues != venues:
-                    control.loop_venues = venues
-                    updates[field] = venues
-                continue
-        if {"loop_pair", "loop_venues", "order_notional_usdt"} & updates.keys():
-            loop_config = _STATE.loop_config
-            loop_config.pair = control.loop_pair
-            loop_config.venues = list(control.loop_venues)
-            loop_config.notional_usdt = control.order_notional_usdt
-            loop_state = _STATE.loop
-            loop_state.pair = control.loop_pair
-            loop_state.venues = list(control.loop_venues)
-            loop_state.notional_usdt = control.order_notional_usdt
-        return control, updates
+    normalised: Dict[str, object] = {}
+    for field, value in patch.items():
+        if field not in allowed_fields or value is None:
+            continue
+        if field in {"safe_mode", "dry_run_only", "two_man_rule", "auto_loop"}:
+            normalised[field] = _coerce_bool(field, value)
+            continue
+        if field == "max_slippage_bps":
+            normalised[field] = _coerce_int(field, value, minimum=0, maximum=50)
+            continue
+        if field == "min_spread_bps":
+            normalised[field] = _coerce_float(field, value, minimum=0.0, maximum=100.0)
+            continue
+        if field == "order_notional_usdt":
+            normalised[field] = _coerce_float(field, value, minimum=1.0, maximum=1_000_000.0)
+            continue
+        if field == "loop_pair":
+            normalised[field] = _coerce_loop_pair(value)
+            continue
+        if field == "loop_venues":
+            normalised[field] = _coerce_loop_venues(value)
+            continue
+    return normalised
+
+
+def _coerce_bool(field: str, value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value in {0, 1}:
+            return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError(f"invalid value for {field}")
+
+
+def _coerce_float(field: str, value: object, *, minimum: float | None = None, maximum: float | None = None) -> float:
+    numeric: float
+    if isinstance(value, bool):
+        raise ValueError(f"invalid value for {field}")
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError(f"invalid value for {field}")
+        try:
+            numeric = float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"invalid value for {field}") from exc
+    else:
+        raise ValueError(f"invalid value for {field}")
+    if minimum is not None and numeric < minimum:
+        raise ValueError(f"{field} must be >= {minimum}")
+    if maximum is not None and numeric > maximum:
+        raise ValueError(f"{field} must be <= {maximum}")
+    return numeric
+
+
+def _coerce_int(field: str, value: object, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    numeric = _coerce_float(field, value, minimum=float(minimum) if minimum is not None else None, maximum=float(maximum) if maximum is not None else None)
+    if abs(numeric - round(numeric)) > 1e-9:
+        raise ValueError(f"{field} must be an integer")
+    integer = int(round(numeric))
+    if minimum is not None and integer < minimum:
+        raise ValueError(f"{field} must be >= {minimum}")
+    if maximum is not None and integer > maximum:
+        raise ValueError(f"{field} must be <= {maximum}")
+    return integer
+
+
+def _coerce_loop_pair(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().upper()
+        return cleaned or None
+    raise ValueError("invalid value for loop_pair")
+
+
+def _coerce_loop_venues(value: object) -> List[str]:
+    venues: List[str] = []
+    if isinstance(value, str):
+        venues = [entry.strip() for entry in value.split(",") if entry.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        venues = [str(entry).strip() for entry in value if str(entry).strip()]
+    else:
+        raise ValueError("invalid value for loop_venues")
+    return venues
+
+
+def _apply_control_updates(control: ControlState, updates: Mapping[str, object]) -> Dict[str, object]:
+    changes: Dict[str, object] = {}
+    for field, value in updates.items():
+        target_field = "dry_run" if field == "dry_run_only" else field
+        current = getattr(control, target_field, None)
+        if current != value:
+            setattr(control, target_field, value)
+            changes[field] = value
+    return changes
+
+
+def _persist_control_snapshot(snapshot: Mapping[str, object]) -> None:
+    path = _runtime_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        with path.open("w", encoding="utf-8") as handle:
+            json.dump({"control": snapshot}, handle, indent=2, sort_keys=True)
+    except OSError:
+        pass
+
+
+def _load_persisted_control(control: ControlState) -> None:
+    path = _runtime_state_path()
+    if not path.exists():
+        return
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    try:
+        payload = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return
+    control_payload = payload.get("control") if isinstance(payload, Mapping) else None
+    if not isinstance(control_payload, Mapping):
+        return
+    try:
+        updates = _normalise_control_patch(control_payload)
+    except ValueError:
+        return
+    for field, value in updates.items():
+        setattr(control, field, value)
+
+
+_STATE = _bootstrap_runtime()
+_load_persisted_control(_STATE.control)
+_sync_loop_from_control(_STATE)
+_STATE_LOCK = threading.RLock()

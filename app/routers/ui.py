@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, conint, confloat
 
 from .. import ledger
@@ -70,6 +70,20 @@ class CloseExposurePayload(BaseModel):
         extra = "forbid"
 
 
+DEFAULT_EVENT_LIMIT = 100
+
+
+def _event_page(*, offset: int = 0, limit: int = DEFAULT_EVENT_LIMIT) -> dict:
+    items = ledger.fetch_events(limit=limit, offset=offset)
+    return {
+        "items": items,
+        "offset": offset,
+        "limit": limit,
+        "count": len(items),
+        "next_offset": offset + len(items),
+    }
+
+
 @router.get("/state")
 async def runtime_state() -> dict:
     state = get_state()
@@ -84,13 +98,14 @@ async def runtime_state() -> dict:
     risk_blocked = bool(risk_state.breaches)
     risk_reasons = [breach.detail or breach.limit for breach in risk_state.breaches]
     dryrun = state.dryrun
+    control_snapshot = control_as_dict()
     return {
         "mode": state.control.mode,
         "flags": state.control.flags,
         "safe_mode": state.control.safe_mode,
         "dry_run": state.control.dry_run,
         "two_man_rule": state.control.two_man_rule,
-        "control": control_as_dict(),
+        "control": control_snapshot,
         "incidents": list(state.incidents),
         "metrics": {
             "counters": dict(state.metrics.counters),
@@ -104,7 +119,7 @@ async def runtime_state() -> dict:
         "recon_status": {"status": "ok", "last_run_ts": _ts()},
         "last_plan": dryrun.last_plan if dryrun else None,
         "last_execution": dryrun.last_execution if dryrun else None,
-        "events": ledger.fetch_events(20),
+        "events": _event_page(limit=DEFAULT_EVENT_LIMIT, offset=0),
         "loop": loop_snapshot(),
         "loop_config": state.loop_config.as_dict(),
         "risk": risk_payload,
@@ -153,10 +168,18 @@ async def patch_control(payload: ControlPatchPayload) -> dict:
             detail="SAFE_MODE must be enabled to modify control",
         )
     payload_dict = payload.model_dump(exclude_unset=True)
-    control, changes = apply_control_patch(payload_dict)
+    try:
+        control, changes = apply_control_patch(payload_dict)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     if changes:
         ledger.record_event(level="INFO", code="control_patch", payload={"changes": changes})
     return {"control": control_as_dict(), "changes": changes}
+
+
+@router.get("/events")
+async def events(offset: int = Query(0, ge=0), limit: int = Query(DEFAULT_EVENT_LIMIT, ge=1, le=500)) -> dict:
+    return _event_page(offset=offset, limit=limit)
 
 
 @router.post("/secret")
