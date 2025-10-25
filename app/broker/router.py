@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from typing import TYPE_CHECKING, Dict, List
 
 from .base import Broker
+from .binance import BinanceTestnetBroker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger
@@ -21,6 +23,9 @@ ORDER_TIMEOUT_SEC = 2.0
 MAX_ORDER_ATTEMPTS = 3
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 class ExecutionRouter:
     def __init__(self) -> None:
         state = get_state()
@@ -28,14 +33,21 @@ class ExecutionRouter:
         self.dry_run_only = state.control.dry_run
         self.two_man_rule = state.control.two_man_rule
         self.market_data = get_market_data()
+        environment = str(state.control.environment or state.control.deployment_mode or "paper").lower()
+        if environment in {"testnet", "live"}:
+            binance_broker: Broker = BinanceTestnetBroker(
+                venue="binance-um",
+                safe_mode=self.safe_mode,
+                dry_run=self.dry_run_only,
+            )
+            if environment == "live":
+                LOGGER.warning("PROFILE=live uses Binance testnet broker; TODO replace with live venue")
+        else:
+            binance_broker = PaperBroker("binance-um")
+
         self._brokers: Dict[str, Broker] = {
             "paper": PaperBroker("paper"),
-            "binance-um": TestnetBroker(
-                "binance-um",
-                "binance_um",
-                safe_mode=self.safe_mode or self.dry_run_only,
-                required_env=("BINANCE_UM_API_KEY_TESTNET", "BINANCE_UM_API_SECRET_TESTNET"),
-            ),
+            "binance-um": binance_broker,
             "okx-perp": TestnetBroker(
                 "okx-perp",
                 "okx_perp",

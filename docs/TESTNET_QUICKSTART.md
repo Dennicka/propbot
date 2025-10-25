@@ -2,6 +2,28 @@
 
 This addendum highlights runtime controls that can now be updated without restarts while running the dashboard against paper or testnet environments.
 
+## Binance Futures Testnet bootstrap
+
+1. Скопируйте `.env.example` в `.env` и заполните `BINANCE_UM_API_KEY_TESTNET`, `BINANCE_UM_API_SECRET_TESTNET` и при необходимости `BINANCE_UM_BASE_TESTNET`.
+2. Запустите сервис в тестнет-режиме (SAFE_MODE=true блокирует реальные ордера, но даёт читать баланс/позиции):
+
+   ```bash
+   PROFILE=testnet SAFE_MODE=true AUTH_ENABLED=true API_TOKEN=devtoken123 /Users/denis/propbot/.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+   ```
+
+3. Откройте `http://localhost:8000` и убедитесь, что разделы **Balances** и **Exposures** показывают данные Binance Testnet.
+
+4. Для вызова защищённых эндпоинтов используйте bearer-токен. Пример dry-run запроса (SAFE_MODE=true вернёт сообщение о пропуске ордера):
+
+   ```bash
+   curl -X POST http://localhost:8000/api/arb/execute \
+     -H "Authorization: Bearer devtoken123" \
+     -H "Content-Type: application/json" \
+     --data '{"symbol":"BTCUSDT","side":"BUY","qty":0.001}'
+   ```
+
+   Если отключить `SAFE_MODE` и `DRY_RUN_ONLY`, ответ будет содержать результат реального размещения на тестнете.
+
 ## Runtime control patch API
 
 The dashboard issues `PATCH /api/ui/control` requests when the **Edit Config** modal is submitted. You can also invoke it directly:

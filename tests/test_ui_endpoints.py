@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app import ledger
+from app.broker.binance import BinanceTestnetBroker
 from app.services import runtime
 from app.services.runtime import get_state
 
@@ -193,6 +194,51 @@ def test_ui_state_and_controls(client):
     # stop background loop to avoid leaking tasks between tests
     runtime_state.control.environment = "paper"
     client.post("/api/ui/hold")
+
+
+def test_ui_state_uses_binance_account_when_testnet(client, monkeypatch):
+    runtime.reset_for_tests()
+    ledger.reset()
+    state = get_state()
+    state.control.environment = "testnet"
+    state.control.safe_mode = True
+    state.control.dry_run = False
+
+    sample_state = {
+        "balances": [
+            {"venue": "binance-um", "asset": "USDT", "free": 950.0, "total": 1000.0},
+        ],
+        "positions": [
+            {
+                "venue": "binance-um",
+                "venue_type": "binance-testnet",
+                "symbol": "BTCUSDT",
+                "qty": 0.01,
+                "avg_entry": 25000.0,
+                "mark_price": 25100.0,
+                "notional": 251.0,
+            }
+        ],
+    }
+
+    async def fake_state(self):  # pragma: no cover - deterministic stub
+        return sample_state
+
+    async def fake_fills(self, since=None):  # pragma: no cover - deterministic stub
+        return []
+
+    monkeypatch.setattr(BinanceTestnetBroker, "get_account_state", fake_state)
+    monkeypatch.setattr(BinanceTestnetBroker, "get_fills", fake_fills)
+
+    response = client.get("/api/ui/state")
+    assert response.status_code == 200
+    payload = response.json()
+
+    balances = payload["portfolio"]["balances"]
+    assert any(balance["asset"] == "USDT" and balance["total"] == pytest.approx(1000.0) for balance in balances)
+    exposures = payload["exposures"]
+    assert any(entry["symbol"].upper() == "BTCUSDT" for entry in exposures)
+    assert any(entry.get("venue_type") == "binance-testnet" for entry in exposures)
 
 
 def test_kill_switch_cancels_orders(client):
