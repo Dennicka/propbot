@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Dict, List
 
 from .base import Broker
-from .binance import BinanceTestnetBroker
+from .binance import BinanceLiveBroker, BinanceTestnetBroker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger
@@ -34,14 +34,18 @@ class ExecutionRouter:
         self.two_man_rule = state.control.two_man_rule
         self.market_data = get_market_data()
         environment = str(state.control.environment or state.control.deployment_mode or "paper").lower()
-        if environment in {"testnet", "live"}:
-            binance_broker: Broker = BinanceTestnetBroker(
+        if environment == "testnet":
+            binance_broker = BinanceTestnetBroker(
                 venue="binance-um",
                 safe_mode=self.safe_mode,
                 dry_run=self.dry_run_only,
             )
-            if environment == "live":
-                LOGGER.warning("PROFILE=live uses Binance testnet broker; TODO replace with live venue")
+        elif environment == "live":
+            binance_broker = BinanceLiveBroker(
+                venue="binance-um",
+                safe_mode=self.safe_mode,
+                dry_run=self.dry_run_only,
+            )
         else:
             binance_broker = PaperBroker("binance-um")
 

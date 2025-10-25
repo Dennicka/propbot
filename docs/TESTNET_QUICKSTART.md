@@ -4,8 +4,17 @@ This addendum highlights runtime controls that can now be updated without restar
 
 ## Binance Futures Testnet bootstrap
 
-1. Скопируйте `.env.example` в `.env` и заполните `BINANCE_UM_API_KEY_TESTNET`, `BINANCE_UM_API_SECRET_TESTNET` и при необходимости `BINANCE_UM_BASE_TESTNET`.
-2. Запустите сервис в тестнет-режиме (SAFE_MODE=true блокирует реальные ордера, но даёт читать баланс/позиции):
+1. Скопируйте `.env.example` в `.env` и задайте переменные:
+
+   ```dotenv
+   PROFILE=testnet
+   SAFE_MODE=true
+   BINANCE_UM_API_KEY_TESTNET=your_testnet_key
+   BINANCE_UM_API_SECRET_TESTNET=your_testnet_secret
+   BINANCE_UM_BASE_TESTNET=https://testnet.binancefuture.com
+   ```
+
+2. Запустите сервис в тестнет-режиме (SAFE_MODE=true блокирует реальные ордера, но позволяет читать баланс/позиции):
 
    ```bash
    PROFILE=testnet SAFE_MODE=true AUTH_ENABLED=true API_TOKEN=devtoken123 /Users/denis/propbot/.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -22,7 +31,7 @@ This addendum highlights runtime controls that can now be updated without restar
      --data '{"symbol":"BTCUSDT","side":"BUY","qty":0.001}'
    ```
 
-   Если отключить `SAFE_MODE` и `DRY_RUN_ONLY`, ответ будет содержать результат реального размещения на тестнете.
+   Если отключить `SAFE_MODE`, снять `DRY_RUN_ONLY` и выставить `ENABLE_PLACE_TEST_ORDERS=1`, ответ будет содержать результат реального размещения на тестнете.
 
 ## Runtime control patch API
 
