@@ -28,6 +28,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare compose environment
+        run: |
+          cp .env.example .env
+          mkdir -p data
+
       - name: Pull compose stack
         run: |
           echo "Using image tag: ${COMPOSE_TAG}"

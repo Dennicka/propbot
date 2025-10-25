@@ -18,27 +18,35 @@ cp .env.example .env
 
 ### Локальный запуск без Docker (macOS Monterey)
 
-Ниже приведён точный набор команд, которые можно скопировать и выполнить на рабочей машине:
+Ниже приведён точный набор команд, которые можно скопировать и выполнить на рабочей машине (абсолютные пути оставлены намеренно).
+Этот сценарий подходит для разработки на старых Mac без Docker Desktop; в продакшене используйте docker-compose.
 
 ```bash
-/usr/bin/env python3 -m venv /Users/denis/propbot/.venv
+/usr/bin/python3 -m venv /Users/denis/propbot/.venv
 source /Users/denis/propbot/.venv/bin/activate
-python3 -m pip install -U pip wheel
-python3 -m pip install -r /Users/denis/propbot/requirements.txt
-SAFE_MODE=true PROFILE=paper AUTH_ENABLED=true API_TOKEN=devtoken123 /Users/denis/propbot/.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+/Users/denis/propbot/.venv/bin/pip install -U pip wheel
+/Users/denis/propbot/.venv/bin/pip install -r /Users/denis/propbot/requirements.txt
+cp /Users/denis/propbot/.env.example /Users/denis/propbot/.env
+PROFILE=paper SAFE_MODE=true AUTH_ENABLED=true API_TOKEN=mydevtoken123 \
+    /Users/denis/propbot/.venv/bin/python -m uvicorn app.main:app \
+        --host 127.0.0.1 --port 8000 --reload
 ```
 
-После запуска веб-интерфейс доступен на `http://127.0.0.1:8000/`, а документация — на `http://127.0.0.1:8000/docs`.
+После запуска веб-интерфейс доступен на `http://127.0.0.1:8000/`, а документация — на `http://127.0.0.1:8000/docs` (раздел `/docs`).
 
-### Переменные окружения и режимы
+### Переменные окружения и профили
 
-- `SAFE_MODE=true` гарантирует, что любые мутационные операции (создание/отмена ордеров) будут пропущены, даже если подключены реальные биржевые коннекторы. При включённом SAFE_MODE можно безопасно просматривать баланс/позиции тестнета.
-- `PROFILE` управляет выбором брокера и конфигурации: `paper` — симулятор, `testnet` — Binance Futures Testnet, `live` временно использует тот же коннектор, но в коде помечен как TODO для будущего боевого запуска.
-- Для Binance USDT-M тестнета требуется заполнить `BINANCE_UM_API_KEY_TESTNET`, `BINANCE_UM_API_SECRET_TESTNET` и, при необходимости, `BINANCE_UM_BASE_TESTNET` (по умолчанию `https://testnet.binancefuture.com`).
+- `PROFILE` определяет активный брокер и конфигурацию:
+  - `paper` — симулятор. Все сделки исполняются локально в SQLite, реальных ордеров нет.
+  - `testnet` — подключение к Binance Futures Testnet. Укажите `BINANCE_UM_API_KEY_TESTNET`, `BINANCE_UM_API_SECRET_TESTNET` и при необходимости `BINANCE_UM_BASE_TESTNET` (по умолчанию `https://testnet.binancefuture.com`).
+  - `live` — реальный Binance Futures USDT-M. Нужны ключи `BINANCE_LV_API_KEY`/`BINANCE_LV_API_SECRET` и база `BINANCE_LV_BASE_URL=https://fapi.binance.com`.
+- `SAFE_MODE=true` блокирует размещение и отмену ордеров, но оставляет чтение балансов и позиций.
+- `DRY_RUN_ONLY=true` принудительно направляет все заявки в paper-брокер независимо от профиля.
+- `ENABLE_PLACE_TEST_ORDERS=1` разрешает отправку ордеров на тестнет (при отключённом `SAFE_MODE`).
 
-Чтобы переключиться в режим тестнета, установите `PROFILE=testnet`, пропишите тестнет-ключи Binance в `.env` и перезапустите сервис. При включённом `SAFE_MODE=true` заявки не будут отправляться, но баланс и позиции подтянутся напрямую из тестнета. Для фактической отправки ордеров необходимо отключить SAFE_MODE и DRY_RUN, однако оставьте флаг включённым, если требуется только мониторинг без торговли.
+> **⚠️ WARNING:** `PROFILE=live` включает торговлю реальными средствами на Binance Futures. Ключи `BINANCE_LV_API_KEY`/`BINANCE_LV_API_SECRET` следует хранить в безопасности, `SAFE_MODE` отключайте только осознанно. Ответственность за операции полностью лежит на пользователе.
 
-По умолчанию `SAFE_MODE=true`, `DRY_RUN_ONLY=false`. Для работы с тестнетами Binance UM / OKX заполните API-ключи. Переменная `PROFILE` переключает конфигурацию (`paper` / `testnet` / `live`). Для реальной отправки заявок на тестнет необходимо явно отключить `SAFE_MODE`, установить `DRY_RUN_ONLY=false` и выставить `ENABLE_PLACE_TEST_ORDERS=1` (при отсутствии флага брокер автоматически переключится в paper-режим).
+Для мониторинга тестнета достаточно задать `PROFILE=testnet` и оставить `SAFE_MODE=true`. Для реального размещения заявок отключите `SAFE_MODE`, убедитесь, что `DRY_RUN_ONLY=false`, и выставьте `ENABLE_PLACE_TEST_ORDERS=1`.
 
 ## 2. Запуск API и UI
 
@@ -96,7 +104,7 @@ export REPO=my-org
 TAG=v0.1.0 docker compose -f docker-compose.yml up -d
 ```
 
-`docker compose` автоматически подтянет образ из GHCR благодаря `pull_policy: always`. Порты и тома совпадают с локальной разработкой: каталог `./data` монтируется внутрь контейнера как `/app/data`, поэтому `runtime_state.json`, `ledger.db` и другие артефакты сохраняются между перезапусками.
+`docker compose` автоматически подтянет образ из GHCR благодаря `pull_policy: always`. Порты и тома совпадают с локальной разработкой: каталог `./data` монтируется внутрь контейнера как `/app/data`, поэтому `runtime_state.json`, `ledger.db` и другие артефакты сохраняются между перезапусками. На машинах, где доступен Docker, именно такой способ рекомендуется для продакшн-запусков.
 
 Для запуска в фоне через Makefile достаточно указать `REPO` и вызвать `make up`:
 

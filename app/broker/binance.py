@@ -19,7 +19,8 @@ from .. import ledger
 
 LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_BASE_URL = "https://testnet.binancefuture.com"
+_DEFAULT_TESTNET_BASE_URL = "https://testnet.binancefuture.com"
+_DEFAULT_LIVE_BASE_URL = "https://fapi.binance.com"
 _DEFAULT_RECV_WINDOW = 5_000
 _HTTP_TIMEOUT = 10.0
 
@@ -61,28 +62,35 @@ class _Credentials:
     api_secret: str
 
 
-class BinanceTestnetBroker(Broker):
-    """Broker implementation for Binance USDT-M futures testnet."""
-
+class _BaseBinanceBroker(Broker):
     def __init__(
         self,
         *,
-        venue: str = "binance-um",
-        safe_mode: bool = True,
-        dry_run: bool = False,
-        base_url: str | None = None,
-        credentials: _Credentials | None = None,
+        venue: str,
+        safe_mode: bool,
+        dry_run: bool,
+        base_url: str | None,
+        credentials: _Credentials | None,
+        api_key_env: str,
+        api_secret_env: str,
+        base_url_env: str,
+        default_base_url: str,
+        venue_type: str,
     ) -> None:
         self.venue = venue
+        self.venue_type = venue_type
         self.safe_mode = safe_mode
         self.dry_run = dry_run
-        self.base_url = base_url or os.getenv("BINANCE_UM_BASE_TESTNET", _DEFAULT_BASE_URL)
+        env_base_url = os.getenv(base_url_env)
+        self.base_url = base_url or env_base_url or default_base_url
         if credentials is None:
-            api_key = os.getenv("BINANCE_UM_API_KEY_TESTNET")
-            api_secret = os.getenv("BINANCE_UM_API_SECRET_TESTNET")
+            api_key = os.getenv(api_key_env)
+            api_secret = os.getenv(api_secret_env)
             if api_key and api_secret:
                 credentials = _Credentials(api_key=api_key, api_secret=api_secret)
         self.credentials = credentials
+        self._recent_symbol_limit = 25
+        self._symbol_cache: set[str] = set()
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -207,7 +215,7 @@ class BinanceTestnetBroker(Broker):
             positions.append(
                 {
                     "venue": self.venue,
-                    "venue_type": "binance-testnet",
+                    "venue_type": self.venue_type,
                     "symbol": symbol,
                     "qty": qty,
                     "avg_entry": entry,
@@ -440,7 +448,7 @@ class BinanceTestnetBroker(Broker):
             exposures.append(
                 {
                     "venue": self.venue,
-                    "venue_type": "binance-testnet",
+                    "venue_type": self.venue_type,
                     "symbol": symbol,
                     "qty": qty,
                     "avg_entry": entry,
@@ -449,6 +457,34 @@ class BinanceTestnetBroker(Broker):
             )
         return exposures
 
+    async def _recent_fill_symbols(self) -> List[str]:
+        rows = await asyncio.to_thread(ledger.fetch_recent_fills, self._recent_symbol_limit)
+        symbols: List[str] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            symbol = str(row.get("symbol") or "").upper()
+            if not symbol or symbol in symbols:
+                continue
+            symbols.append(symbol)
+        return symbols
+
+    async def _symbols_for_fills(self) -> List[str]:
+        buckets = [await self._active_symbols(), await self._recent_fill_symbols(), list(self._symbol_cache)]
+        symbols: List[str] = []
+        seen: set[str] = set()
+        for bucket in buckets:
+            for symbol in bucket:
+                normalised = str(symbol or "").upper()
+                if not normalised or normalised in seen:
+                    continue
+                symbols.append(normalised)
+                seen.add(normalised)
+        if not symbols:
+            symbols = ["BTCUSDT"]
+        self._symbol_cache.update(symbols)
+        return symbols
+
     async def get_fills(self, since: datetime | None = None) -> List[Dict[str, Any]]:
         if not self._credentials_ready():
             return []
@@ -456,11 +492,8 @@ class BinanceTestnetBroker(Broker):
         if since is not None:
             params["startTime"] = int(since.timestamp() * 1000)
         try:
-            # Binance requires a symbol; fall back to BTCUSDT if none active.
             trades: List[Dict[str, Any]] = []
-            symbols = await self._active_symbols()
-            if not symbols:
-                symbols = ["BTCUSDT"]
+            symbols = await self._symbols_for_fills()
             for symbol in symbols:
                 symbol_params = dict(params)
                 symbol_params["symbol"] = symbol
@@ -500,4 +533,56 @@ class BinanceTestnetBroker(Broker):
         positions = state.get("positions", [])
         symbols = {str(row.get("symbol") or "").upper() for row in positions if row.get("symbol")}
         return [symbol for symbol in symbols if symbol]
+
+
+class BinanceTestnetBroker(_BaseBinanceBroker):
+    """Broker implementation for Binance USDT-M futures testnet."""
+
+    def __init__(
+        self,
+        *,
+        venue: str = "binance-um",
+        safe_mode: bool = True,
+        dry_run: bool = False,
+        base_url: str | None = None,
+        credentials: _Credentials | None = None,
+    ) -> None:
+        super().__init__(
+            venue=venue,
+            safe_mode=safe_mode,
+            dry_run=dry_run,
+            base_url=base_url,
+            credentials=credentials,
+            api_key_env="BINANCE_UM_API_KEY_TESTNET",
+            api_secret_env="BINANCE_UM_API_SECRET_TESTNET",
+            base_url_env="BINANCE_UM_BASE_TESTNET",
+            default_base_url=_DEFAULT_TESTNET_BASE_URL,
+            venue_type="binance-testnet",
+        )
+
+
+class BinanceLiveBroker(_BaseBinanceBroker):
+    """Broker implementation for live Binance USDT-M futures."""
+
+    def __init__(
+        self,
+        *,
+        venue: str = "binance-um",
+        safe_mode: bool = True,
+        dry_run: bool = False,
+        base_url: str | None = None,
+        credentials: _Credentials | None = None,
+    ) -> None:
+        super().__init__(
+            venue=venue,
+            safe_mode=safe_mode,
+            dry_run=dry_run,
+            base_url=base_url,
+            credentials=credentials,
+            api_key_env="BINANCE_LV_API_KEY",
+            api_secret_env="BINANCE_LV_API_SECRET",
+            base_url_env="BINANCE_LV_BASE_URL",
+            default_base_url=_DEFAULT_LIVE_BASE_URL,
+            venue_type="binance-live",
+        )
 
