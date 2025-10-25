@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -13,13 +12,6 @@ from ..services.runtime import get_state
 from .pnl import Fill, Position, compute_realized_pnl, compute_unrealized_pnl
 
 LOGGER = logging.getLogger(__name__)
-
-
-def _env_flag(name: str) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return False
-    return str(raw).lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -99,11 +91,7 @@ async def snapshot(since: datetime | None = None) -> PortfolioSnapshot:
     environment = str(state.control.environment or "paper").lower()
     safe_mode = bool(state.control.safe_mode)
     dry_run = bool(state.control.dry_run)
-    enable_testnet_orders = _env_flag("ENABLE_PLACE_TEST_ORDERS")
-
-    use_testnet_brokers = (
-        environment == "testnet" and enable_testnet_orders and not safe_mode and not dry_run
-    )
+    use_testnet_brokers = environment in {"testnet", "live"}
 
     if use_testnet_brokers:
         exposures, fills = await _collect_testnet_snapshot(state, since)

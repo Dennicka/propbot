@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app import ledger
+from app.broker.binance import BinanceTestnetBroker
 from app.broker.router import ExecutionRouter
 from app.services.arbitrage import Plan, PlanLeg
 from app.services.runtime import get_state, reset_for_tests
@@ -38,11 +39,15 @@ async def test_execution_router_places_and_replaces_orders(monkeypatch):
     state.control.safe_mode = False
     state.control.dry_run = False
     state.control.environment = "testnet"
-    stub = _StubClient()
     runtime = state.derivatives
     assert runtime is not None
     assert "binance_um" in runtime.venues
-    runtime.venues["binance_um"].client = stub
+
+    async def fake_request(self, method, path, *, params=None, signed=False):
+        self._last_request = {"method": method, "path": path, "params": dict(params or {}), "signed": signed}
+        return {"status": "NEW", "orderId": 123456789}
+
+    monkeypatch.setattr(BinanceTestnetBroker, "_request", fake_request)
 
     router = ExecutionRouter()
     order = await router.place_limit_order(
@@ -57,12 +62,16 @@ async def test_execution_router_places_and_replaces_orders(monkeypatch):
     stored = ledger.get_order(order["order_id"])
     assert stored is not None
     assert stored["status"] == "open"
-    assert any(call[0] == "place" for call in stub.calls)
+    broker = router.broker_for_venue("binance-um")
+    assert isinstance(broker, BinanceTestnetBroker)
+    assert getattr(broker, "_last_request", {}).get("path") == "/fapi/v1/order"
+    assert getattr(broker, "_last_request", {}).get("method") == "POST"
 
     await router.cancel_order(venue="binance-um", order_id=order["order_id"])
     cancelled = ledger.get_order(order["order_id"])
     assert cancelled is not None
     assert cancelled["status"] == "cancelled"
+    assert getattr(broker, "_last_request", {}).get("method") == "DELETE"
 
     replacement = await router.replace_limit_order(
         venue="binance-um",
@@ -77,7 +86,8 @@ async def test_execution_router_places_and_replaces_orders(monkeypatch):
     assert replaced_record is not None
     assert replaced_record["status"] == "open"
     assert replaced_record["qty"] == pytest.approx(0.02)
-    assert any(call[0] == "cancel" for call in stub.calls)
+    assert getattr(broker, "_last_request", {}).get("path") == "/fapi/v1/order"
+    assert getattr(broker, "_last_request", {}).get("method") == "POST"
 
     open_orders = state.open_orders
     assert isinstance(open_orders, list)

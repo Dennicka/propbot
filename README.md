@@ -16,6 +16,28 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+### Локальный запуск без Docker (macOS Monterey)
+
+Ниже приведён точный набор команд, которые можно скопировать и выполнить на рабочей машине:
+
+```bash
+/usr/bin/env python3 -m venv /Users/denis/propbot/.venv
+source /Users/denis/propbot/.venv/bin/activate
+python3 -m pip install -U pip wheel
+python3 -m pip install -r /Users/denis/propbot/requirements.txt
+SAFE_MODE=true PROFILE=paper AUTH_ENABLED=true API_TOKEN=devtoken123 /Users/denis/propbot/.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+После запуска веб-интерфейс доступен на `http://127.0.0.1:8000/`, а документация — на `http://127.0.0.1:8000/docs`.
+
+### Переменные окружения и режимы
+
+- `SAFE_MODE=true` гарантирует, что любые мутационные операции (создание/отмена ордеров) будут пропущены, даже если подключены реальные биржевые коннекторы. При включённом SAFE_MODE можно безопасно просматривать баланс/позиции тестнета.
+- `PROFILE` управляет выбором брокера и конфигурации: `paper` — симулятор, `testnet` — Binance Futures Testnet, `live` временно использует тот же коннектор, но в коде помечен как TODO для будущего боевого запуска.
+- Для Binance USDT-M тестнета требуется заполнить `BINANCE_UM_API_KEY_TESTNET`, `BINANCE_UM_API_SECRET_TESTNET` и, при необходимости, `BINANCE_UM_BASE_TESTNET` (по умолчанию `https://testnet.binancefuture.com`).
+
+Чтобы переключиться в режим тестнета, установите `PROFILE=testnet`, пропишите тестнет-ключи Binance в `.env` и перезапустите сервис. При включённом `SAFE_MODE=true` заявки не будут отправляться, но баланс и позиции подтянутся напрямую из тестнета. Для фактической отправки ордеров необходимо отключить SAFE_MODE и DRY_RUN, однако оставьте флаг включённым, если требуется только мониторинг без торговли.
+
 По умолчанию `SAFE_MODE=true`, `DRY_RUN_ONLY=false`. Для работы с тестнетами Binance UM / OKX заполните API-ключи. Переменная `PROFILE` переключает конфигурацию (`paper` / `testnet` / `live`). Для реальной отправки заявок на тестнет необходимо явно отключить `SAFE_MODE`, установить `DRY_RUN_ONLY=false` и выставить `ENABLE_PLACE_TEST_ORDERS=1` (при отсутствии флага брокер автоматически переключится в paper-режим).
 
 ## 2. Запуск API и UI
