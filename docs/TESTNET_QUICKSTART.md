@@ -2,6 +2,23 @@
 
 This addendum highlights runtime controls that can now be updated without restarts while running the dashboard against paper or testnet environments.
 
+## Local macOS bootstrap (no Docker)
+
+Use the following commands on the workstation `/Users/denis/propbot` to create a virtual environment, install dependencies, run tests, and start the API in paper mode with safe guards enabled.
+
+```bash
+/usr/bin/python3 -m venv /Users/denis/propbot/.venv
+source /Users/denis/propbot/.venv/bin/activate
+/Users/denis/propbot/.venv/bin/pip install -U pip wheel
+/Users/denis/propbot/.venv/bin/pip install -r /Users/denis/propbot/requirements.txt
+/Users/denis/propbot/.venv/bin/pytest -q
+SAFE_MODE=true PROFILE=paper AUTH_ENABLED=true API_TOKEN=devtoken123 \
+  /Users/denis/propbot/.venv/bin/uvicorn app.main:app \
+  --host 127.0.0.1 --port 8000 --reload
+```
+
+Copy `.env.example` to `.env` when overrides are required: `cp /Users/denis/propbot/.env.example /Users/denis/propbot/.env`. The interactive docs are available at `http://127.0.0.1:8000/docs`.
+
 ## Binance Futures Testnet bootstrap
 
 1. Скопируйте `.env.example` в `.env` и задайте переменные:
@@ -17,7 +34,9 @@ This addendum highlights runtime controls that can now be updated without restar
 2. Запустите сервис в тестнет-режиме (SAFE_MODE=true блокирует реальные ордера, но позволяет читать баланс/позиции):
 
    ```bash
-   PROFILE=testnet SAFE_MODE=true AUTH_ENABLED=true API_TOKEN=devtoken123 /Users/denis/propbot/.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+   SAFE_MODE=true PROFILE=testnet AUTH_ENABLED=true API_TOKEN=devtoken123 \
+     /Users/denis/propbot/.venv/bin/uvicorn app.main:app \
+     --host 127.0.0.1 --port 8000 --reload
    ```
 
 3. Откройте `http://localhost:8000` и убедитесь, что разделы **Balances** и **Exposures** показывают данные Binance Testnet.
@@ -32,6 +51,16 @@ This addendum highlights runtime controls that can now be updated without restar
    ```
 
    Если отключить `SAFE_MODE`, снять `DRY_RUN_ONLY` и выставить `ENABLE_PLACE_TEST_ORDERS=1`, ответ будет содержать результат реального размещения на тестнете.
+
+### Binance Futures profiles
+
+| Scenario | Required variables |
+| --- | --- |
+| Paper simulation | `PROFILE=paper`, `SAFE_MODE=true` — no real orders are submitted. |
+| Binance Futures Testnet | `PROFILE=testnet`, `SAFE_MODE=true` (read-only by default), `BINANCE_UM_API_KEY_TESTNET`, `BINANCE_UM_API_SECRET_TESTNET`, optional `BINANCE_UM_BASE_TESTNET`.
+| Binance Futures Live | `PROFILE=live`, `SAFE_MODE=false` (intentional), `BINANCE_LV_API_KEY`, `BINANCE_LV_API_SECRET`, optional `BINANCE_LV_BASE_URL`.
+
+> SAFE_MODE=true + PROFILE=paper гарантируют, что реальные ордера не покидают сервис — используется встроенный симулятор.
 
 ## Runtime control patch API
 
@@ -82,34 +111,39 @@ python -m api_cli events --base-url http://localhost:8000 --api-token "$API_TOKE
 
 ## Deploy with Docker/Compose
 
-### Run from the published image
+### Run from the published GHCR image
 
-Set `REPO` to the GitHub organisation/user that owns the GHCR namespace (`ghcr.io/<REPO>/propbot:<TAG>`). `TAG` defaults to `main`, but you can point it to a release or commit tag:
+Pull the published `v0.1.0` image from GHCR, then rely on the same tag for compose services and health checks.
 
 ```bash
 export REPO=my-org
-docker compose up -d           # pulls ghcr.io/$REPO/propbot:main by default
-docker compose logs -f app
+docker pull ghcr.io/${REPO}/propbot:v0.1.0
+TAG=v0.1.0 docker compose pull
+TAG=v0.1.0 docker compose up -d
+docker compose ps
+curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8000/docs | head -n 20
 ```
 
-To start a specific published release without using Make targets, set the tag explicitly:
+The compose file mounts `./data` into `/app/data`, so ledgers and runtime state persist across restarts. Override environment variables (including `SAFE_MODE`, `PROFILE`, `AUTH_ENABLED`, `API_TOKEN`, and `BINANCE_*` keys) via `.env` or the shell prior to running compose.
+
+Make targets wrap the same workflow:
 
 ```bash
 export REPO=my-org
-TAG=v0.1.0 docker compose -f docker-compose.yml up -d
-```
-
-Make targets accept the same variables and keep the long-running helpers available:
-
-```bash
-export REPO=my-org
-make up
+TAG=v0.1.0 make up
 make curl-health    # GET /healthz (expects HTTP 200)
 make logs           # follow container logs
-make down           # stop and remove the compose stack
+make down           # stop and remove the stack
 ```
 
-Compose mounts the local `./data` directory into the container as `/app/data`, so files such as `runtime_state.json` and `ledger.db` persist across restarts. If auth is enabled, provide `API_TOKEN` via `.env` or the shell before invoking compose.
+For a lightweight smoke test without compose, run:
+
+```bash
+IMAGE=ghcr.io/${REPO}/propbot:v0.1.0 make docker-run-image
+```
+
+SAFE_MODE defaults to `true`, so no real orders are emitted unless you deliberately set `PROFILE=live` and disable the guard with real Binance credentials.
 
 ### Build locally when required
 
@@ -127,13 +161,13 @@ The **Compose smoke test** workflow ensures the published image boots and serves
 
 ### Release helper target
 
-Use the Make target to create and push annotated release tags:
+Use the Make target to create and push annotated release tags that trigger the Docker Release workflow (`v*` semantics):
 
 ```bash
-make release TAG=0.1.1
+make release TAG=0.1.0
 ```
 
-Tags are pushed to `origin` by default; provide `REMOTE=...` to override the remote.
+Tags are pushed to `origin` by default; set `REMOTE=upstream` (or similar) to override the destination remote.
 
 Constraints:
 
