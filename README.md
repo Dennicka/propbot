@@ -174,10 +174,11 @@ python3 cli/propbotctl.py components
  main
 ```
 
-Mutating commands require a bearer token that has access to `/api/ui/control`
-and `/api/ui/secret`. Pass it explicitly via `--token` or set it through the
-`API_TOKEN` environment variable prior to invoking the command. **Never commit
-tokens or secrets to git.**
+Mutating commands and the log export helper require a bearer token that has
+access to `/api/ui/control`, `/api/ui/secret`, and `/api/ui/events/export`.
+Pass it explicitly via `--token` or set it through the `API_TOKEN` environment
+variable prior to invoking the command. **Never commit tokens or secrets to
+git.**
 
 ```bash
 # Pause and resume trading from the terminal
@@ -189,7 +190,7 @@ python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume
 python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" rotate-key --value 'new-secret'
 
 # Export recent events to a JSON file
-python3 cli/propbotctl.py --base-url https://<host> export-log --out ./events_export.json
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" export-log --out ./events_export.json
 ```
 
 
@@ -200,7 +201,7 @@ python3 cli/propbotctl.py --token "$API_TOKEN" resume
 python3 cli/propbotctl.py --token "$API_TOKEN" rotate-key --value 'new-secret'
 
 # Export recent events to a JSON file
-python3 cli/propbotctl.py export-log --out ./events_export.json
+python3 cli/propbotctl.py --token "$API_TOKEN" export-log --out ./events_export.json
 ```
 
  main

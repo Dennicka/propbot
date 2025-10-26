@@ -44,14 +44,10 @@
    - Команды работают только из авторизованного чата `TELEGRAM_CHAT_ID`.
 4. Ручная пауза через CLI `propbotctl`:
    - `python3 cli/propbotctl.py --base-url https://<host> status` — быстрый обзор без открытия Swagger.
- codex/add-operator-runbook-documentation-30d5c6
    - `python3 cli/propbotctl.py --base-url https://<host> components` — таблица статусов компонентов.
    - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause` — постановка HOLD (payload `{"mode": "HOLD"}`).
    - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — выход из HOLD (payload `{"mode": "RUN"}`).
-
-   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause` — постановка HOLD (в payload уходит `{"mode": "HOLD"}`).
-   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — выход из HOLD (эквивалент `{"mode": "RUN"}`).
- main
+   - Команда `export-log` использует тот же токен, что и `pause`/`resume`; без bearer-аутентификации выгрузка событий заблокирована.
    - Bearer-токен передавайте через `--token` или переменную окружения `API_TOKEN`. Никогда не коммитьте токен в git.
 5. Принудительная пауза через REST (если CLI недоступен):
    - `curl -X PATCH https://<host>/api/ui/control \
@@ -94,11 +90,7 @@
    curl -X PATCH https://<host>/api/ui/control \
      -H "Authorization: Bearer $API_TOKEN" \
      -H "Content-Type: application/json" \
- codex/add-operator-runbook-documentation-30d5c6
     -d '{"order_notional_usdt": 100, "min_spread_bps": 1.2, "dry_run_only": true, "loop_pair": "BTCUSDT", "loop_venues": ["binance-um"]}'
-
-     -d '{"order_notional_usdt": 100, "min_spread_bps": 1.2, "dry_run_only": true, "loop_pair": "BTCUSDT", "loop_venues": ["binance_um"]}'
- main
    ```
    - Параметры `dry_run_only`, `order_notional_usdt`, `min_spread_bps`, `poll_interval_sec`, список пар/бирж обновляются без рестарта.
    - После PATCH выполните `GET /api/ui/control-state` и убедитесь, что изменения применены.
@@ -109,6 +101,8 @@
 5. Если `risk_blocked=true`, изучите `risk_reasons` в ответе `/api/ui/state` и устраните нарушения (например, превышение `MAX_POSITION_USDT`).
 
 ## 5. Экспорт журнала событий
+
+Экспорт доступен только при передаче действительного bearer-токена (CLI использует тот же `API_TOKEN`, что и команды `pause/resume`).
 
 1. Быстрый экспорт через curl:
    ```bash
