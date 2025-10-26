@@ -174,6 +174,48 @@ rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`. Операто
 пользоваться Telegram-ботом или локальным `propbotctl` (CLI требует локального
 или SSH-доступа к хосту и bearer-токен).
 
+## Cross-exchange futures hedge
+
+PropBot now ships with a lightweight cross-exchange futures hedge “engine”. It
+compares USDⓈ-margined perpetual prices between Binance Futures and OKX, checks
+the spread against an operator-provided threshold, and when authorised executes
+paired long/short legs to lock in the basis. Both legs share the same notional
+exposure and leverage so the book stays delta-neutral.
+
+> ⚠️ **Derivatives warning:** Perpetual futures use leverage. Review exchange
+> margin rules, ensure SAFE_MODE is enabled until dry-run tests succeed, and
+> keep firm-wide risk limits enforced before allowing live execution.
+
+### Previewing the spread
+
+Use the existing `/api/arb/preview` endpoint with the new payload to inspect the
+current cross-exchange spread and suggested direction:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/arb/preview \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol": "BTCUSDT", "min_spread": 2.0}' | jq
+```
+
+The response echoes the symbol, spread, and whether it clears `min_spread`, plus
+which venue should host the long and the short legs.
+
+### Executing the hedge
+
+After validating risk limits, post to `/api/arb/execute` with the notional size,
+leverage, and minimum acceptable spread. The risk manager blocks orders that
+exceed `ARB_MAX_NOTIONAL_USDT`, `ARB_MAX_OPEN_POSITIONS`, or `ARB_MAX_LEVERAGE`:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/arb/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol": "BTCUSDT", "min_spread": 2.5, "notion_usdt": 1500, "leverage": 3}' | jq
+```
+
+Successful responses include the executed leg details (long venue, short venue)
+and echo the spread at entry. If the spread collapses below the threshold or
+limits are exceeded, the endpoint returns a `400` with the rejection reason.
+
 ## CLI `propbotctl`
 
 The repository ships a thin operator CLI for frequently used status checks and
