@@ -1,6 +1,6 @@
-# Testnet Quickstart v0.1.1
+# Testnet Quickstart v0.1.2
 
-The v0.1.1 release introduces the System Status API (with automatic HOLD
+The v0.1.2 release introduces the System Status API (with automatic HOLD
 fail-safe), the Telegram control/alert bot, and the `/api/ui/status/...` panel.
 This addendum walks through bootstrapping PropBot against paper or Binance UM
 Testnet profiles.
@@ -34,13 +34,13 @@ published GHCR image and start the stack (см. также продакшн-га
 
 ```bash
 export REPO=my-org
-docker pull ghcr.io/${REPO}/propbot:v0.1.1
-TAG=v0.1.1 docker compose pull
-TAG=v0.1.1 docker compose up -d
+docker pull ghcr.io/${REPO}/propbot:v0.1.2
+TAG=v0.1.2 docker compose pull
+TAG=v0.1.2 docker compose up -d
 curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
 ```
 
-Use `TAG=v0.1.1 make up` and `make down` for the Makefile wrappers, or set
+Use `TAG=v0.1.2 make up` and `make down` for the Makefile wrappers, or set
 `BUILD_LOCAL=1 make up` to rebuild the image locally.
 
 ### Права на каталог `data`

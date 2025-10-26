@@ -9,7 +9,7 @@ PIP=$(VENV)/bin/pip
 UVICORN=$(VENV)/bin/uvicorn
 PYTEST=$(VENV)/bin/pytest
 REMOTE ?= origin
-TAG ?= 0.1.1
+TAG ?= 0.1.2
 export TAG
 
 venv:
@@ -86,7 +86,7 @@ curl-health:
         curl -i http://localhost:8000/healthz
 
 release:
-        @: $${TAG:?set TAG to the version number, e.g. make release TAG=0.1.1}
+	@: $${TAG:?set TAG to the version number, e.g. make release TAG=0.1.2}
         @if [ -n "$$(git status --porcelain)" ]; then \
                 echo "Working tree must be clean before tagging"; \
                 exit 1; \
