@@ -7,6 +7,8 @@ codex/add-operator-runbook-documentation-30d5c6
 - Clarified the operator runbook and `/api/ui/control` documentation to highlight
   `loop_pair`/`loop_venues` usage and reduce the risk of applying stale `pair`/`venues`
   payloads during production operations.
+- Hardened the CLI `export-log` command so it now requires an operator bearer token
+  before exporting `/api/ui/events` data.
 
 =======
 main

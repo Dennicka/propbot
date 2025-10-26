@@ -159,7 +159,8 @@ def cmd_rotate_key(args: argparse.Namespace) -> None:
 
 
 def cmd_export_log(args: argparse.Namespace) -> None:
-    response = request_json("GET", args.base_url, "/api/ui/events/export")
+    token = _require_token(args)
+    response = request_json("GET", args.base_url, "/api/ui/events/export", token=token)
     try:
         data = response.json()
     except ValueError as exc:
