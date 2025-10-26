@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 from typing import Annotated, Dict, List, Literal, Union
+import os
+import secrets
 
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..services import arbitrage
-from ..services.runtime import get_state, set_last_execution, set_last_plan
+from ..services.runtime import (
+    get_last_opportunity_state,
+    get_state,
+    set_last_execution,
+    set_last_opportunity_state,
+    set_last_plan,
+)
+from positions import create_position
 from services.cross_exchange_arb import check_spread, execute_hedged_trade
-from services.risk_manager import can_open_new_position, register_position
+from services.risk_manager import can_open_new_position
 
 router = APIRouter()
 
@@ -74,6 +83,13 @@ class CrossExecuteRequest(BaseModel):
     leverage: float
 
 
+class ConfirmPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    opportunity_id: str
+    token: str
+
+
 @router.post("/preview")
 async def preview(request: PreviewRequest) -> dict:
     extras = getattr(request, "model_extra", {}) or {}
@@ -135,16 +151,17 @@ async def execute(plan_body: ExecutePayload) -> dict:
         if not trade_result.get("success"):
             detail = trade_result.get("reason", "spread_below_threshold")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-        position_payload = {
-            "symbol": plan_body.symbol,
-            "notional_usdt": plan_body.notion_usdt,
-            "leverage": plan_body.leverage,
-            "legs": [
-                trade_result.get("long_order", {}),
-                trade_result.get("short_order", {}),
-            ],
-        }
-        register_position(position_payload)
+        position = create_position(
+            symbol=plan_body.symbol,
+            long_venue=str(trade_result.get("cheap_exchange")),
+            short_venue=str(trade_result.get("expensive_exchange")),
+            notional_usdt=plan_body.notion_usdt,
+            entry_spread_bps=float(trade_result.get("spread_bps", 0.0)),
+            leverage=plan_body.leverage,
+            entry_long_price=float(trade_result.get("long_order", {}).get("price", 0.0)),
+            entry_short_price=float(trade_result.get("short_order", {}).get("price", 0.0)),
+        )
+        trade_result["position"] = position
         return trade_result
 
     payload = plan_body.model_dump()
@@ -166,3 +183,53 @@ async def execute(plan_body: ExecutePayload) -> dict:
     pnl_summary.setdefault("total", 0.0)
     set_last_execution(report_dict)
     return report_dict
+
+
+@router.get("/opportunity")
+async def last_opportunity() -> dict:
+    opportunity, status_flag = get_last_opportunity_state()
+    return {"last_opportunity": opportunity, "status": status_flag}
+
+
+@router.post("/confirm")
+async def confirm(payload: ConfirmPayload) -> dict:
+    state = get_state()
+    if state.control.safe_mode:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
+    expected_token = os.getenv("API_TOKEN")
+    if not expected_token or not secrets.compare_digest(payload.token, expected_token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    opportunity, _status = get_last_opportunity_state()
+    if not opportunity or str(opportunity.get("id")) != payload.opportunity_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="opportunity_not_found")
+    notional = float(opportunity.get("notional_suggestion", 0.0) or 0.0)
+    leverage = float(opportunity.get("leverage_suggestion", 0.0) or 0.0)
+    allowed, reason = can_open_new_position(notional, leverage)
+    if not allowed:
+        set_last_opportunity_state(opportunity, "blocked_by_risk")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+    min_spread = float(opportunity.get("min_spread", opportunity.get("spread", 0.0)) or 0.0)
+    trade_result = execute_hedged_trade(
+        str(opportunity.get("symbol")),
+        notional,
+        leverage,
+        min_spread,
+    )
+    if not trade_result.get("success"):
+        detail = trade_result.get("reason", "spread_below_threshold")
+        set_last_opportunity_state(opportunity, "blocked_by_risk")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+    position = create_position(
+        symbol=str(opportunity.get("symbol")),
+        long_venue=str(trade_result.get("cheap_exchange")),
+        short_venue=str(trade_result.get("expensive_exchange")),
+        notional_usdt=notional,
+        entry_spread_bps=float(trade_result.get("spread_bps", opportunity.get("spread_bps", 0.0))),
+        leverage=leverage,
+        entry_long_price=float(trade_result.get("long_order", {}).get("price", 0.0)),
+        entry_short_price=float(trade_result.get("short_order", {}).get("price", 0.0)),
+    )
+    trade_result["position"] = position
+    trade_result["opportunity_id"] = opportunity.get("id")
+    set_last_opportunity_state(None, "blocked_by_risk")
+    return trade_result

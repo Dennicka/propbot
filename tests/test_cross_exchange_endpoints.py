@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.runtime import get_state
+from positions import list_positions, reset_positions
 
 
 def test_cross_preview_endpoint(client, monkeypatch):
@@ -25,6 +26,7 @@ def test_cross_preview_endpoint(client, monkeypatch):
 
 
 def test_cross_execute_endpoint(client, monkeypatch):
+    reset_positions()
     state = get_state()
     state.control.safe_mode = False
     monkeypatch.setattr(
@@ -34,23 +36,17 @@ def test_cross_execute_endpoint(client, monkeypatch):
         "symbol": "ETHUSDT",
         "min_spread": 2.0,
         "spread": 3.5,
+        "spread_bps": 35.0,
         "cheap_exchange": "binance",
         "expensive_exchange": "okx",
-        "long_order": {"exchange": "binance", "side": "long"},
-        "short_order": {"exchange": "okx", "side": "short"},
+        "long_order": {"exchange": "binance", "side": "long", "price": 100.0},
+        "short_order": {"exchange": "okx", "side": "short", "price": 103.5},
         "success": True,
         "details": {},
     }
     monkeypatch.setattr(
         "app.routers.arb.execute_hedged_trade", lambda *args, **kwargs: trade_result
     )
-    captured = {}
-
-    def fake_register(payload):
-        captured["payload"] = payload
-
-    monkeypatch.setattr("app.routers.arb.register_position", fake_register)
-
     resp = client.post(
         "/api/arb/execute",
         json={
@@ -63,5 +59,8 @@ def test_cross_execute_endpoint(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
-    assert captured["payload"]["symbol"] == "ETHUSDT"
-    assert len(captured["payload"]["legs"]) == 2
+    assert "position" in body
+    stored_positions = list_positions()
+    assert len(stored_positions) == 1
+    assert stored_positions[0]["symbol"] == "ETHUSDT"
+    assert stored_positions[0]["status"] == "open"

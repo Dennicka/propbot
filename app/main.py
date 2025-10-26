@@ -10,6 +10,7 @@ from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
+from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
 
 
 def _should_guard(request: Request) -> bool:
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
     setup_telegram_bot(app)
+    setup_opportunity_scanner(app)
     return app
 
 

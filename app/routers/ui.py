@@ -29,6 +29,7 @@ from ..services.runtime import (
     set_open_orders,
 )
 from ..services import portfolio, risk
+from positions import list_positions
 from ..utils import redact_sensitive_data
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
@@ -126,6 +127,11 @@ async def runtime_state() -> dict:
         "risk_reasons": risk_reasons,
     }
     return redact_sensitive_data(response)
+
+
+@router.get("/positions")
+async def hedge_positions() -> dict:
+    return {"positions": list_positions()}
 
 
 def _secret_payload(state) -> dict:

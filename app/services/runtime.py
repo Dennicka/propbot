@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import json
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
 from pathlib import Path
-from typing import Dict, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
@@ -295,6 +296,19 @@ class RiskState:
 
 
 @dataclass
+@dataclass
+class OpportunityState:
+    opportunity: Dict[str, Any] | None = None
+    status: str = "blocked_by_risk"
+
+    def as_dict(self) -> Dict[str, Any | None]:
+        return {
+            "opportunity": deepcopy(self.opportunity) if self.opportunity else None,
+            "status": self.status,
+        }
+
+
+@dataclass
 class RuntimeState:
     config: LoadedConfig
     guards: Dict[str, GuardState]
@@ -308,6 +322,8 @@ class RuntimeState:
     loop_config: LoopConfigState = field(default_factory=LoopConfigState)
     open_orders: List[Dict[str, object]] = field(default_factory=list)
     risk: RiskState = field(default_factory=RiskState)
+    hedge_positions: List[Dict[str, Any]] = field(default_factory=list)
+    last_opportunity: OpportunityState = field(default_factory=OpportunityState)
 
 
 def _sync_loop_from_control(state: RuntimeState) -> None:
@@ -621,16 +637,67 @@ def reset_for_tests() -> None:
     global _STATE
     with _STATE_LOCK:
         _STATE = _bootstrap_runtime()
-        _load_persisted_control(_STATE.control)
+        _load_persisted_state(_STATE)
         _sync_loop_from_control(_STATE)
         _STATE.control.safe_mode = True
         _STATE.control.dry_run = False
+        _STATE.hedge_positions = []
+        _STATE.last_opportunity = OpportunityState()
     globals()["_STATE"] = _STATE
 
 
 def control_as_dict() -> Dict[str, object]:
     with _STATE_LOCK:
         return asdict(_STATE.control)
+
+
+def get_positions_state() -> List[Dict[str, Any]]:
+    with _STATE_LOCK:
+        return [dict(entry) for entry in _STATE.hedge_positions]
+
+
+def append_position_state(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    with _STATE_LOCK:
+        record = dict(entry)
+        _STATE.hedge_positions.append(record)
+        snapshot = [dict(item) for item in _STATE.hedge_positions]
+    _persist_runtime_payload({"positions": snapshot})
+    return record
+
+
+def set_positions_state(entries: List[Mapping[str, Any]]) -> None:
+    with _STATE_LOCK:
+        snapshot = [dict(entry) for entry in entries]
+        _STATE.hedge_positions = [dict(entry) for entry in snapshot]
+    _persist_runtime_payload({"positions": snapshot})
+
+
+def get_last_opportunity_state() -> tuple[Dict[str, Any] | None, str]:
+    with _STATE_LOCK:
+        state = _STATE.last_opportunity
+        if not isinstance(state, OpportunityState):
+            return None, "blocked_by_risk"
+        payload = state.as_dict()
+    return (
+        dict(payload["opportunity"]) if isinstance(payload.get("opportunity"), Mapping) else None,
+        str(payload.get("status") or "blocked_by_risk"),
+    )
+
+
+def set_last_opportunity_state(opportunity: Mapping[str, Any] | None, status: str) -> Dict[str, Any]:
+    snapshot: Dict[str, Any | None]
+    with _STATE_LOCK:
+        state_payload: Dict[str, Any | None] = {
+            "opportunity": dict(opportunity) if opportunity is not None else None,
+            "status": status,
+        }
+        _STATE.last_opportunity = OpportunityState(
+            opportunity=dict(opportunity) if opportunity is not None else None,
+            status=status,
+        )
+        snapshot = state_payload
+    _persist_runtime_payload({"last_opportunity": snapshot})
+    return snapshot
 
 
 def _normalise_loop_inputs(
@@ -780,43 +847,68 @@ def _apply_control_updates(control: ControlState, updates: Mapping[str, object])
     return changes
 
 
-def _persist_control_snapshot(snapshot: Mapping[str, object]) -> None:
+def _load_runtime_payload() -> Dict[str, Any]:
+    path = _runtime_state_path()
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    return dict(payload)
+
+
+def _persist_runtime_payload(updates: Mapping[str, Any]) -> None:
     path = _runtime_state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
+    payload = _load_runtime_payload()
+    payload.update(updates)
     try:
         with path.open("w", encoding="utf-8") as handle:
-            json.dump({"control": snapshot}, handle, indent=2, sort_keys=True)
+            json.dump(payload, handle, indent=2, sort_keys=True)
     except OSError:
         pass
 
 
-def _load_persisted_control(control: ControlState) -> None:
-    path = _runtime_state_path()
-    if not path.exists():
-        return
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return
-    try:
-        payload = json.loads(raw) if raw else {}
-    except json.JSONDecodeError:
-        return
+def _persist_control_snapshot(snapshot: Mapping[str, object]) -> None:
+    _persist_runtime_payload({"control": dict(snapshot)})
+
+
+def _load_persisted_state(state: RuntimeState) -> None:
+    payload = _load_runtime_payload()
     control_payload = payload.get("control") if isinstance(payload, Mapping) else None
-    if not isinstance(control_payload, Mapping):
-        return
-    try:
-        updates = _normalise_control_patch(control_payload)
-    except ValueError:
-        return
-    for field, value in updates.items():
-        setattr(control, field, value)
+    if isinstance(control_payload, Mapping):
+        try:
+            updates = _normalise_control_patch(control_payload)
+        except ValueError:
+            updates = {}
+        for field, value in updates.items():
+            setattr(state.control, field, value)
+    positions_payload = payload.get("positions")
+    if isinstance(positions_payload, list):
+        state.hedge_positions = [dict(entry) for entry in positions_payload if isinstance(entry, Mapping)]
+    opportunity_payload = payload.get("last_opportunity")
+    if isinstance(opportunity_payload, Mapping):
+        opportunity = opportunity_payload.get("opportunity")
+        status = str(opportunity_payload.get("status") or "blocked_by_risk")
+        if isinstance(opportunity, Mapping):
+            state.last_opportunity = OpportunityState(opportunity=dict(opportunity), status=status)
+        elif opportunity is None:
+            state.last_opportunity = OpportunityState(opportunity=None, status=status)
 
 
 _STATE = _bootstrap_runtime()
-_load_persisted_control(_STATE.control)
+_load_persisted_state(_STATE)
 _sync_loop_from_control(_STATE)
 _STATE_LOCK = threading.RLock()
