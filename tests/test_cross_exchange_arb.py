@@ -90,4 +90,4 @@ def test_execute_hedged_trade_success(monkeypatch):
 def test_risk_limits_block(monkeypatch):
     allowed, reason = can_open_new_position(60000.0, 2.0)
     assert not allowed
-    assert reason == "notional_limit_exceeded"
+    assert reason == "per_position_limit_exceeded"

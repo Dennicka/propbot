@@ -48,6 +48,7 @@ def check_spread(symbol: str) -> dict:
     )
 
     spread = float(expensive_bid) - float(cheap_ask)
+    spread_bps = (spread / float(cheap_ask)) * 10_000 if cheap_ask else 0.0
 
     return {
         "symbol": symbol,
@@ -56,6 +57,7 @@ def check_spread(symbol: str) -> dict:
         "cheap_ask": float(cheap_ask),
         "expensive_bid": float(expensive_bid),
         "spread": spread,
+        "spread_bps": float(spread_bps),
     }
 
 
@@ -89,11 +91,14 @@ def execute_hedged_trade(
 
     long_order = long_client.open_long(symbol, notion_usdt, leverage)
     short_order = short_client.open_short(symbol, notion_usdt, leverage)
+    long_order.setdefault("price", float(spread_info["cheap_ask"]))
+    short_order.setdefault("price", float(spread_info["expensive_bid"]))
 
     return {
         "symbol": symbol,
         "min_spread": float(min_spread),
         "spread": spread_value,
+        "spread_bps": float(spread_info.get("spread_bps", 0.0)),
         "cheap_exchange": cheap_exchange,
         "expensive_exchange": expensive_exchange,
         "long_order": long_order,

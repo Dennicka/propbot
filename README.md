@@ -203,8 +203,10 @@ which venue should host the long and the short legs.
 ### Executing the hedge
 
 After validating risk limits, post to `/api/arb/execute` with the notional size,
-leverage, and minimum acceptable spread. The risk manager blocks orders that
-exceed `ARB_MAX_NOTIONAL_USDT`, `ARB_MAX_OPEN_POSITIONS`, or `ARB_MAX_LEVERAGE`:
+leverage, and minimum acceptable spread. The updated risk manager enforces the
+per-position cap (`MAX_NOTIONAL_PER_POSITION_USDT`), concurrent position limit
+(`MAX_OPEN_POSITIONS`), aggregate open notional ceiling
+(`MAX_TOTAL_NOTIONAL_USDT`), and leverage guard (`MAX_LEVERAGE`):
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/arb/execute \
@@ -213,8 +215,40 @@ curl -s -X POST http://127.0.0.1:8000/api/arb/execute \
 ```
 
 Successful responses include the executed leg details (long venue, short venue)
-and echo the spread at entry. If the spread collapses below the threshold or
-limits are exceeded, the endpoint returns a `400` with the rejection reason.
+and the persisted position snapshot. If the spread collapses below the
+threshold or limits are exceeded, the endpoint returns a `400` with the
+rejection reason.
+
+### Semi-automatic workflow
+
+The background opportunity scanner (interval controlled by `SCAN_INTERVAL_SEC`)
+continuously evaluates Binance vs. OKX spreads and records the best candidate in
+`runtime_state.json`. Operators can monitor the latest candidate via:
+
+```bash
+curl -s http://127.0.0.1:8000/api/arb/opportunity | jq
+```
+
+The payload includes the suggested venues, spread (in bps), recommended notional
+(`notional_suggestion`), leverage hint, and a `status` flag:
+
+- `allowed` — the opportunity clears all risk checks and can be executed.
+- `blocked_by_risk` — limits prevent execution; inspect the `blocked_reason`.
+
+When the operator is satisfied with the spread and has disabled `SAFE_MODE` and
+set the loop out of HOLD, confirm the candidate explicitly:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/arb/confirm \
+  -H "Content-Type: application/json" \
+  -d "{\"opportunity_id\": \"<id from /api/arb/opportunity>\", \"token\": \"$API_TOKEN\"}" | jq
+```
+
+`POST /api/arb/confirm` re-validates risk, recalculates the spread, and only
+executes when the stored opportunity is still viable. The `token` must match the
+operator `API_TOKEN`; without it the trade is rejected. Every confirmed trade is
+persisted in `runtime_state.json` and surfaced via `GET /api/ui/positions` so the
+desk always has an auditable ledger of open/closed hedges.
 
 ## CLI `propbotctl`
 
