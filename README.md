@@ -154,6 +154,114 @@ orders to real Binance Futures accounts. Double-check risk limits, Telegram
 access, and two-man approvals before resuming trading in live mode. Never store
 real credentials in repositories or unattended hosts.
 
+## 🚀 Продакшн развёртывание на Linux сервере
+
+Ниже приведена полная инструкция для «чистого» Ubuntu 22.04 LTS сервера. Все
+команды выполняются по SSH под пользователем с правами `sudo`.
+
+### 1. Установка Docker Engine и Docker Compose
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg lsb-release
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker --version
+docker compose version
+```
+
+`newgrp docker` сразу активирует членство в группе без повторного входа. Если
+команда не сработала, перелогиньтесь и повторите `docker --version`.
+
+### 2. Получение кода и подготовка окружения
+
+```bash
+cd /opt
+sudo git clone https://github.com/propbot/propbot.git
+sudo chown -R "$USER":"$USER" propbot
+cd propbot
+cp deploy/env.example.prod .env
+mkdir -p data
+```
+
+Отредактируйте `.env`, расставив реальные значения. Обязательные поля:
+
+- `PROP_REPO` — организация/пользователь в GHCR (например, `propbot`).
+- `PROP_TAG` — релиз, который нужно запускать (последний стабильный из релизов).
+- `PROFILE`, `SAFE_MODE`, `DRY_RUN_ONLY` — режимы paper/testnet/live.
+- `TELEGRAM_*`, `API_TOKEN`, лимиты риска.
+- Ключи Binance testnet/live. Для paper-режима достаточно оставить DRY_RUN.
+
+При первом запуске, если образ приватный, выполните
+`docker login ghcr.io` и введите учётные данные с правом чтения образа.
+
+### 3. Старт сервиса PropBot
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml --env-file .env pull
+docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
+```
+
+Контейнер поднимется в фоне, данные сохраняются в локальной папке `data/`.
+
+### 4. Проверка состояния
+
+```bash
+curl -f http://127.0.0.1:8000/health
+curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
+```
+
+На удалённом сервере замените `127.0.0.1` на внешний IP/домен и выполните
+команды с рабочего компьютера. Если авторизация включена, добавьте заголовок
+`-H "Authorization: Bearer $API_TOKEN"`.
+
+## Операционка
+
+- **Остановка бота (graceful):**
+  ```bash
+  docker compose -f deploy/docker-compose.prod.yml --env-file .env down
+  ```
+- **Обновление до новой версии:**
+  1. Обновите `PROP_TAG` в `.env` на новый релиз.
+  2. Потяните образ и перезапустите контейнер:
+     ```bash
+     docker compose -f deploy/docker-compose.prod.yml --env-file .env pull
+     docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
+     ```
+- **Просмотр логов в реальном времени:**
+  ```bash
+  docker compose -f deploy/docker-compose.prod.yml --env-file .env logs -f propbot
+  ```
+- **Переключение режимов безопасности:**
+  - Для мгновенного HOLD выполните (при включённом `AUTH_ENABLED`):
+    ```bash
+    docker compose -f deploy/docker-compose.prod.yml --env-file .env exec propbot \
+      curl -s -X POST http://127.0.0.1:8000/api/ui/hold \
+      -H "Authorization: Bearer $API_TOKEN"
+    ```
+  - Чтобы принудительно включить SAFE_MODE на перезапуске, установите
+    `SAFE_MODE=true` в `.env` и перезапустите сервис командой `up -d`.
+  - Для тестовых/бумажных режимов можно включить симулятор:
+    ```bash
+    docker compose -f deploy/docker-compose.prod.yml --env-file .env exec propbot \
+      curl -s -X PATCH http://127.0.0.1:8000/api/ui/control \
+      -H "Authorization: Bearer $API_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"dry_run_only": true}'
+    ```
+
+Все API операции требуют, чтобы сервис работал в `SAFE_MODE=true` и профилях
+`paper` или `testnet`. Для live-профиля изменяйте флаги через `.env` и
+перезагрузку.
+
 ## Release helpers
 
 Use the updated Makefile target to tag releases in sync with Docker packaging:
