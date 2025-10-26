@@ -41,6 +41,16 @@ Copy `.env.example` to `.env` when overrides are required: `cp /Users/denis/prop
 
 3. Откройте `http://localhost:8000` и убедитесь, что разделы **Balances** и **Exposures** показывают данные Binance Testnet.
 
+### System Status health check
+
+Отдельно проверяйте агрегированный статус через API:
+
+```bash
+curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
+```
+
+Значение `overall` показывает сводное состояние (от `OK` до `HOLD`), а массив `alerts` перечисляет текущие срабатывания с пояснением и идентификатором компонента. Если алертов много, воспользуйтесь `GET /api/ui/status/components` и `GET /api/ui/status/slo`, чтобы увидеть детальные блоки и цифры SLO — это помогает быстро понять, какие метрики удерживают сервис в HOLD.
+
 4. Для вызова защищённых эндпоинтов используйте bearer-токен. Пример dry-run запроса (SAFE_MODE=true вернёт сообщение о пропуске ордера):
 
    ```bash
