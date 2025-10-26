@@ -54,8 +54,45 @@ make down
 ```
 
 Set `BUILD_LOCAL=1 make up` to rebuild the image on the fly instead of pulling
-from GHCR. Runtime artefacts (ledger, runtime_state.json) are stored under
-`./data` and persist between restarts.
+from GHCR. Runtime artefacts (`runtime_state.json`, the SQLite ledger, incident
+exports) are stored under `./data` and persist between restarts.
+
+### 🚀 Production deployment on Linux
+
+1. Provision a clean Linux host with Docker Engine and the Compose plugin.
+2. Clone the repository to `/opt/propbot` (or similar) and `cd /opt/propbot/deploy`.
+3. Create the persistent data directory **before** starting the container and grant
+   write access to the container user (UID 1000 in the default image):
+   ```bash
+   sudo mkdir -p /opt/propbot/data
+   sudo chown 1000:1000 /opt/propbot/data
+   sudo chmod 770 /opt/propbot/data
+   ```
+   The directory is mounted as `/app/data` and must remain writable so
+   `runtime_state.json`, `ledger.db`, exports, and checkpoints survive restarts.
+4. Copy `deploy/env.example.prod` to `.env`, then fill in API keys, `PROFILE`,
+   `SAFE_MODE`, `DRY_RUN_ONLY`, Telegram settings, risk limits, and the bearer
+   `API_TOKEN` (never commit secrets to git).
+5. Keep the bot paused on first boot: `SAFE_MODE=true`, `DRY_RUN_ONLY=true` (for
+   paper/testnet) or leave `SAFE_MODE=true` and plan to send `mode=HOLD` via
+   Telegram/CLI in live environments.
+6. Start the stack: `docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d`.
+7. Validate the instance with Swagger (`https://<host>/docs`) and run `python3
+   cli/propbotctl.py --base-url https://<host> status` to confirm the bot stays in
+   HOLD.
+8. After manual checks (balances, limits, `loop_pair`/`loop_venues`, approvals),
+   resume trading via Telegram or `python3 cli/propbotctl.py --base-url
+   https://<host> --token "$API_TOKEN" resume`.
+
+### Права на каталог `data`
+
+Перед запуском production-контура через `docker-compose.prod.yml` создайте на
+сервере каталог `./data` рядом с compose-файлом и убедитесь, что он доступен на
+запись пользователю, от которого запускается Docker (например, `sudo mkdir -p
+./data && sudo chown 1000:1000 ./data && sudo chmod 770 ./data`). Этот каталог
+монтируется в контейнер как `/app/data` и содержит постоянные базы/состояние.
+Права должны позволять контейнеру читать и записывать файлы, иначе сервис не
+сможет стартовать.
 
 ## Environment configuration (`.env`)
 
@@ -73,6 +110,9 @@ below:
   - `POST_ONLY`, `REDUCE_ONLY`, `ORDER_NOTIONAL_USDT`, `MAX_SLIPPAGE_BPS`,
     `MIN_SPREAD_BPS`, `POLL_INTERVAL_SEC`, `TAKER_FEE_BPS_*` — runtime loop
     controls.
+  - `LOOP_PAIR` / `LOOP_VENUES` — optional overrides for the live loop symbol
+    and venue list (uppercase symbol, comma-separated venues). When unset the
+    loop follows strategy defaults.
   - `ENABLE_PLACE_TEST_ORDERS` — allow real order placement on testnet.
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional
@@ -93,174 +133,55 @@ below:
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
   - `BINANCE_LV_API_KEY` / `BINANCE_LV_API_SECRET` — Binance Futures live keys
     (`BINANCE_LV_BASE_URL` optional).
+  - `BINANCE_LV_API_KEY_TESTNET` / `BINANCE_LV_API_SECRET_TESTNET` — optional
+    segregated credentials when running live and testnet bots in parallel.
   - `OKX_API_KEY_TESTNET`, `OKX_API_SECRET_TESTNET`,
     `OKX_API_PASSPHRASE_TESTNET` — optional OKX testnet integration.
 
 For live trading, populate the `BINANCE_LV_*` variables only in locked-down
 profiles and keep `.env` outside version control.
 
-## Monitoring & control API surface
-
-System Status now exposes three operator-friendly endpoints:
-
-- `GET /api/ui/status/overview` — aggregated view. Example:
-
-  ```bash
-  curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
-  ```
-
-  The `overall` field reports `OK/WARN/ERROR/HOLD`. `alerts` enumerates active
-  incidents with severity, human-readable message, and component references. Any
-  critical SLO breach automatically drives the runtime into HOLD + SAFE_MODE.
-
-- `GET /api/ui/state` — snapshot of runtime flags, exposures, ledger-derived
-  orders/fills, loop status, and risk assessments. Secrets in the response are
-  redacted as `***redacted***`.
-
-- `PATCH /api/ui/control` — update runtime limits (min spread, slippage, dry
-  run toggle, etc.) while in paper/testnet + SAFE_MODE. Include bearer auth when
-  `AUTH_ENABLED=true`:
-
-  ```bash
-  curl -X PATCH http://127.0.0.1:8000/api/ui/control \
-    -H "Authorization: Bearer $API_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"order_notional_usdt": 150, "min_spread_bps": 1.5}'
-  ```
-
-Related endpoints such as `GET /api/ui/events` continue to power the System
-Status UI and now participate in the v0.1.1 Web/API panel.
-
-## Telegram control & alerts
-
-Enable the Telegram bot with the variables listed above. Once connected, the bot
-sends periodic portfolio summaries (PnL, SAFE_MODE, profile, open positions) and
-accepts the following commands from the authorised chat:
-
-- `/pause` — enables SAFE_MODE and puts the loop into HOLD.
-- `/resume` — disables SAFE_MODE and resumes the trading loop (respecting
-  approvals/two-man rule).
-- `/status` — returns the latest System Status summary on demand.
-- `/close` or `/close_all` — triggers `cancel_all_orders` (only honoured for
-  `PROFILE=testnet`).
-
-Alerts are emitted for mode transitions, auto-HOLD triggers, and status push
-failures. Every message avoids leaking API keys or bearer tokens.
-
 ## Safety reminder for Binance live
 
-`PROFILE=live` with `SAFE_MODE=false` and valid `BINANCE_LV_*` keys will route
-orders to real Binance Futures accounts. Double-check risk limits, Telegram
-access, and two-man approvals before resuming trading in live mode. Never store
-real credentials in repositories or unattended hosts.
+`PROFILE=live` with `SAFE_MODE=false` **and** `DRY_RUN_ONLY=false` plus valid
+`BINANCE_LV_*` keys will route orders to real Binance Futures accounts. Keep the
+bot in HOLD and `SAFE_MODE=true` on startup, double-check risk limits,
+`loop_pair`/`loop_venues`, balances, Telegram access, and two-man approvals
+before resuming trading in live mode. Never store real credentials in
+repositories or unattended hosts.
 
-## 🚀 Продакшн развёртывание на Linux сервере
+For routine operational procedures (health checks, HOLD management, secret
+rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`. Оператор может
+пользоваться Telegram-ботом или локальным `propbotctl` (CLI требует локального
+или SSH-доступа к хосту и bearer-токен).
 
-Ниже приведена полная инструкция для «чистого» Ubuntu 22.04 LTS сервера. Все
-команды выполняются по SSH под пользователем с правами `sudo`.
+## CLI `propbotctl`
 
-### 1. Установка Docker Engine и Docker Compose
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg lsb-release
-sudo install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-sudo chmod a+r /etc/apt/keyrings/docker.gpg
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker "$USER"
-newgrp docker
-docker --version
-docker compose version
-```
-
-`newgrp docker` сразу активирует членство в группе без повторного входа. Если
-команда не сработала, перелогиньтесь и повторите `docker --version`.
-
-### 2. Получение кода и подготовка окружения
+The repository ships a thin operator CLI for frequently used status checks and
+controls. Run it with the local interpreter (requires the `requests`
+dependency):
 
 ```bash
-cd /opt
-sudo git clone https://github.com/propbot/propbot.git
-sudo chown -R "$USER":"$USER" propbot
-cd propbot
-cp deploy/env.example.prod .env
-mkdir -p data
+python3 cli/propbotctl.py --base-url https://<host> status
+python3 cli/propbotctl.py --base-url https://<host> components
 ```
 
-Отредактируйте `.env`, расставив реальные значения. Обязательные поля:
-
-- `PROP_REPO` — организация/пользователь в GHCR (например, `propbot`).
-- `PROP_TAG` — релиз, который нужно запускать (последний стабильный из релизов).
-- `PROFILE`, `SAFE_MODE`, `DRY_RUN_ONLY` — режимы paper/testnet/live.
-- `TELEGRAM_*`, `API_TOKEN`, лимиты риска.
-- Ключи Binance testnet/live. Для paper-режима достаточно оставить DRY_RUN.
-
-При первом запуске, если образ приватный, выполните
-`docker login ghcr.io` и введите учётные данные с правом чтения образа.
-
-### 3. Старт сервиса PropBot
+Mutating commands require a bearer token that has access to `/api/ui/control`
+and `/api/ui/secret`. Pass it explicitly via `--token` or set it through the
+`API_TOKEN` environment variable prior to invoking the command. **Never commit
+tokens or secrets to git.**
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml --env-file .env pull
-docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
+# Pause and resume trading from the terminal
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume
+
+# Rotate the Binance live secret
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" rotate-key --value 'new-secret'
+
+# Export recent events to a JSON file
+python3 cli/propbotctl.py --base-url https://<host> export-log --out ./events_export.json
 ```
-
-Контейнер поднимется в фоне, данные сохраняются в локальной папке `data/`.
-
-### 4. Проверка состояния
-
-```bash
-curl -f http://127.0.0.1:8000/health
-curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
-```
-
-На удалённом сервере замените `127.0.0.1` на внешний IP/домен и выполните
-команды с рабочего компьютера. Если авторизация включена, добавьте заголовок
-`-H "Authorization: Bearer $API_TOKEN"`.
-
-## Операционка
-
-- **Остановка бота (graceful):**
-  ```bash
-  docker compose -f deploy/docker-compose.prod.yml --env-file .env down
-  ```
-- **Обновление до новой версии:**
-  1. Обновите `PROP_TAG` в `.env` на новый релиз.
-  2. Потяните образ и перезапустите контейнер:
-     ```bash
-     docker compose -f deploy/docker-compose.prod.yml --env-file .env pull
-     docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
-     ```
-- **Просмотр логов в реальном времени:**
-  ```bash
-  docker compose -f deploy/docker-compose.prod.yml --env-file .env logs -f propbot
-  ```
-- **Переключение режимов безопасности:**
-  - Для мгновенного HOLD выполните (при включённом `AUTH_ENABLED`):
-    ```bash
-    docker compose -f deploy/docker-compose.prod.yml --env-file .env exec propbot \
-      curl -s -X POST http://127.0.0.1:8000/api/ui/hold \
-      -H "Authorization: Bearer $API_TOKEN"
-    ```
-  - Чтобы принудительно включить SAFE_MODE на перезапуске, установите
-    `SAFE_MODE=true` в `.env` и перезапустите сервис командой `up -d`.
-  - Для тестовых/бумажных режимов можно включить симулятор:
-    ```bash
-    docker compose -f deploy/docker-compose.prod.yml --env-file .env exec propbot \
-      curl -s -X PATCH http://127.0.0.1:8000/api/ui/control \
-      -H "Authorization: Bearer $API_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"dry_run_only": true}'
-    ```
-
-Все API операции требуют, чтобы сервис работал в `SAFE_MODE=true` и профилях
-`paper` или `testnet`. Для live-профиля изменяйте флаги через `.env` и
-перезагрузку.
 
 ## Release helpers
 
