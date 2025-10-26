@@ -2,26 +2,17 @@
 
 ## [Unreleased]
 
-codex/add-operator-runbook-documentation-30d5c6
-### Changed
-- Clarified the operator runbook and `/api/ui/control` documentation to highlight
-  `loop_pair`/`loop_venues` usage and reduce the risk of applying stale `pair`/`venues`
-  payloads during production operations.
-- Hardened the CLI `export-log` command so it now requires an operator bearer token
-  before exporting `/api/ui/events` data.
+- Nothing yet.
 
-=======
-main
 ## [0.1.2] - 2025-10-26
 
-### Added
-- Added `docs/OPERATOR_RUNBOOK.md` with production and testnet operator procedures, including health checks, HOLD workflows, secret rotation, and restart guidance.
-- Added local operator CLI `cli/propbotctl.py` covering status, pause/resume, secret rotation, and event export commands.
-
-### Changed
-- Simplified `README.md` and `docs/TESTNET_QUICKSTART.md`, pointing routine steps to the runbook and clarifying production data directory expectations.
-- Clarified production deployment documentation around `docker-compose.prod.yml` and the persistent `./data` volume.
-- Clarified the operator runbook and `/api/ui/control` instructions to emphasise `loop_pair`/`loop_venues` and avoid accidental pair misconfiguration.
+### Highlights
+- Binance live broker.
+- Risk limits with HOLD / SAFE_MODE automation.
+- Telegram control bot (pause/resume/HOLD/status).
+- System Status API with SLO coverage and WebSocket feed.
+- Production Docker Compose profile and operator runbook.
+- `propbotctl.py` CLI with bearer-token auth and secure `export-log`.
 
 ## [0.1.1] - 2025-10-26
 

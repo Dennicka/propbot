@@ -1,9 +1,25 @@
-# PropBot v0.1.1
+# PropBot v0.1.2
 
 Production-ready arbitrage runner with FastAPI, Binance Futures integration, SQLite
-ledger, and the System Status web console. Release 0.1.1 ships the Telegram
-control/alert bot, the SLO-aware status API (with automatic HOLD fail-safe), and
-the `/api/ui/status/...` monitoring surface required for the v0.1.1 tag.
+ledger, and the System Status web console. Release 0.1.2 ships the Binance live
+broker, hardened risk limits with HOLD/SAFE_MODE automation, the Telegram control
+bot, the SLO-driven System Status API + WebSocket feed, the production Docker
+Compose profile with operator runbook, and the bearer-protected `propbotctl.py`
+CLI (including safe `export-log`).
+
+## Быстрый запуск продакшн-узла
+
+1. Скопируйте `deploy/env.example.prod` в `.env` и заполните ключи бирж, профиль, лимиты, Telegram и `SAFE_MODE=true` для первого запуска.
+2. Создайте каталог данных рядом с `deploy/docker-compose.prod.yml` и выдайте права контейнеру:
+   ```bash
+   sudo mkdir -p data
+   sudo chown 1000:1000 data
+   sudo chmod 770 data
+   ```
+3. Запустите сервис: `docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d`.
+4. Проверьте состояние с временным токеном из `.env`: `curl -s -H "Authorization: Bearer $API_TOKEN" https://<host>/api/ui/status/overview | jq` (ожидается `overall=HOLD`).
+5. Сгенерируйте bearer-токен и добавьте его в `.env`: `export API_TOKEN=$(openssl rand -hex 32)`.
+6. Убедитесь, что CLI работает с токеном: `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" status`.
 
 ## Getting started
 
@@ -31,15 +47,15 @@ Interactive docs remain available at `http://127.0.0.1:8000/docs`.
 
 ### Option B — Docker Compose (new workstation friendly)
 
-Pull the v0.1.1 image from GHCR (or build locally), then bring the stack up via
+Pull the v0.1.2 image from GHCR (or build locally), then bring the stack up via
 Compose. The compose file consumes the `TAG` environment variable for image
 selection.
 
 ```bash
 export REPO=my-org
-docker pull ghcr.io/${REPO}/propbot:v0.1.1
-TAG=v0.1.1 docker compose pull
-TAG=v0.1.1 docker compose up -d
+docker pull ghcr.io/${REPO}/propbot:v0.1.2
+TAG=v0.1.2 docker compose pull
+TAG=v0.1.2 docker compose up -d
 curl -f http://127.0.0.1:8000/healthz
 ```
 
@@ -47,7 +63,7 @@ Makefile helpers mirror the same workflow:
 
 ```bash
 export REPO=my-org
-TAG=v0.1.1 make up
+TAG=v0.1.2 make up
 make curl-health
 make logs
 make down
@@ -210,8 +226,8 @@ python3 cli/propbotctl.py --token "$API_TOKEN" export-log --out ./events_export.
 Use the updated Makefile target to tag releases in sync with Docker packaging:
 
 ```bash
-make release TAG=0.1.1
+make release TAG=0.1.2
 ```
 
-This creates an annotated `v0.1.1` tag and pushes it to the configured remote,
+This creates an annotated `v0.1.2` tag and pushes it to the configured remote,
 triggering Docker Release workflows and compose smoke tests.
