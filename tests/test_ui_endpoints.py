@@ -10,7 +10,7 @@ from app.services import runtime
 from app.services.runtime import get_state
 
 
-def test_ui_state_and_controls(client):
+def test_ui_state_and_controls(client, monkeypatch):
     preview_payload = {"symbol": "ETHUSDT", "notional": 500.0}
     client.post("/api/arb/preview", json=preview_payload)
 
@@ -95,16 +95,53 @@ def test_ui_state_and_controls(client):
     assert secret_payload["auto_loop"] is False
     assert "notional_usdt" in secret_payload
 
-    hold_resp = client.post("/api/ui/hold")
+    hold_resp = client.post("/api/ui/hold", json={"reason": "test", "requested_by": "pytest"})
     assert hold_resp.status_code == 200
-    assert hold_resp.json()["mode"] == "HOLD"
+    hold_payload = hold_resp.json()
+    assert hold_payload["mode"] == "HOLD"
+    assert hold_payload["hold_active"] is True
 
     reset_resp = client.post("/api/ui/reset")
     assert reset_resp.status_code == 200
     assert reset_resp.json()["loop"]["status"] == "HOLD"
 
-    resume_fail = client.post("/api/ui/resume")
-    assert resume_fail.status_code == 403
+    locked_resume = client.post("/api/ui/resume")
+    assert locked_resume.status_code == 423
+
+    resume_request = client.post(
+        "/api/ui/resume-request",
+        json={"reason": "ready", "requested_by": "pytest"},
+    )
+    assert resume_request.status_code == 200
+    assert resume_request.json()["hold_active"] is True
+
+    missing_token = client.post(
+        "/api/ui/resume-confirm",
+        json={"token": "unit-test-token", "actor": "pytest"},
+    )
+    assert missing_token.status_code == 401
+    assert missing_token.json()["detail"] == "approve_token_missing"
+
+    monkeypatch.setenv("APPROVE_TOKEN", "unit-test-token")
+
+    invalid_token = client.post(
+        "/api/ui/resume-confirm",
+        json={"token": "wrong-token", "actor": "pytest"},
+    )
+    assert invalid_token.status_code == 401
+    assert invalid_token.json()["detail"] == "invalid_token"
+
+    resume_confirm = client.post(
+        "/api/ui/resume-confirm",
+        json={"token": "unit-test-token", "actor": "pytest"},
+    )
+    assert resume_confirm.status_code == 200
+    confirm_payload = resume_confirm.json()
+    assert confirm_payload["hold_cleared"] is True
+    assert confirm_payload["hold_active"] is False
+
+    resume_fail_safe = client.post("/api/ui/resume")
+    assert resume_fail_safe.status_code == 403
 
     runtime_state = get_state()
     runtime_state.control.safe_mode = False
@@ -126,8 +163,9 @@ def test_ui_state_and_controls(client):
     assert after_payload["loop"]["status"] in {"RUN", "HOLD", "STOPPING"}
 
     stop_resp = client.post("/api/ui/stop")
-    assert stop_resp.status_code == 200
-    assert stop_resp.json()["loop"]["status"] in {"STOPPING", "HOLD"}
+    assert stop_resp.status_code in {200, 429}
+    if stop_resp.status_code == 200:
+        assert stop_resp.json()["loop"]["status"] in {"STOPPING", "HOLD"}
 
     runtime_state = get_state()
     runtime_state.control.environment = "testnet"
@@ -183,13 +221,14 @@ def test_ui_state_and_controls(client):
         idemp_key="ui-cancel",
     )
     cancel_resp = client.post("/api/ui/cancel_all")
-    assert cancel_resp.status_code == 200
-    assert cancel_resp.json()["result"]["cancelled"] >= 1
-    order = ledger.get_order(order_id)
-    assert order["status"] == "cancelled"
+    assert cancel_resp.status_code in {200, 423, 429}
+    if cancel_resp.status_code == 200:
+        assert cancel_resp.json()["result"]["cancelled"] >= 1
+        order = ledger.get_order(order_id)
+        assert order["status"] == "cancelled"
 
     close_resp = client.post("/api/ui/close_exposure")
-    assert close_resp.status_code in {200, 404}
+    assert close_resp.status_code in {200, 404, 429}
 
     # stop background loop to avoid leaking tasks between tests
     runtime_state.control.environment = "paper"

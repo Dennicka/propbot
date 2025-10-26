@@ -174,6 +174,51 @@ rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`. Операто
 пользоваться Telegram-ботом или локальным `propbotctl` (CLI требует локального
 или SSH-доступа к хосту и bearer-токен).
 
+## HOLD / Two-Man resume flow
+
+PropBot keeps the cross-exchange hedge engine untouched, but live trading now
+ships with a hardened HOLD workflow. A global runtime safety block (`hold_active`)
+stops every dangerous action (hedge execute, confirmations, cancel-all, loop
+execution) until two operators explicitly approve the resume:
+
+1. **Pause the system** — call `POST /api/ui/hold` with a reason. This sets
+   `hold_active=true`, forces SAFE_MODE, and freezes the loop.
+2. **Log the investigation** — when the desk is ready to resume, call
+   `POST /api/ui/resume-request` with a human-readable reason (and optional
+   `requested_by`). This records the request and timestamps it but *does not*
+   clear the hold.
+3. **Second-operator confirmation** — a different operator supplies the shared
+   approval secret via `POST /api/ui/resume-confirm` with
+   `{"token": "<APPROVE_TOKEN>", "actor": "name"}`. Only when the token matches
+   does the runtime clear `hold_active`.
+4. **Return to RUN** — once the hold is cleared and SAFE_MODE is disabled,
+   trigger `POST /api/ui/resume` (or the corresponding CLI/Telegram command) to
+   set `mode=RUN`.
+
+Set the `APPROVE_TOKEN` variable in production `.env` files. If it is empty or
+the token is wrong, `/api/ui/resume-confirm` returns `401` and the bot stays in
+HOLD. The `/api/ui/status/overview` payload now exposes `hold_active`, the last
+resume request, and the current reason so operators can coordinate responses.
+
+This two-step confirmation is **required** before any real-money deployment.
+
+## Runaway order breakers & status surface
+
+To reduce catastrophic runaway behaviour, the runtime tracks how many orders and
+cancels were attempted in the last rolling minute. Configure the new limits via
+`.env`:
+
+- `MAX_ORDERS_PER_MIN` (default `300`)
+- `MAX_CANCELS_PER_MIN` (default `600`)
+
+Every order path calls into the counters. If a limit is exceeded the runtime
+automatically flips `hold_active=True`, blocks the offending request with HTTP
+`423`, and records the reason. The status overview includes the live counters,
+limits, and the most recent clock-skew measurement so the desk can see why the
+bot is paused. These breakers sit on top of the existing hedge math—they do not
+change spreads, pricing, or execution strategy, only whether orders are allowed
+to leave the process.
+
 ## Cross-exchange futures hedge
 
 PropBot now ships with a lightweight cross-exchange futures hedge “engine”. It

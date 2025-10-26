@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.services.runtime import get_state
+from app.services.runtime import (
+    engage_safety_hold,
+    get_state,
+    is_hold_active,
+    reset_for_tests,
+)
 from positions import list_positions, reset_positions
 
 
@@ -64,3 +69,67 @@ def test_cross_execute_endpoint(client, monkeypatch):
     assert len(stored_positions) == 1
     assert stored_positions[0]["symbol"] == "ETHUSDT"
     assert stored_positions[0]["status"] == "open"
+
+
+def test_cross_execute_blocked_by_hold(client, monkeypatch):
+    reset_positions()
+    reset_for_tests()
+    state = get_state()
+    state.control.safe_mode = False
+    engage_safety_hold("unit-test-hold", source="pytest")
+    payload = {
+        "symbol": "ETHUSDT",
+        "min_spread": 1.0,
+        "notion_usdt": 500.0,
+        "leverage": 2.0,
+    }
+    resp = client.post("/api/arb/execute", json=payload)
+    assert resp.status_code == 423
+    detail = resp.json()["detail"]
+    assert detail["error"] == "hold_active"
+    reset_for_tests()
+
+
+def test_runaway_breaker_triggers_hold(client, monkeypatch):
+    monkeypatch.setenv("MAX_ORDERS_PER_MIN", "3")
+    reset_positions()
+    reset_for_tests()
+    state = get_state()
+    state.control.safe_mode = False
+    monkeypatch.setattr(
+        "app.routers.arb.can_open_new_position", lambda notion, leverage: (True, "")
+    )
+
+    def fake_spread(symbol: str) -> dict:
+        return {
+            "symbol": symbol,
+            "cheap": "binance",
+            "expensive": "okx",
+            "cheap_ask": 100.0,
+            "expensive_bid": 102.5,
+            "spread": 2.5,
+            "spread_bps": 25.0,
+        }
+
+    monkeypatch.setattr("services.cross_exchange_arb.check_spread", fake_spread)
+
+    payload = {
+        "symbol": "ETHUSDT",
+        "min_spread": 1.0,
+        "notion_usdt": 250.0,
+        "leverage": 2.0,
+    }
+
+    first = client.post("/api/arb/execute", json=payload)
+    assert first.status_code == 200
+    assert first.json()["success"] is True
+    assert is_hold_active() is False
+    assert is_hold_active() is False
+
+    second = client.post("/api/arb/execute", json=payload)
+    assert second.status_code == 423
+    detail = second.json()["detail"]
+    assert "orders_per_min_limit_exceeded" in str(detail.get("error", detail))
+    assert is_hold_active() is True
+    reset_for_tests()
+    reset_positions()

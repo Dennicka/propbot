@@ -6,6 +6,7 @@
  codex/add-operator-runbook-documentation-30d5c6
  ⚠️ **LIVE-торговля:** связка `PROFILE=live` и `DRY_RUN_ONLY=false` означает реальные заявки на бирже. Всегда запускайте сервис в HOLD (`mode=HOLD`) и с `SAFE_MODE=true`, проверяйте лимиты и пары (`loop_pair`/`loop_venues`), баланс и ключи, и только после ручной проверки переводите бота в `RUN` и снимаете `SAFE_MODE`.
 
+Перед началом торговли реальными средствами заполните `APPROVE_TOKEN` и убедитесь, что процедура `resume-request` → `resume-confirm` отработана. Без второго оператора HOLD не снимается.
 
  main
 ## 1. Ежедневная проверка здоровья
@@ -15,6 +16,8 @@
 2. Запросите агрегированное состояние:
    - `curl -s -H "Authorization: Bearer $API_TOKEN" https://<host>/api/ui/status/overview | jq`.
    - Поле `overall` принимает значения `OK`, `WARN`, `ERROR` или `HOLD`.
+   - В блоке `safety` проверяйте `hold_active`, `resume_request` (если ожидание второго оператора ещё не подтверждено), текущие
+     счётчики runaway-лимитов (`counters.orders_placed_last_min`, `counters.cancels_last_min`) и clock-skew (`clock_skew_s`).
 3. Посмотрите раскладку по компонентам:
    - `curl -s -H "Authorization: Bearer $API_TOKEN" https://<host>/api/ui/status/components | jq '.components[] | {id, status, summary}'`.
    - Проверяйте статус P0-гардов (`recon`, `rate_limit`, `runaway_breaker`, …) и метрики.
@@ -39,23 +42,37 @@
    - В UI и Телеграме приходит уведомление о причине и таймштампе.
 3. Ручная пауза и продолжение через Телеграм:
    - `/pause` — включает SAFE_MODE и HOLD.
-   - `/resume` — снимает HOLD и (если пройдены approvals/Two-Man Rule) отключает SAFE_MODE.
+   - `/resume` — запускает процедуру возобновления, но HOLD снимается только после подтверждения `/api/ui/resume-confirm` (см.
+     ниже).
    - `/status` — текущий обзор состояния.
    - Команды работают только из авторизованного чата `TELEGRAM_CHAT_ID`.
-4. Ручная пауза через CLI `propbotctl`:
+4. **Новая двухэтапная процедура возобновления (Two-Man Rule):**
+   1. Первый оператор после устранения причины холда выполняет `POST /api/ui/resume-request` с причинами (`{"reason": "почему
+      безопасно", "requested_by": "имя"}`). HOLD остаётся активен, но фиксируется таймштамп и автор запроса.
+   2. Второй оператор предоставляет секрет `APPROVE_TOKEN` через `POST /api/ui/resume-confirm` (`{"token": "<секрет>", "actor":
+      "имя"}`). При неверном токене вернётся `401` и HOLD не снимется.
+   3. После успешного подтверждения `hold_active` станет `false`, и можно (при `SAFE_MODE=false`) вызвать `POST /api/ui/resume`
+      или команду CLI/Telegram для перевода режима в `RUN`.
+   - `APPROVE_TOKEN` обязан быть заполнен в `.env` для продакшена и храниться отдельно от обычного `API_TOKEN`.
+5. Ручная пауза через CLI `propbotctl`:
    - `python3 cli/propbotctl.py --base-url https://<host> status` — быстрый обзор без открытия Swagger.
    - `python3 cli/propbotctl.py --base-url https://<host> components` — таблица статусов компонентов.
    - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause` — постановка HOLD (payload `{"mode": "HOLD"}`).
-   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — выход из HOLD (payload `{"mode": "RUN"}`).
+   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — попытка выхода из HOLD (payload
+     `{"mode": "RUN"}`); сработает только после подтверждённого `resume-confirm`.
    - Команда `export-log` использует тот же токен, что и `pause`/`resume`; без bearer-аутентификации выгрузка событий заблокирована.
    - Bearer-токен передавайте через `--token` или переменную окружения `API_TOKEN`. Никогда не коммитьте токен в git.
-5. Принудительная пауза через REST (если CLI недоступен):
-   - `curl -X PATCH https://<host>/api/ui/control \
-     -H "Authorization: Bearer $API_TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{"mode": "HOLD"}'`.
-   - Выход из HOLD: `curl -X PATCH ... -d '{"mode": "RUN"}'` (при активном `TWO_MAN_RULE` следуйте процедуре двойного подтверждения).
-6. После устранения причины HOLD убедитесь, что критические компоненты вернулись в `OK`, и снимите HOLD через Telegram или CLI.
+6. Принудительная пауза через REST (если CLI недоступен):
+   - `curl -X POST https://<host>/api/ui/hold -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+     -d '{"reason": "manual_hold", "requested_by": "оператор"}'`.
+   - `curl -X POST https://<host>/api/ui/resume-request -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+     -d '{"reason": "готово к возобновлению", "requested_by": "оператор"}'`.
+   - `curl -X POST https://<host>/api/ui/resume-confirm -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+     -d '{"token": "<APPROVE_TOKEN>", "actor": "второй оператор"}'`.
+   - После успешного подтверждения и переключения `SAFE_MODE=false` выполните `curl -X POST https://<host>/api/ui/resume -H
+     "Authorization: Bearer $API_TOKEN"` для установки `mode=RUN`.
+7. После устранения причины HOLD убедитесь, что критические компоненты вернулись в `OK`, и только после этого инициируйте
+   `resume-request`/`resume-confirm`. Если `hold_active=true` вернулся автоматически, изучите причину в `status.overview.safety`.
 
 ## 3. Ротация секретов
 
@@ -99,6 +116,7 @@
    - `PROFILE`, `SAFE_MODE` на уровне `.env`, ключи API (если бот должен прочитать их при старте), `TWO_MAN_RULE` при изменении значения, окружение `MODE`.
    - Измените `.env`, затем выполните аккуратный рестарт (см. раздел 6).
 5. Если `risk_blocked=true`, изучите `risk_reasons` в ответе `/api/ui/state` и устраните нарушения (например, превышение `MAX_POSITION_USDT`).
+6. Новые runaway-лимиты задаются переменными `.env` `MAX_ORDERS_PER_MIN` и `MAX_CANCELS_PER_MIN`. При превышении лимита бот ставит HOLD автоматически и возвращает `HTTP 423` с причиной. Сбросите счётчики (ожиданием ~1 минуты) и повторите `resume-request`/`resume-confirm` только после выяснения причин всплеска.
 
 ## 5. Экспорт журнала событий
 

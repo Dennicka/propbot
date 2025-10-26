@@ -10,10 +10,12 @@ from ..broker.router import ExecutionRouter
 from .derivatives import DerivativesRuntime
 from . import risk
 from .runtime import (
+    HoldActiveError,
     bump_counter,
     get_state,
     get_market_data,
     record_incident,
+    register_order_attempt,
     set_preflight_result,
     update_guard,
 )
@@ -563,6 +565,7 @@ class ArbitrageEngine:
 
     def _hedge_out(self, pair: ArbitragePairConfig, size: float) -> Dict[str, object]:
         long_rt = self.runtime.venues[pair.long.venue]
+        register_order_attempt(reason="runaway_orders_per_min", source="arbitrage_hedge")
         order = long_rt.client.place_order(
             symbol=pair.long.symbol,
             side="SELL",
@@ -638,18 +641,51 @@ class ArbitrageEngine:
             long_order_args["time_in_force"] = "IOC"
             short_order_args["time_in_force"] = "IOC"
 
+        try:
+            register_order_attempt(reason="runaway_orders_per_min", source="arbitrage_leg_a")
+        except HoldActiveError as exc:
+            update_guard("runaway_breaker", "HOLD", "orders blocked", {"reason": exc.reason})
+            return {
+                "ok": False,
+                "executed": False,
+                "plan": plan,
+                "state": "HOLD",
+                "reason": exc.reason,
+            }
         order_a = long_rt.client.place_order(**long_order_args)
         plan["orders"].append({"leg": "A", "order": order_a})
         transitions.append("LEG_A")
 
         if force_leg_b_fail:
             transitions.append("LEG_A_FILLED_LEG_B_FAIL")
-            hedge_order = self._hedge_out(pair_cfg, order_size)
+            try:
+                hedge_order = self._hedge_out(pair_cfg, order_size)
+            except HoldActiveError as exc:
+                update_guard("runaway_breaker", "HOLD", "orders blocked", {"reason": exc.reason})
+                return {
+                    "ok": False,
+                    "executed": False,
+                    "plan": plan,
+                    "state": "HOLD",
+                    "reason": exc.reason,
+                }
             plan["orders"].append({"leg": "hedge", "order": hedge_order})
             plan["rescued"] = True
             update_guard("cancel_on_disconnect", "WARN", "awaiting manual reset")
             return {"ok": False, "executed": False, "plan": plan, "state": "HEDGE_OUT"}
 
+        try:
+            register_order_attempt(reason="runaway_orders_per_min", source="arbitrage_leg_b")
+        except HoldActiveError as exc:
+            update_guard("runaway_breaker", "HOLD", "orders blocked", {"reason": exc.reason})
+            transitions.append("HOLD")
+            return {
+                "ok": False,
+                "executed": False,
+                "plan": plan,
+                "state": "HOLD",
+                "reason": exc.reason,
+            }
         order_b = short_rt.client.place_order(**short_order_args)
         plan["orders"].append({"leg": "B", "order": order_b})
         transitions.extend(["LEG_B", "HEDGED", "DONE"])

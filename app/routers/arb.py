@@ -9,8 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..services import arbitrage
 from ..services.runtime import (
+    HoldActiveError,
     get_last_opportunity_state,
+    get_safety_status,
     get_state,
+    is_hold_active,
     set_last_execution,
     set_last_opportunity_state,
     set_last_plan,
@@ -136,6 +139,12 @@ ExecutePayload = Annotated[
 @router.post("/execute")
 async def execute(plan_body: ExecutePayload) -> dict:
     state = get_state()
+    if is_hold_active():
+        safety = get_safety_status()
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail={"error": "hold_active", "reason": safety.get("hold_reason")},
+        )
     if state.control.safe_mode:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
     if isinstance(plan_body, CrossExecuteRequest):
@@ -150,6 +159,12 @@ async def execute(plan_body: ExecutePayload) -> dict:
         )
         if not trade_result.get("success"):
             detail = trade_result.get("reason", "spread_below_threshold")
+            if trade_result.get("hold_active"):
+                safety = get_safety_status()
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail={"error": detail, "reason": safety.get("hold_reason")},
+                )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
         position = create_position(
             symbol=plan_body.symbol,
@@ -172,6 +187,10 @@ async def execute(plan_body: ExecutePayload) -> dict:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
     try:
         report = await arbitrage.execute_plan_async(plan)
+    except HoldActiveError as exc:
+        safety = get_safety_status()
+        detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     report_dict = report.as_dict()
@@ -194,6 +213,12 @@ async def last_opportunity() -> dict:
 @router.post("/confirm")
 async def confirm(payload: ConfirmPayload) -> dict:
     state = get_state()
+    if is_hold_active():
+        safety = get_safety_status()
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail={"error": "hold_active", "reason": safety.get("hold_reason")},
+        )
     if state.control.safe_mode:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
     expected_token = os.getenv("API_TOKEN")
