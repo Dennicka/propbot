@@ -72,46 +72,7 @@ testnet profile:
 Полный список переменных и подсказки для продакшена приведены в
 `deploy/env.example.prod`. Секреты никогда не коммитятся в репозиторий.
 
-## System Status API & SLO auto-HOLD
-
-Query the new endpoints to verify the runtime state:
-
-```bash
-curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
-curl -s http://127.0.0.1:8000/api/ui/state | jq '.flags + {risk_blocked, risk_reasons}'
-```
-
-`overall` reports the aggregate health (`OK/WARN/ERROR/HOLD`). When a critical
-SLO is breached (for example, recon mismatch or persistent latency breach), the
-runtime automatically flips into HOLD, enforces SAFE_MODE, and stops the
-loop. All secrets in the payload are redacted as `***redacted***`.
-
-Mutate runtime parameters via `PATCH /api/ui/control` while running paper or
-testnet with SAFE_MODE enabled:
-
-```bash
-curl -X PATCH http://127.0.0.1:8000/api/ui/control \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"order_notional_usdt": 75, "min_spread_bps": 1.0, "dry_run_only": true}'
-```
-
-`GET /api/ui/events` keeps powering the dashboard and the `/api/ui/events/export`
-utility.
-
-## Telegram control bot
-
-Enable the Telegram bot by exporting `TELEGRAM_ENABLE=true`, the bot token, and
-an authorised chat ID. Once running, the bot:
-
-- pushes status snapshots (PnL, profile, SAFE_MODE, open positions, risk
-  breaches) every `TELEGRAM_PUSH_MINUTES`,
-- accepts `/pause`, `/resume`, `/status`, and `/close` (`/close_all`) commands
-  from the authorised chat,
-- redacts secrets from every outgoing message.
-
-The `/close` command triggers `cancel_all_orders` and is only honoured while the
-profile is set to `testnet`.
+For daily operational routines (status checks, HOLD management, secret rotation, exports) see `docs/OPERATOR_RUNBOOK.md`.
 
 ## Binance safety note
 
