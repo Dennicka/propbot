@@ -22,6 +22,9 @@ DEFAULT_CONFIG_PATHS = {
 }
 
 
+_UNSET = object()
+
+
 def _runtime_state_path() -> Path:
     override = os.environ.get("RUNTIME_STATE_PATH")
     if override:
@@ -310,6 +313,24 @@ class OpportunityState:
 
 
 @dataclass
+class AutoHedgeState:
+    enabled: bool = False
+    last_opportunity_checked_ts: str | None = None
+    last_execution_result: str | None = "idle"
+    last_execution_ts: str | None = None
+    consecutive_failures: int = 0
+
+    def as_dict(self) -> Dict[str, object | None]:
+        return {
+            "enabled": self.enabled,
+            "last_opportunity_checked_ts": self.last_opportunity_checked_ts,
+            "last_execution_result": self.last_execution_result,
+            "last_execution_ts": self.last_execution_ts,
+            "consecutive_failures": self.consecutive_failures,
+        }
+
+
+@dataclass
 class ResumeRequestState:
     reason: str
     requested_by: str | None = None
@@ -430,6 +451,7 @@ class RuntimeState:
     risk: RiskState = field(default_factory=RiskState)
     hedge_positions: List[Dict[str, Any]] = field(default_factory=list)
     last_opportunity: OpportunityState = field(default_factory=OpportunityState)
+    auto_hedge: AutoHedgeState = field(default_factory=AutoHedgeState)
     safety: SafetyState = field(default_factory=SafetyState)
 
 
@@ -581,6 +603,7 @@ def _bootstrap_runtime() -> RuntimeState:
         ),
         open_orders=[],
         risk=risk_state,
+        auto_hedge=AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False)),
         safety=SafetyState(limits=safety_limits),
     )
     _sync_loop_from_control(state)
@@ -865,8 +888,16 @@ def reset_for_tests() -> None:
         _STATE.last_opportunity = OpportunityState()
         limits = _STATE.safety.limits
         _STATE.safety = SafetyState(limits=limits)
+        _STATE.auto_hedge = AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False))
     globals()["_STATE"] = _STATE
     _persist_safety_snapshot(_STATE.safety.as_dict())
+    update_auto_hedge_state(
+        enabled=_STATE.auto_hedge.enabled,
+        last_checked_ts=None,
+        last_execution_result="idle",
+        last_execution_ts=None,
+        consecutive_failures=0,
+    )
 
 
 def control_as_dict() -> Dict[str, object]:
@@ -920,6 +951,38 @@ def set_last_opportunity_state(opportunity: Mapping[str, Any] | None, status: st
         )
         snapshot = state_payload
     _persist_runtime_payload({"last_opportunity": snapshot})
+    return snapshot
+
+
+def get_auto_hedge_state() -> AutoHedgeState:
+    return _STATE.auto_hedge
+
+
+def update_auto_hedge_state(
+    *,
+    enabled: bool | object = _UNSET,
+    last_checked_ts: str | None | object = _UNSET,
+    last_execution_result: str | None | object = _UNSET,
+    last_execution_ts: str | None | object = _UNSET,
+    consecutive_failures: int | object = _UNSET,
+) -> Dict[str, object | None]:
+    with _STATE_LOCK:
+        auto_state = _STATE.auto_hedge
+        if enabled is not _UNSET:
+            auto_state.enabled = bool(enabled)
+        if last_checked_ts is not _UNSET:
+            auto_state.last_opportunity_checked_ts = last_checked_ts  # type: ignore[assignment]
+        if last_execution_result is not _UNSET:
+            auto_state.last_execution_result = last_execution_result  # type: ignore[assignment]
+        if last_execution_ts is not _UNSET:
+            auto_state.last_execution_ts = last_execution_ts  # type: ignore[assignment]
+        if consecutive_failures is not _UNSET:
+            try:
+                auto_state.consecutive_failures = int(consecutive_failures)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                auto_state.consecutive_failures = 0
+        snapshot = auto_state.as_dict()
+    _persist_runtime_payload({"auto_hedge": snapshot})
     return snapshot
 
 
@@ -1133,6 +1196,20 @@ def _load_persisted_state(state: RuntimeState) -> None:
             state.last_opportunity = OpportunityState(opportunity=dict(opportunity), status=status)
         elif opportunity is None:
             state.last_opportunity = OpportunityState(opportunity=None, status=status)
+    auto_payload = payload.get("auto_hedge")
+    if isinstance(auto_payload, Mapping):
+        auto_state = state.auto_hedge
+        auto_state.enabled = bool(auto_payload.get("enabled", auto_state.enabled))
+        last_checked = auto_payload.get("last_opportunity_checked_ts")
+        auto_state.last_opportunity_checked_ts = str(last_checked) if last_checked else None
+        last_result = auto_payload.get("last_execution_result")
+        auto_state.last_execution_result = str(last_result) if last_result else "idle"
+        last_ts = auto_payload.get("last_execution_ts")
+        auto_state.last_execution_ts = str(last_ts) if last_ts else None
+        try:
+            auto_state.consecutive_failures = int(auto_payload.get("consecutive_failures", 0))
+        except (TypeError, ValueError):
+            auto_state.consecutive_failures = 0
     safety_payload = payload.get("safety")
     if isinstance(safety_payload, Mapping):
         safety = state.safety

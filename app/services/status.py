@@ -580,6 +580,14 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "resume_request": safety_snapshot.get("resume_request"),
         "clock_skew_s": skew_value,
     }
+    auto_payload = state.auto_hedge.as_dict()
+    snapshot["auto_hedge"] = {
+        "auto_enabled": bool(auto_payload.get("enabled", False)),
+        "last_opportunity_checked_ts": auto_payload.get("last_opportunity_checked_ts"),
+        "last_execution_result": auto_payload.get("last_execution_result"),
+        "consecutive_failures": int(auto_payload.get("consecutive_failures", 0) or 0),
+        "on_hold": bool(state.safety.hold_active),
+    }
     return redact_sensitive_data(snapshot)
 
 

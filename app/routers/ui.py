@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
@@ -37,6 +37,8 @@ from ..services.runtime import (
     set_open_orders,
 )
 from ..services import portfolio, risk
+from ..services.hedge_log import read_entries
+from ..security import require_token
 from positions import list_positions
 from ..utils import redact_sensitive_data
 
@@ -606,3 +608,8 @@ async def last_plan() -> dict:
     if plan is None:
         return {"last_plan": None}
     return {"last_plan": plan}
+@router.get("/hedge/log")
+async def hedge_log(request: Request, limit: int = Query(100, ge=1, le=1_000)) -> dict:
+    require_token(request)
+    return {"entries": read_entries(limit=limit)}
+
