@@ -57,6 +57,7 @@ Set `BUILD_LOCAL=1 make up` to rebuild the image on the fly instead of pulling
 from GHCR. Runtime artefacts (`runtime_state.json`, the SQLite ledger, incident
 exports) are stored under `./data` and persist between restarts.
 
+ codex/add-operator-runbook-documentation-30d5c6
 ### 🚀 Production deployment on Linux
 
 1. Provision a clean Linux host with Docker Engine and the Compose plugin.
@@ -84,6 +85,8 @@ exports) are stored under `./data` and persist between restarts.
    resume trading via Telegram or `python3 cli/propbotctl.py --base-url
    https://<host> --token "$API_TOKEN" resume`.
 
+
+ main
 ### Права на каталог `data`
 
 Перед запуском production-контура через `docker-compose.prod.yml` создайте на
@@ -162,8 +165,13 @@ controls. Run it with the local interpreter (requires the `requests`
 dependency):
 
 ```bash
+codex/add-operator-runbook-documentation-30d5c6
 python3 cli/propbotctl.py --base-url https://<host> status
 python3 cli/propbotctl.py --base-url https://<host> components
+
+python3 cli/propbotctl.py status
+python3 cli/propbotctl.py components
+ main
 ```
 
 Mutating commands require a bearer token that has access to `/api/ui/control`
@@ -173,6 +181,7 @@ tokens or secrets to git.**
 
 ```bash
 # Pause and resume trading from the terminal
+codex/add-operator-runbook-documentation-30d5c6
 python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause
 python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume
 
@@ -183,6 +192,18 @@ python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" rotate-
 python3 cli/propbotctl.py --base-url https://<host> export-log --out ./events_export.json
 ```
 
+
+python3 cli/propbotctl.py --token "$API_TOKEN" pause
+python3 cli/propbotctl.py --token "$API_TOKEN" resume
+
+# Rotate the Binance live secret
+python3 cli/propbotctl.py --token "$API_TOKEN" rotate-key --value 'new-secret'
+
+# Export recent events to a JSON file
+python3 cli/propbotctl.py export-log --out ./events_export.json
+```
+
+ main
 ## Release helpers
 
 Use the updated Makefile target to tag releases in sync with Docker packaging:

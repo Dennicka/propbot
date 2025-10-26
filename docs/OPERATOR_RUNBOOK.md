@@ -3,8 +3,11 @@
 Рабочая памятка для операторов PropBot без доступа к коду. Все шаги предполагают,
 что у вас есть сеть до инстанса и API-токен (если включена авторизация).
 
-> ⚠️ **LIVE-торговля:** связка `PROFILE=live` и `DRY_RUN_ONLY=false` означает реальные заявки на бирже. Всегда запускайте сервис в HOLD (`mode=HOLD`) и с `SAFE_MODE=true`, проверяйте лимиты и пары (`loop_pair`/`loop_venues`), баланс и ключи, и только после ручной проверки переводите бота в `RUN` и снимаете `SAFE_MODE`.
+ codex/add-operator-runbook-documentation-30d5c6
+ ⚠️ **LIVE-торговля:** связка `PROFILE=live` и `DRY_RUN_ONLY=false` означает реальные заявки на бирже. Всегда запускайте сервис в HOLD (`mode=HOLD`) и с `SAFE_MODE=true`, проверяйте лимиты и пары (`loop_pair`/`loop_venues`), баланс и ключи, и только после ручной проверки переводите бота в `RUN` и снимаете `SAFE_MODE`.
 
+
+ main
 ## 1. Ежедневная проверка здоровья
 
 1. Откройте документацию Swagger по адресу `https://<host>/docs`.
@@ -41,9 +44,14 @@
    - Команды работают только из авторизованного чата `TELEGRAM_CHAT_ID`.
 4. Ручная пауза через CLI `propbotctl`:
    - `python3 cli/propbotctl.py --base-url https://<host> status` — быстрый обзор без открытия Swagger.
+ codex/add-operator-runbook-documentation-30d5c6
    - `python3 cli/propbotctl.py --base-url https://<host> components` — таблица статусов компонентов.
    - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause` — постановка HOLD (payload `{"mode": "HOLD"}`).
    - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — выход из HOLD (payload `{"mode": "RUN"}`).
+
+   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause` — постановка HOLD (в payload уходит `{"mode": "HOLD"}`).
+   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — выход из HOLD (эквивалент `{"mode": "RUN"}`).
+ main
    - Bearer-токен передавайте через `--token` или переменную окружения `API_TOKEN`. Никогда не коммитьте токен в git.
 5. Принудительная пауза через REST (если CLI недоступен):
    - `curl -X PATCH https://<host>/api/ui/control \
@@ -86,7 +94,11 @@
    curl -X PATCH https://<host>/api/ui/control \
      -H "Authorization: Bearer $API_TOKEN" \
      -H "Content-Type: application/json" \
+ codex/add-operator-runbook-documentation-30d5c6
     -d '{"order_notional_usdt": 100, "min_spread_bps": 1.2, "dry_run_only": true, "loop_pair": "BTCUSDT", "loop_venues": ["binance-um"]}'
+
+     -d '{"order_notional_usdt": 100, "min_spread_bps": 1.2, "dry_run_only": true, "loop_pair": "BTCUSDT", "loop_venues": ["binance_um"]}'
+ main
    ```
    - Параметры `dry_run_only`, `order_notional_usdt`, `min_spread_bps`, `poll_interval_sec`, список пар/бирж обновляются без рестарта.
    - После PATCH выполните `GET /api/ui/control-state` и убедитесь, что изменения применены.
@@ -116,6 +128,7 @@
 1. Перед остановкой убедитесь, что бот в HOLD (`/pause` в Telegram, `propbotctl pause` или `PATCH /api/ui/control` → `{"mode":"HOLD","dry_run_only":true}`).
 2. Проверьте, что открытых позиций нет: `GET /api/ui/state` → блок `risk.positions` должен быть пустой.
 3. Сохраните журнал событий, если нужно (см. раздел 5).
+ codex/add-operator-runbook-documentation-30d5c6
 4. Зафиксируйте текущее состояние через CLI: `python3 cli/propbotctl.py --base-url https://<host> status` — убедитесь, что `overall.status=HOLD` и нет неожиданных алертов.
 5. Остановите контейнер:
    ```bash
@@ -151,5 +164,21 @@
 
 - В `deploy/docker-compose.prod.yml` каталог `../data` монтируется внутрь контейнера как `/app/data`.
 - Это постоянное хранилище для базы (`ledger.db`), снимков состояния (`runtime_state.json`), экспортов и временных файлов оркестратора.
+
+4. Остановите контейнер:
+   ```bash
+   docker compose -f deploy/docker-compose.prod.yml --env-file .env down
+   ```
+5. При рестарте обновите образ/конфиг и поднимите сервис:
+   ```bash
+   docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
+   ```
+6. После старта выполните проверки из раздела 1 (Swagger, `/status/overview`, `/status/components`). Убедитесь, что `overall=OK` и HOLD снят вручную, если требовалось.
+
+## 7. Продакшн-данные и файловая система
+
+- В `deploy/docker-compose.prod.yml` каталог `../data` монтируется внутрь контейнера как `/app/data`.
+- Это постоянное хранилище для базы (`ledger.db`), снимков состояния (`runtime_state.json`) и экспортов.
+ main
 - Проверьте, что папка `./data` существует на хосте и имеет права на запись для пользователя/группы, под которыми запускается Docker (`chown`/`chmod` при необходимости).
 - Не удаляйте содержимое `./data` без бэкапа — там находятся рабочие журналы и состояние бота.
