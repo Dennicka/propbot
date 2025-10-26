@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  propbot:
+    image: ghcr.io/${PROP_REPO:?Set PROP_REPO in .env}/propbot:${PROP_TAG:-latest}
+    container_name: propbot
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      TZ: ${TIMEZONE:-UTC}
+    ports:
+      - "${PROP_API_PORT:-8000}:8000"
+    volumes:
+      - ../data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
