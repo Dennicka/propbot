@@ -37,12 +37,18 @@
    - `/resume` — снимает HOLD и (если пройдены approvals/Two-Man Rule) отключает SAFE_MODE.
    - `/status` — текущий обзор состояния.
    - Команды работают только из авторизованного чата `TELEGRAM_CHAT_ID`.
-4. Ручная пауза через CLI (по мере появления поддержки):
-   - Планируется команда `python api_cli.py hold`/`resume`, использующая REST API. После релиза CLI проверьте `python api_cli.py --help`.
-5. Принудительная пауза через REST:
-   - `curl -X POST https://<host>/api/ui/hold -H "Authorization: Bearer $API_TOKEN"`.
-   - Для выхода из HOLD используйте соответствующий POST `/api/ui/resume` (требует двух подтверждений, если включён `TWO_MAN_RULE`).
-6. После устранения причины HOLD убедитесь, что критические компоненты вернулись в `OK`, и выполните `/resume`.
+4. Ручная пауза через CLI `propbotctl`:
+   - `python3 cli/propbotctl.py --base-url https://<host> status` — быстрый обзор без открытия Swagger.
+   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause` — постановка HOLD (в payload уходит `{"mode": "HOLD"}`).
+   - `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume` — выход из HOLD (эквивалент `{"mode": "RUN"}`).
+   - Bearer-токен передавайте через `--token` или переменную окружения `API_TOKEN`. Никогда не коммитьте токен в git.
+5. Принудительная пауза через REST (если CLI недоступен):
+   - `curl -X PATCH https://<host>/api/ui/control \
+     -H "Authorization: Bearer $API_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"mode": "HOLD"}'`.
+   - Выход из HOLD: `curl -X PATCH ... -d '{"mode": "RUN"}'` (при активном `TWO_MAN_RULE` следуйте процедуре двойного подтверждения).
+6. После устранения причины HOLD убедитесь, что критические компоненты вернулись в `OK`, и снимите HOLD через Telegram или CLI.
 
 ## 3. Ротация секретов
 
@@ -55,13 +61,15 @@
    }
    JSON
    ```
-2. Отправьте обновление:
-   ```bash
-   curl -X POST https://<host>/api/ui/secret \
-     -H "Authorization: Bearer $API_TOKEN" \
-     -H "Content-Type: application/json" \
-     --data @/tmp/keys.json
-   ```
+2. Отправьте обновление через REST или CLI:
+   - REST:
+     ```bash
+     curl -X POST https://<host>/api/ui/secret \
+       -H "Authorization: Bearer $API_TOKEN" \
+       -H "Content-Type: application/json" \
+       --data @/tmp/keys.json
+     ```
+   - CLI: `python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" rotate-key --value 'новый-секрет'` (значение можно передать из `stdin`, если не хотите хранить его в shell истории).
 3. Убедитесь, что ответ содержит статус `ok` и новые значения не появляются в логах (секреты всегда редактируются).
 4. Всегда удаляйте временные файлы (`rm /tmp/keys.json`).
 5. **Важно:** секреты НЕЛЬЗЯ коммитить или хранить в git/облаке. Используйте менеджер секретов или защищённые vault-решения.
@@ -75,10 +83,11 @@
    curl -X PATCH https://<host>/api/ui/control \
      -H "Authorization: Bearer $API_TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"order_notional_usdt": 100, "min_spread_bps": 1.2, "dry_run_only": true, "pair": "BTCUSDT", "venues": ["binance_um"]}'
+     -d '{"order_notional_usdt": 100, "min_spread_bps": 1.2, "dry_run_only": true, "loop_pair": "BTCUSDT", "loop_venues": ["binance_um"]}'
    ```
    - Параметры `dry_run_only`, `order_notional_usdt`, `min_spread_bps`, `poll_interval_sec`, список пар/бирж обновляются без рестарта.
    - После PATCH выполните `GET /api/ui/control-state` и убедитесь, что изменения применены.
+   _⚠️ Поля `pair` и `venues` больше не принимаются — сервер их игнорирует, и бот продолжит работать со старыми значениями `loop_pair`/`loop_venues`._
 4. Параметры, требующие перезапуска:
    - `PROFILE`, `SAFE_MODE` на уровне `.env`, ключи API (если бот должен прочитать их при старте), `TWO_MAN_RULE` при изменении значения, окружение `MODE`.
    - Измените `.env`, затем выполните аккуратный рестарт (см. раздел 6).
@@ -95,13 +104,13 @@
    ```
 2. Через CLI (рекомендуется при больших объёмах):
    ```bash
-   python api_cli.py --base-url https://<host> --api-token $API_TOKEN events --format csv --out logs/propbot-events.csv
+   python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" export-log --out logs/propbot-events.json
    ```
 3. Сохраняйте выгрузку в защищённом каталоге и делитесь её только с инженерами расследования.
 
 ## 6. Аккуратное выключение и рестарт
 
-1. Перед остановкой убедитесь, что бот в HOLD (`/pause` или `PATCH /api/ui/control` → `dry_run_only=true`).
+1. Перед остановкой убедитесь, что бот в HOLD (`/pause` в Telegram, `propbotctl pause` или `PATCH /api/ui/control` → `{"mode":"HOLD","dry_run_only":true}`).
 2. Проверьте, что открытых позиций нет: `GET /api/ui/state` → блок `risk.positions` должен быть пустой.
 3. Сохраните журнал событий, если нужно (см. раздел 5).
 4. Остановите контейнер:
@@ -117,6 +126,6 @@
 ## 7. Продакшн-данные и файловая система
 
 - В `deploy/docker-compose.prod.yml` каталог `../data` монтируется внутрь контейнера как `/app/data`.
-- Это постоянное хранилище для базы (`ledger.db`), снапшотов состояния и экспортов.
+- Это постоянное хранилище для базы (`ledger.db`), снимков состояния (`runtime_state.json`) и экспортов.
 - Проверьте, что папка `./data` существует на хосте и имеет права на запись для пользователя/группы, под которыми запускается Docker (`chown`/`chmod` при необходимости).
 - Не удаляйте содержимое `./data` без бэкапа — там находятся рабочие журналы и состояние бота.

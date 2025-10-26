@@ -49,7 +49,7 @@ Use `TAG=v0.1.1 make up` and `make down` for the Makefile wrappers, or set
 создайте рядом с `docker-compose.prod.yml` каталог `./data` и назначьте ему
 права на запись для пользователя контейнера (например, `sudo mkdir -p ./data &&
 sudo chown 1000:1000 ./data && sudo chmod 770 ./data`). Docker монтирует его в
-`/app/data`, поэтому без корректных прав журнал и состояние не сохранятся.
+`/app/data`, поэтому без корректных прав журнал, `runtime_state.json` и база леджера не сохранятся.
 
 ## Environment variables
 

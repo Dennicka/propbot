@@ -54,8 +54,8 @@ make down
 ```
 
 Set `BUILD_LOCAL=1 make up` to rebuild the image on the fly instead of pulling
-from GHCR. Runtime artefacts (ledger, runtime_state.json) are stored under
-`./data` and persist between restarts.
+from GHCR. Runtime artefacts (`runtime_state.json`, the SQLite ledger, incident
+exports) are stored under `./data` and persist between restarts.
 
 ### Права на каталог `data`
 
@@ -83,6 +83,9 @@ below:
   - `POST_ONLY`, `REDUCE_ONLY`, `ORDER_NOTIONAL_USDT`, `MAX_SLIPPAGE_BPS`,
     `MIN_SPREAD_BPS`, `POLL_INTERVAL_SEC`, `TAKER_FEE_BPS_*` — runtime loop
     controls.
+  - `LOOP_PAIR` / `LOOP_VENUES` — optional overrides for the live loop symbol
+    and venue list (uppercase symbol, comma-separated venues). When unset the
+    loop follows strategy defaults.
   - `ENABLE_PLACE_TEST_ORDERS` — allow real order placement on testnet.
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional

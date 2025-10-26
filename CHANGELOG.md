@@ -11,6 +11,7 @@
 ### Changed
 - Simplified `README.md` and `docs/TESTNET_QUICKSTART.md`, pointing routine steps to the runbook and clarifying production data directory expectations.
 - Clarified production deployment documentation around `docker-compose.prod.yml` and the persistent `./data` volume.
+- Clarified the operator runbook and `/api/ui/control` instructions to emphasise `loop_pair`/`loop_venues` and avoid accidental pair misconfiguration.
 
 ## [0.1.1] - 2025-10-26
 
