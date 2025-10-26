@@ -57,6 +57,36 @@ Set `BUILD_LOCAL=1 make up` to rebuild the image on the fly instead of pulling
 from GHCR. Runtime artefacts (`runtime_state.json`, the SQLite ledger, incident
 exports) are stored under `./data` and persist between restarts.
 
+ codex/add-operator-runbook-documentation-30d5c6
+### 🚀 Production deployment on Linux
+
+1. Provision a clean Linux host with Docker Engine and the Compose plugin.
+2. Clone the repository to `/opt/propbot` (or similar) and `cd /opt/propbot/deploy`.
+3. Create the persistent data directory **before** starting the container and grant
+   write access to the container user (UID 1000 in the default image):
+   ```bash
+   sudo mkdir -p /opt/propbot/data
+   sudo chown 1000:1000 /opt/propbot/data
+   sudo chmod 770 /opt/propbot/data
+   ```
+   The directory is mounted as `/app/data` and must remain writable so
+   `runtime_state.json`, `ledger.db`, exports, and checkpoints survive restarts.
+4. Copy `deploy/env.example.prod` to `.env`, then fill in API keys, `PROFILE`,
+   `SAFE_MODE`, `DRY_RUN_ONLY`, Telegram settings, risk limits, and the bearer
+   `API_TOKEN` (never commit secrets to git).
+5. Keep the bot paused on first boot: `SAFE_MODE=true`, `DRY_RUN_ONLY=true` (for
+   paper/testnet) or leave `SAFE_MODE=true` and plan to send `mode=HOLD` via
+   Telegram/CLI in live environments.
+6. Start the stack: `docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d`.
+7. Validate the instance with Swagger (`https://<host>/docs`) and run `python3
+   cli/propbotctl.py --base-url https://<host> status` to confirm the bot stays in
+   HOLD.
+8. After manual checks (balances, limits, `loop_pair`/`loop_venues`, approvals),
+   resume trading via Telegram or `python3 cli/propbotctl.py --base-url
+   https://<host> --token "$API_TOKEN" resume`.
+
+
+ main
 ### Права на каталог `data`
 
 Перед запуском production-контура через `docker-compose.prod.yml` создайте на
@@ -106,6 +136,8 @@ below:
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
   - `BINANCE_LV_API_KEY` / `BINANCE_LV_API_SECRET` — Binance Futures live keys
     (`BINANCE_LV_BASE_URL` optional).
+  - `BINANCE_LV_API_KEY_TESTNET` / `BINANCE_LV_API_SECRET_TESTNET` — optional
+    segregated credentials when running live and testnet bots in parallel.
   - `OKX_API_KEY_TESTNET`, `OKX_API_SECRET_TESTNET`,
     `OKX_API_PASSPHRASE_TESTNET` — optional OKX testnet integration.
 
@@ -114,10 +146,12 @@ profiles and keep `.env` outside version control.
 
 ## Safety reminder for Binance live
 
-`PROFILE=live` with `SAFE_MODE=false` and valid `BINANCE_LV_*` keys will route
-orders to real Binance Futures accounts. Double-check risk limits, Telegram
-access, and two-man approvals before resuming trading in live mode. Never store
-real credentials in repositories or unattended hosts.
+`PROFILE=live` with `SAFE_MODE=false` **and** `DRY_RUN_ONLY=false` plus valid
+`BINANCE_LV_*` keys will route orders to real Binance Futures accounts. Keep the
+bot in HOLD and `SAFE_MODE=true` on startup, double-check risk limits,
+`loop_pair`/`loop_venues`, balances, Telegram access, and two-man approvals
+before resuming trading in live mode. Never store real credentials in
+repositories or unattended hosts.
 
 For routine operational procedures (health checks, HOLD management, secret
 rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`. Оператор может
@@ -131,8 +165,13 @@ controls. Run it with the local interpreter (requires the `requests`
 dependency):
 
 ```bash
+codex/add-operator-runbook-documentation-30d5c6
+python3 cli/propbotctl.py --base-url https://<host> status
+python3 cli/propbotctl.py --base-url https://<host> components
+
 python3 cli/propbotctl.py status
 python3 cli/propbotctl.py components
+ main
 ```
 
 Mutating commands require a bearer token that has access to `/api/ui/control`
@@ -142,6 +181,18 @@ tokens or secrets to git.**
 
 ```bash
 # Pause and resume trading from the terminal
+codex/add-operator-runbook-documentation-30d5c6
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" pause
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" resume
+
+# Rotate the Binance live secret
+python3 cli/propbotctl.py --base-url https://<host> --token "$API_TOKEN" rotate-key --value 'new-secret'
+
+# Export recent events to a JSON file
+python3 cli/propbotctl.py --base-url https://<host> export-log --out ./events_export.json
+```
+
+
 python3 cli/propbotctl.py --token "$API_TOKEN" pause
 python3 cli/propbotctl.py --token "$API_TOKEN" resume
 
@@ -152,6 +203,7 @@ python3 cli/propbotctl.py --token "$API_TOKEN" rotate-key --value 'new-secret'
 python3 cli/propbotctl.py export-log --out ./events_export.json
 ```
 
+ main
 ## Release helpers
 
 Use the updated Makefile target to tag releases in sync with Docker packaging:

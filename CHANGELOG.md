@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+codex/add-operator-runbook-documentation-30d5c6
+### Changed
+- Clarified the operator runbook and `/api/ui/control` documentation to highlight
+  `loop_pair`/`loop_venues` usage and reduce the risk of applying stale `pair`/`venues`
+  payloads during production operations.
+
+=======
+main
 ## [0.1.2] - 2025-10-26
 
 ### Added
