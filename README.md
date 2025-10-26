@@ -109,6 +109,34 @@ real credentials in repositories or unattended hosts.
 For routine operational procedures (health checks, HOLD management, secret
 rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`.
 
+## CLI `propbotctl`
+
+The repository ships a thin operator CLI for frequently used status checks and
+controls. Run it with the local interpreter (requires the `requests`
+dependency):
+
+```bash
+python3 cli/propbotctl.py status
+python3 cli/propbotctl.py components
+```
+
+Mutating commands require a bearer token that has access to `/api/ui/control`
+and `/api/ui/secret`. Pass it explicitly via `--token` or set it through the
+`API_TOKEN` environment variable prior to invoking the command. **Never commit
+tokens or secrets to git.**
+
+```bash
+# Pause and resume trading from the terminal
+python3 cli/propbotctl.py --token "$API_TOKEN" pause
+python3 cli/propbotctl.py --token "$API_TOKEN" resume
+
+# Rotate the Binance live secret
+python3 cli/propbotctl.py --token "$API_TOKEN" rotate-key --value 'new-secret'
+
+# Export recent events to a JSON file
+python3 cli/propbotctl.py export-log --out ./events_export.json
+```
+
 ## Release helpers
 
 Use the updated Makefile target to tag releases in sync with Docker packaging:
