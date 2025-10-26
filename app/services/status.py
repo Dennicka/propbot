@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
-from .runtime import RuntimeState, engage_safety_hold, get_state
+from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
 from ..utils import redact_sensitive_data
 
 
@@ -60,6 +61,46 @@ def _guard_component(state: RuntimeState, guard_name: str, *, title: str) -> Dic
         metrics=guard.metrics,
         links=[{"title": "Guardrail", "href": f"/docs/guards#{guard_name}"}],
     )
+
+
+def _normalise_server_time(raw: float) -> float | None:
+    if raw <= 0:
+        return None
+    if raw > 1e13:
+        return raw / 1_000_000.0
+    if raw > 1e10:
+        return raw / 1_000.0
+    return raw
+
+
+def _evaluate_clock_skew(state: RuntimeState) -> float | None:
+    if not state.derivatives or not state.derivatives.venues:
+        update_clock_skew(None, source="status")
+        return None
+    samples: List[float] = []
+    now = time.time()
+    for runtime in state.derivatives.venues.values():
+        client = getattr(runtime, "client", None)
+        if client is None or not hasattr(client, "server_time"):
+            continue
+        try:
+            server_time_raw = client.server_time()
+        except Exception:  # pragma: no cover - defensive
+            continue
+        try:
+            numeric = float(server_time_raw)
+        except (TypeError, ValueError):
+            continue
+        server_time = _normalise_server_time(numeric)
+        if server_time is None:
+            continue
+        samples.append(server_time - now)
+    if not samples:
+        update_clock_skew(None, source="status")
+        return None
+    skew = max(samples, key=lambda value: abs(value))
+    update_clock_skew(skew, source="status")
+    return skew
 
 
 def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
@@ -492,6 +533,7 @@ def _score(status: str) -> float:
 
 def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     now = datetime.now(timezone.utc)
+    skew_value = _evaluate_clock_skew(state)
     components = _build_components(state)
     alerts, hold_required, hold_reasons = _evaluate_slo(state, components, now=now)
 
@@ -524,6 +566,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
 
     thresholds = state.config.thresholds.slo if state.config.thresholds else {}
 
+    safety_snapshot = state.safety.status_payload()
     snapshot = {
         "ts": now.isoformat(),
         "overall": overall,
@@ -532,6 +575,10 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "thresholds": thresholds,
         "components": components,
         "alerts": alerts,
+        "hold_active": safety_snapshot.get("hold_active", False),
+        "safety": safety_snapshot,
+        "resume_request": safety_snapshot.get("resume_request"),
+        "clock_skew_s": skew_value,
     }
     return redact_sensitive_data(snapshot)
 

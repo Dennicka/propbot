@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,10 +22,16 @@ from ..services.loop import (
     stop_loop,
 )
 from ..services.runtime import (
-    get_last_plan,
-    get_state,
+    HoldActiveError,
     apply_control_patch,
+    approve_resume,
     control_as_dict,
+    engage_safety_hold,
+    get_last_plan,
+    get_safety_status,
+    get_state,
+    is_hold_active,
+    record_resume_request,
     set_loop_config,
     set_mode,
     set_open_orders,
@@ -37,6 +45,27 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class HoldPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    reason: str | None = Field(default=None, description="Reason for triggering hold")
+    requested_by: str | None = Field(default=None, description="Operator requesting hold")
+
+
+class ResumeRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    reason: str = Field(..., description="Why trading should resume")
+    requested_by: str | None = Field(default=None, description="Operator requesting resume")
+
+
+class ResumeConfirmPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    token: str = Field(..., description="Approval token for confirming resume")
+    actor: str | None = Field(default=None, description="Operator confirming resume")
 
 
 class SecretUpdate(BaseModel):
@@ -398,16 +427,78 @@ async def orders_snapshot() -> dict:
 
 
 @router.post("/hold")
-async def hold() -> dict:
+async def hold(payload: HoldPayload | None = None) -> dict:
+    reason = (payload.reason.strip() if payload and payload.reason else "manual_hold")
+    requested_by = payload.requested_by if payload else None
     await hold_loop()
+    engage_safety_hold(reason, source="ui")
     set_mode("HOLD")
-    ledger.record_event(level="INFO", code="mode_change", payload={"mode": "HOLD"})
+    ledger.record_event(
+        level="INFO",
+        code="mode_change",
+        payload={"mode": "HOLD", "reason": reason, "requested_by": requested_by or "ui"},
+    )
     state = get_state()
-    return {"mode": state.control.mode, "ts": _ts()}
+    safety = get_safety_status()
+    return {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "safety": safety, "ts": _ts()}
+
+
+@router.post("/resume-request")
+async def resume_request(payload: ResumeRequestPayload) -> dict:
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason_required")
+    if not is_hold_active():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold_not_active")
+    request_snapshot = record_resume_request(reason, requested_by=payload.requested_by)
+    ledger.record_event(
+        level="INFO",
+        code="resume_requested",
+        payload={"reason": reason, "requested_by": payload.requested_by or "ui"},
+    )
+    return {
+        "resume_request": request_snapshot,
+        "hold_active": True,
+        "ts": _ts(),
+    }
+
+
+@router.post("/resume-confirm")
+async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
+    if not is_hold_active():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold_not_active")
+    safety_snapshot = get_safety_status()
+    resume_info = safety_snapshot.get("resume_request")
+    if not resume_info or resume_info.get("pending") is False:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="resume_request_missing")
+    expected_token = os.getenv("APPROVE_TOKEN")
+    if not expected_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
+    if not secrets.compare_digest(payload.token, expected_token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    result = approve_resume(actor=payload.actor)
+    safety = get_safety_status()
+    ledger.record_event(
+        level="INFO",
+        code="resume_confirmed",
+        payload={
+            "actor": payload.actor or "ui",
+            "hold_cleared": result.get("hold_cleared", False),
+            "reason": resume_info.get("reason"),
+        },
+    )
+    return {
+        "hold_cleared": result.get("hold_cleared", False),
+        "hold_active": safety.get("hold_active", False),
+        "safety": safety,
+        "ts": _ts(),
+    }
 
 
 @router.post("/resume")
 async def resume() -> dict:
+    if is_hold_active():
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="hold_active")
     state = get_state()
     if state.control.safe_mode:
         raise HTTPException(status_code=403, detail="SAFE_MODE enabled; disable before resume")
@@ -415,7 +506,8 @@ async def resume() -> dict:
     set_mode("RUN")
     ledger.record_event(level="INFO", code="mode_change", payload={"mode": "RUN"})
     state = get_state()
-    return {"mode": state.control.mode, "ts": _ts()}
+    safety = get_safety_status()
+    return {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "ts": _ts()}
 
 
 @router.post("/stop")
@@ -440,7 +532,12 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     if environment != "testnet":
         raise HTTPException(status_code=403, detail="Cancel-all only available on testnet")
     venue = request.venue if request else None
-    result = await cancel_all_orders(venue=venue)
+    try:
+        result = await cancel_all_orders(venue=venue)
+    except HoldActiveError as exc:
+        safety = get_safety_status()
+        detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
     event_payload = dict(result)
     if venue:
         event_payload["venue"] = venue
@@ -464,7 +561,12 @@ async def kill_switch() -> dict:
     state.control.safe_mode = True
     set_mode("HOLD")
     await hold_loop()
-    result = await cancel_all_orders()
+    try:
+        result = await cancel_all_orders()
+    except HoldActiveError as exc:
+        safety = get_safety_status()
+        detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
     ledger.record_event(level="CRITICAL", code="kill_switch", payload=result)
     risk.refresh_runtime_state()
     return {
@@ -478,6 +580,12 @@ async def kill_switch() -> dict:
 @router.post("/close_exposure")
 async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     state = get_state()
+    if is_hold_active():
+        safety = get_safety_status()
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail={"error": "hold_active", "reason": safety.get("hold_reason")},
+        )
     runtime = state.derivatives
     if not runtime:
         raise HTTPException(status_code=404, detail="derivatives runtime unavailable")

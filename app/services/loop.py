@@ -12,9 +12,13 @@ from ..broker.router import ExecutionRouter
 from . import arbitrage
 from .dryrun import compute_metrics, select_cycle_symbol
 from .runtime import (
+    HoldActiveError,
     LoopState,
     get_loop_state,
+    get_safety_status,
     get_state,
+    is_hold_active,
+    register_cancel_attempt,
     set_last_execution,
     set_last_plan,
     set_loop_config,
@@ -316,6 +320,9 @@ async def cancel_all_orders(venue: str | None = None) -> Dict[str, int]:
     if not orders:
         return {"cancelled": 0, "failed": 0}
     router = ExecutionRouter()
+    if is_hold_active():
+        safety = get_safety_status()
+        raise HoldActiveError(safety.get("hold_reason") or "hold_active")
     cancelled = 0
     failed = 0
     for order in orders:
@@ -323,8 +330,11 @@ async def cancel_all_orders(venue: str | None = None) -> Dict[str, int]:
         order_id = int(order.get("id", 0))
         broker = router.broker_for_venue(venue)
         try:
+            register_cancel_attempt(reason="runaway_cancels_per_min", source=f"cancel_all:{venue}")
             await broker.cancel(venue=venue, order_id=order_id)
             cancelled += 1
+        except HoldActiveError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive logging
             failed += 1
             ledger.record_event(

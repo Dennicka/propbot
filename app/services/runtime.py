@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -309,6 +310,111 @@ class OpportunityState:
 
 
 @dataclass
+class ResumeRequestState:
+    reason: str
+    requested_by: str | None = None
+    requested_ts: str = field(default_factory=_ts)
+    approved_ts: str | None = None
+    approved_by: str | None = None
+
+    def approve(self, *, actor: str | None = None) -> None:
+        self.approved_ts = _ts()
+        self.approved_by = actor
+
+    def as_dict(self) -> Dict[str, object | None]:
+        return {
+            "reason": self.reason,
+            "requested_at": self.requested_ts,
+            "requested_by": self.requested_by,
+            "approved_at": self.approved_ts,
+            "approved_by": self.approved_by,
+            "pending": self.approved_ts is None,
+        }
+
+
+@dataclass
+class RunawayCounterState:
+    orders_placed_last_min: int = 0
+    cancels_last_min: int = 0
+    window_started_at: float = field(default_factory=time.time)
+
+    def reset_if_needed(self, *, now: float) -> None:
+        if now - self.window_started_at >= 60.0:
+            self.window_started_at = now
+            self.orders_placed_last_min = 0
+            self.cancels_last_min = 0
+
+    def as_dict(self) -> Dict[str, int]:
+        return {
+            "orders_placed_last_min": self.orders_placed_last_min,
+            "cancels_last_min": self.cancels_last_min,
+        }
+
+
+@dataclass
+class SafetyLimits:
+    max_orders_per_min: int = 300
+    max_cancels_per_min: int = 600
+
+    def as_dict(self) -> Dict[str, int]:
+        return {
+            "max_orders_per_min": self.max_orders_per_min,
+            "max_cancels_per_min": self.max_cancels_per_min,
+        }
+
+
+@dataclass
+class SafetyState:
+    hold_active: bool = False
+    hold_reason: str | None = None
+    hold_source: str | None = None
+    hold_since: str | None = None
+    last_released_ts: str | None = None
+    resume_request: ResumeRequestState | None = None
+    limits: SafetyLimits = field(default_factory=SafetyLimits)
+    counters: RunawayCounterState = field(default_factory=RunawayCounterState)
+    clock_skew_s: float | None = None
+    clock_skew_checked_ts: str | None = None
+
+    def engage_hold(self, reason: str, *, source: str) -> bool:
+        changed = not self.hold_active
+        self.hold_active = True
+        self.hold_reason = reason
+        self.hold_source = source
+        self.hold_since = _ts()
+        self.last_released_ts = None
+        self.resume_request = None
+        return changed
+
+    def clear_hold(self) -> bool:
+        if not self.hold_active:
+            return False
+        self.hold_active = False
+        self.last_released_ts = _ts()
+        return True
+
+    def as_dict(self) -> Dict[str, object | None]:
+        payload: Dict[str, object | None] = {
+            "hold_active": self.hold_active,
+            "hold_reason": self.hold_reason,
+            "hold_source": self.hold_source,
+            "hold_since": self.hold_since,
+            "last_released_ts": self.last_released_ts,
+        }
+        if self.resume_request:
+            payload["resume_request"] = self.resume_request.as_dict()
+        payload["clock_skew_s"] = self.clock_skew_s
+        payload["clock_skew_checked_ts"] = self.clock_skew_checked_ts
+        return payload
+
+    def status_payload(self) -> Dict[str, object | None]:
+        payload = self.as_dict()
+        payload["counters"] = self.counters.as_dict()
+        payload["limits"] = self.limits.as_dict()
+        return payload
+
+
+@dataclass
 class RuntimeState:
     config: LoadedConfig
     guards: Dict[str, GuardState]
@@ -324,6 +430,7 @@ class RuntimeState:
     risk: RiskState = field(default_factory=RiskState)
     hedge_positions: List[Dict[str, Any]] = field(default_factory=list)
     last_opportunity: OpportunityState = field(default_factory=OpportunityState)
+    safety: SafetyState = field(default_factory=SafetyState)
 
 
 def _sync_loop_from_control(state: RuntimeState) -> None:
@@ -453,6 +560,10 @@ def _bootstrap_runtime() -> RuntimeState:
             max_daily_loss_usdt=_env_optional_float("MAX_DAILY_LOSS_USDT"),
         )
     )
+    safety_limits = SafetyLimits(
+        max_orders_per_min=_env_int("MAX_ORDERS_PER_MIN", 300),
+        max_cancels_per_min=_env_int("MAX_CANCELS_PER_MIN", 600),
+    )
     state = RuntimeState(
         config=loaded,
         guards=guards,
@@ -470,6 +581,7 @@ def _bootstrap_runtime() -> RuntimeState:
         ),
         open_orders=[],
         risk=risk_state,
+        safety=SafetyState(limits=safety_limits),
     )
     _sync_loop_from_control(state)
     return state
@@ -497,6 +609,16 @@ def get_loop_state() -> LoopState:
     return _STATE.loop
 
 
+def get_safety_status() -> Dict[str, object]:
+    with _STATE_LOCK:
+        return dict(_STATE.safety.status_payload())
+
+
+def is_hold_active() -> bool:
+    with _STATE_LOCK:
+        return bool(_STATE.safety.hold_active)
+
+
 def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float) -> LoopState:
     persist_snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
@@ -519,6 +641,97 @@ def update_loop_summary(summary: Dict[str, object]) -> None:
 
 def get_loop_config() -> LoopConfigState:
     return _STATE.loop_config
+
+
+def record_resume_request(reason: str, *, requested_by: str | None = None) -> Dict[str, object]:
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        safety.resume_request = ResumeRequestState(reason=str(reason), requested_by=requested_by)
+        snapshot = safety.as_dict()
+    _persist_safety_snapshot(snapshot)
+    resume_snapshot = snapshot.get("resume_request")
+    return dict(resume_snapshot) if isinstance(resume_snapshot, Mapping) else {}
+
+
+def approve_resume(actor: str | None = None) -> Dict[str, object]:
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        if safety.resume_request:
+            safety.resume_request.approve(actor=actor)
+        cleared = safety.clear_hold()
+        safety_snapshot = safety.as_dict()
+    _persist_safety_snapshot(safety_snapshot)
+    return {"hold_cleared": cleared, "safety": safety_snapshot}
+
+
+def _register_action_counter(
+    action: str,
+    delta: int,
+    *,
+    reason: str,
+    source: str,
+) -> None:
+    triggered_hold = False
+    detail = ""
+    hold_blocked = False
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        now = time.time()
+        safety.counters.reset_if_needed(now=now)
+        if safety.hold_active:
+            hold_blocked = True
+        else:
+            if action == "orders":
+                limit = safety.limits.max_orders_per_min
+                current = safety.counters.orders_placed_last_min
+            else:
+                limit = safety.limits.max_cancels_per_min
+                current = safety.counters.cancels_last_min
+            projected = current + max(delta, 0)
+            if limit > 0 and projected > limit:
+                triggered_hold = True
+                detail = f"{action}_per_min_limit_exceeded:{projected}>{limit}"
+                if action == "orders":
+                    safety.counters.orders_placed_last_min = projected
+                else:
+                    safety.counters.cancels_last_min = projected
+            else:
+                if action == "orders":
+                    safety.counters.orders_placed_last_min = projected
+                else:
+                    safety.counters.cancels_last_min = projected
+    if hold_blocked:
+        raise HoldActiveError("hold_active")
+    if triggered_hold:
+        engage_safety_hold(reason, source=source)
+        raise HoldActiveError(detail or f"{action}_limit")
+
+
+def register_order_attempt(delta: int = 1, *, reason: str, source: str) -> None:
+    _register_action_counter("orders", delta, reason=reason, source=source)
+
+
+def register_cancel_attempt(delta: int = 1, *, reason: str, source: str) -> None:
+    _register_action_counter("cancels", delta, reason=reason, source=source)
+
+
+def update_clock_skew(skew_seconds: float | None, *, source: str = "clock_skew_checker") -> None:
+    persist_snapshot: Dict[str, object] | None = None
+    hold_required = False
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        if skew_seconds is None:
+            safety.clock_skew_s = None
+        else:
+            safety.clock_skew_s = float(skew_seconds)
+            hold_required = abs(safety.clock_skew_s) > 0.2
+        safety.clock_skew_checked_ts = _ts()
+        persist_snapshot = safety.as_dict()
+    if hold_required:
+        engage_safety_hold("clock_skew_exceeded", source=source)
+    else:
+        if persist_snapshot is not None:
+            _persist_safety_snapshot(persist_snapshot)
 
 
 def get_open_orders() -> List[Dict[str, object]]:
@@ -575,9 +788,14 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
     """Force the runtime into HOLD/SAFE_MODE and stop auto-loop if needed."""
 
     persist_snapshot: Dict[str, object] | None = None
+    safety_snapshot: Dict[str, object] | None = None
     changed = False
+    hold_changed = False
     with _STATE_LOCK:
         control = _STATE.control
+        safety = _STATE.safety
+        hold_changed = safety.engage_hold(reason, source=source)
+        safety_snapshot = safety.as_dict()
         if control.mode != "HOLD":
             control.mode = "HOLD"
             changed = True
@@ -596,22 +814,24 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
             changed = True
         if changed:
             persist_snapshot = asdict(control)
-            duplicate = next(
-                (
-                    incident
-                    for incident in _STATE.incidents
-                    if incident.get("kind") == "auto_hold"
-                    and incident.get("details", {}).get("reason") == reason
-                ),
-                None,
+        duplicate = next(
+            (
+                incident
+                for incident in _STATE.incidents
+                if incident.get("kind") == "auto_hold"
+                and incident.get("details", {}).get("reason") == reason
+            ),
+            None,
+        )
+        if duplicate is None and (changed or hold_changed):
+            _STATE.incidents.append(
+                {"ts": _ts(), "kind": "auto_hold", "details": {"reason": reason, "source": source}}
             )
-            if duplicate is None:
-                _STATE.incidents.append(
-                    {"ts": _ts(), "kind": "auto_hold", "details": {"reason": reason, "source": source}}
-                )
     if persist_snapshot is not None:
         _persist_control_snapshot(persist_snapshot)
-    return changed
+    if safety_snapshot is not None:
+        _persist_safety_snapshot(safety_snapshot)
+    return changed or hold_changed
 
 
 def set_last_plan(plan: Dict[str, object]) -> None:
@@ -643,7 +863,10 @@ def reset_for_tests() -> None:
         _STATE.control.dry_run = False
         _STATE.hedge_positions = []
         _STATE.last_opportunity = OpportunityState()
+        limits = _STATE.safety.limits
+        _STATE.safety = SafetyState(limits=limits)
     globals()["_STATE"] = _STATE
+    _persist_safety_snapshot(_STATE.safety.as_dict())
 
 
 def control_as_dict() -> Dict[str, object]:
@@ -885,6 +1108,10 @@ def _persist_control_snapshot(snapshot: Mapping[str, object]) -> None:
     _persist_runtime_payload({"control": dict(snapshot)})
 
 
+def _persist_safety_snapshot(snapshot: Mapping[str, object]) -> None:
+    _persist_runtime_payload({"safety": dict(snapshot)})
+
+
 def _load_persisted_state(state: RuntimeState) -> None:
     payload = _load_runtime_payload()
     control_payload = payload.get("control") if isinstance(payload, Mapping) else None
@@ -906,9 +1133,50 @@ def _load_persisted_state(state: RuntimeState) -> None:
             state.last_opportunity = OpportunityState(opportunity=dict(opportunity), status=status)
         elif opportunity is None:
             state.last_opportunity = OpportunityState(opportunity=None, status=status)
+    safety_payload = payload.get("safety")
+    if isinstance(safety_payload, Mapping):
+        safety = state.safety
+        safety.hold_active = bool(safety_payload.get("hold_active", False))
+        safety.hold_reason = safety_payload.get("hold_reason") or None
+        safety.hold_source = safety_payload.get("hold_source") or None
+        safety.hold_since = safety_payload.get("hold_since") or None
+        safety.last_released_ts = safety_payload.get("last_released_ts") or None
+        skew_value = safety_payload.get("clock_skew_s")
+        if isinstance(skew_value, (int, float)):
+            safety.clock_skew_s = float(skew_value)
+        else:
+            safety.clock_skew_s = None
+        safety.clock_skew_checked_ts = safety_payload.get("clock_skew_checked_ts") or None
+        resume_payload = safety_payload.get("resume_request")
+        if isinstance(resume_payload, Mapping):
+            reason = resume_payload.get("reason")
+            if reason:
+                request = ResumeRequestState(reason=str(reason), requested_by=resume_payload.get("requested_by"))
+                requested_at = resume_payload.get("requested_at") or resume_payload.get("requested_ts")
+                if requested_at:
+                    request.requested_ts = str(requested_at)
+                approved_at = resume_payload.get("approved_at")
+                if approved_at:
+                    request.approved_ts = str(approved_at)
+                approved_by = resume_payload.get("approved_by")
+                if approved_by:
+                    request.approved_by = str(approved_by)
+                safety.resume_request = request
+            else:
+                safety.resume_request = None
+        else:
+            safety.resume_request = None
 
 
 _STATE = _bootstrap_runtime()
 _load_persisted_state(_STATE)
 _sync_loop_from_control(_STATE)
 _STATE_LOCK = threading.RLock()
+class HoldActiveError(RuntimeError):
+    """Raised when execution should stop due to the global hold flag."""
+
+    def __init__(self, reason: str = "hold_active") -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+

@@ -12,7 +12,15 @@ from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger
 from ..services import portfolio, risk
-from ..services.runtime import get_market_data, get_state, set_open_orders
+from ..services.runtime import (
+    HoldActiveError,
+    get_market_data,
+    get_safety_status,
+    get_state,
+    is_hold_active,
+    register_order_attempt,
+    set_open_orders,
+)
 from ..util.venues import VENUE_ALIASES
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -124,6 +132,10 @@ class ExecutionRouter:
                     venue=venue, symbol=symbol, side=side, original=price_to_use
                 )
             try:
+                register_order_attempt(
+                    reason="runaway_orders_per_min",
+                    source=f"execution_router:{venue}:{side.lower()}",
+                )
                 create_task = broker.create_order(
                     venue=venue,
                     symbol=symbol,
@@ -138,6 +150,8 @@ class ExecutionRouter:
                 )
                 order = await asyncio.wait_for(create_task, timeout=ORDER_TIMEOUT_SEC)
                 return order
+            except HoldActiveError:
+                raise
             except asyncio.TimeoutError as exc:
                 last_error = exc
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -196,6 +210,9 @@ class ExecutionRouter:
         state = get_state()
         post_only = bool(state.control.post_only)
         reduce_only = bool(state.control.reduce_only)
+        if not simulate and not self.dry_run_only and not state.control.safe_mode and is_hold_active():
+            safety = get_safety_status()
+            raise HoldActiveError(safety.get("hold_reason") or "hold_active")
         if simulate or self.dry_run_only or state.control.safe_mode:
             for leg in plan.legs:
                 venue = self._venue_for_exchange(leg.exchange)

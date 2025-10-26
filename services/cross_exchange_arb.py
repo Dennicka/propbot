@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
+from app.services.runtime import HoldActiveError, register_order_attempt
 from exchanges import BinanceFuturesClient, OKXFuturesClient
 
 
@@ -89,8 +90,21 @@ def execute_hedged_trade(
         long_client = _clients.okx
         short_client = _clients.binance
 
-    long_order = long_client.open_long(symbol, notion_usdt, leverage)
-    short_order = short_client.open_short(symbol, notion_usdt, leverage)
+    try:
+        register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
+        long_order = long_client.open_long(symbol, notion_usdt, leverage)
+        register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
+        short_order = short_client.open_short(symbol, notion_usdt, leverage)
+    except HoldActiveError as exc:
+        return {
+            "symbol": symbol,
+            "min_spread": float(min_spread),
+            "spread": spread_value,
+            "success": False,
+            "reason": exc.reason,
+            "details": spread_info,
+            "hold_active": True,
+        }
     long_order.setdefault("price", float(spread_info["cheap_ask"]))
     short_order.setdefault("price", float(spread_info["expensive_bid"]))
 

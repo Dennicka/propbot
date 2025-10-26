@@ -12,6 +12,14 @@ def test_status_overview_contract(client):
     for field in ("ts", "overall", "scores", "slo", "components", "alerts"):
         assert field in payload
 
+    assert "hold_active" in payload
+    assert "resume_request" in payload
+    assert "clock_skew_s" in payload
+    safety_block = payload.get("safety")
+    assert isinstance(safety_block, dict)
+    assert safety_block.get("counters") is not None
+    assert safety_block.get("limits") is not None
+
     assert payload["overall"] in {"OK", "WARN", "ERROR", "HOLD"}
 
     scores = payload["scores"]
