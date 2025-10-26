@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2025-10-26
+
+### Added
+- Added `docs/OPERATOR_RUNBOOK.md` with production and testnet operator procedures, including health checks, HOLD workflows, secret rotation, and restart guidance.
+- Added local operator CLI `cli/propbotctl.py` covering status, pause/resume, secret rotation, and event export commands.
+
+### Changed
+- Simplified `README.md` and `docs/TESTNET_QUICKSTART.md`, pointing routine steps to the runbook and clarifying production data directory expectations.
+- Clarified production deployment documentation around `docker-compose.prod.yml` and the persistent `./data` volume.
+
 ## [0.1.1] - 2025-10-26
 
 ### Added

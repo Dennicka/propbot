@@ -57,6 +57,16 @@ Set `BUILD_LOCAL=1 make up` to rebuild the image on the fly instead of pulling
 from GHCR. Runtime artefacts (ledger, runtime_state.json) are stored under
 `./data` and persist between restarts.
 
+### Права на каталог `data`
+
+Перед запуском production-контура через `docker-compose.prod.yml` создайте на
+сервере каталог `./data` рядом с compose-файлом и убедитесь, что он доступен на
+запись пользователю, от которого запускается Docker (например, `sudo mkdir -p
+./data && sudo chown 1000:1000 ./data && sudo chmod 770 ./data`). Этот каталог
+монтируется в контейнер как `/app/data` и содержит постоянные базы/состояние.
+Права должны позволять контейнеру читать и записывать файлы, иначе сервис не
+сможет стартовать.
+
 ## Environment configuration (`.env`)
 
 Copy `.env.example` to `.env` and update the placeholders. Every variable in
@@ -107,7 +117,9 @@ access, and two-man approvals before resuming trading in live mode. Never store
 real credentials in repositories or unattended hosts.
 
 For routine operational procedures (health checks, HOLD management, secret
-rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`.
+rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`. Оператор может
+пользоваться Telegram-ботом или локальным `propbotctl` (CLI требует локального
+или SSH-доступа к хосту и bearer-токен).
 
 ## CLI `propbotctl`
 

@@ -43,6 +43,14 @@ curl -s http://127.0.0.1:8000/api/ui/status/overview | jq '{overall, alerts}'
 Use `TAG=v0.1.1 make up` and `make down` for the Makefile wrappers, or set
 `BUILD_LOCAL=1 make up` to rebuild the image locally.
 
+### Права на каталог `data`
+
+Если разворачиваете тестовый или продакшн-контур на удалённом сервере, заранее
+создайте рядом с `docker-compose.prod.yml` каталог `./data` и назначьте ему
+права на запись для пользователя контейнера (например, `sudo mkdir -p ./data &&
+sudo chown 1000:1000 ./data && sudo chmod 770 ./data`). Docker монтирует его в
+`/app/data`, поэтому без корректных прав журнал и состояние не сохранятся.
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and fill in the placeholders. Highlights for the
@@ -73,6 +81,7 @@ testnet profile:
 `deploy/env.example.prod`. Секреты никогда не коммитятся в репозиторий.
 
 For daily operational routines (status checks, HOLD management, secret rotation, exports) see `docs/OPERATOR_RUNBOOK.md`.
+Оператор может работать через Telegram-бота или локальный CLI `propbotctl` (для CLI нужен локальный/SSH-доступ и bearer-токен).
 
 ## Binance safety note
 
