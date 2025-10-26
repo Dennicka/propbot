@@ -29,6 +29,7 @@ from ..services.runtime import (
     set_open_orders,
 )
 from ..services import portfolio, risk
+from ..utils import redact_sensitive_data
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -97,7 +98,7 @@ async def runtime_state() -> dict:
     risk_reasons = [breach.detail or breach.limit for breach in risk_state.breaches]
     dryrun = state.dryrun
     control_snapshot = control_as_dict()
-    return {
+    response = {
         "mode": state.control.mode,
         "flags": state.control.flags,
         "safe_mode": state.control.safe_mode,
@@ -124,6 +125,7 @@ async def runtime_state() -> dict:
         "risk_blocked": risk_blocked,
         "risk_reasons": risk_reasons,
     }
+    return redact_sensitive_data(response)
 
 
 def _secret_payload(state) -> dict:
@@ -148,7 +150,7 @@ def _secret_payload(state) -> dict:
 @router.get("/secret")
 async def secret_state() -> dict:
     state = get_state()
-    return _secret_payload(state)
+    return redact_sensitive_data(_secret_payload(state))
 
 
 @router.patch("/control")

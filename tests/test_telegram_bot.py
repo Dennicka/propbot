@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.telebot.telegram_bot import TelegramBot, TelegramBotConfig, format_status_message
+from app.telebot.telegram_bot import (
+    TelegramBot,
+    TelegramBotConfig,
+    format_status_message,
+)
 
 
 def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,3 +51,18 @@ def test_status_formatter_contains_expected_fields() -> None:
     assert "SAFE_MODE=True" in message
     assert "PROFILE=paper" in message
     assert "RISK_BREACHES=1" in message
+
+
+@pytest.mark.asyncio
+async def test_status_command_returns_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TelegramBotConfig(token="token", chat_id="1", enabled=True, push_minutes=5)
+    bot = TelegramBot(config)
+
+    async def fake_status_message() -> str:
+        return "Status: ok"
+
+    monkeypatch.setattr("app.telebot.telegram_bot.build_status_message", fake_status_message)
+
+    message = await bot._handle_status()
+
+    assert message == "Status: ok"

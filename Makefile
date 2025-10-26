@@ -9,7 +9,7 @@ PIP=$(VENV)/bin/pip
 UVICORN=$(VENV)/bin/uvicorn
 PYTEST=$(VENV)/bin/pytest
 REMOTE ?= origin
-TAG ?= 0.1.0
+TAG ?= 0.1.1
 export TAG
 
 venv:
