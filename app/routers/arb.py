@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Dict, List, Literal
+from typing import Annotated, Dict, List, Literal, Union
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..services import arbitrage
 from ..services.runtime import get_state, set_last_execution, set_last_plan
+from services.cross_exchange_arb import check_spread, execute_hedged_trade
+from services.risk_manager import can_open_new_position, register_position
 
 router = APIRouter()
 
@@ -30,6 +32,13 @@ class PreviewRequest(BaseModel):
         if "symbol" not in values or not values.get("symbol"):
             raise ValueError("symbol or pair is required")
         return values
+
+
+class CrossPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    symbol: str
+    min_spread: float
 
 
 class PlanLegModel(BaseModel):
@@ -56,8 +65,35 @@ class PlanModel(BaseModel):
     reason: str | None = None
 
 
+class CrossExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    symbol: str
+    min_spread: float
+    notion_usdt: float
+    leverage: float
+
+
 @router.post("/preview")
 async def preview(request: PreviewRequest) -> dict:
+    extras = getattr(request, "model_extra", {}) or {}
+    if "min_spread" in extras and extras.get("min_spread") is not None:
+        min_spread = float(extras["min_spread"])
+        spread_info = check_spread(request.symbol)
+        spread_value = float(spread_info["spread"])
+        meets_threshold = spread_value >= min_spread
+        response = {
+            "symbol": request.symbol,
+            "min_spread": min_spread,
+            "spread": spread_value,
+            "meets_min_spread": meets_threshold,
+            "long_exchange": spread_info["cheap"],
+            "short_exchange": spread_info["expensive"],
+            "cheap_ask": spread_info["cheap_ask"],
+            "expensive_bid": spread_info["expensive_bid"],
+        }
+        return response
+
     state = get_state()
     notional_value = (
         float(request.notional)
@@ -75,11 +111,42 @@ async def preview(request: PreviewRequest) -> dict:
     return plan_dict
 
 
+ExecutePayload = Annotated[
+    Union[PlanModel, CrossExecuteRequest],
+    Body(...),
+]
+
+
 @router.post("/execute")
-async def execute(plan_body: PlanModel) -> dict:
+async def execute(plan_body: ExecutePayload) -> dict:
     state = get_state()
     if state.control.safe_mode:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
+    if isinstance(plan_body, CrossExecuteRequest):
+        can_open, reason = can_open_new_position(plan_body.notion_usdt, plan_body.leverage)
+        if not can_open:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+        trade_result = execute_hedged_trade(
+            plan_body.symbol,
+            plan_body.notion_usdt,
+            plan_body.leverage,
+            plan_body.min_spread,
+        )
+        if not trade_result.get("success"):
+            detail = trade_result.get("reason", "spread_below_threshold")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        position_payload = {
+            "symbol": plan_body.symbol,
+            "notional_usdt": plan_body.notion_usdt,
+            "leverage": plan_body.leverage,
+            "legs": [
+                trade_result.get("long_order", {}),
+                trade_result.get("short_order", {}),
+            ],
+        }
+        register_position(position_payload)
+        return trade_result
+
     payload = plan_body.model_dump()
     plan = arbitrage.plan_from_payload(payload)
     dry_run = bool(state.control.dry_run)
