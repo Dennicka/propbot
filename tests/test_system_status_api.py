@@ -1,0 +1,64 @@
+import json
+
+
+def test_status_overview_contract(client):
+    resp = client.get("/api/ui/status/overview")
+    assert resp.status_code == 200
+    payload = resp.json()
+
+    for field in ("ts", "overall", "scores", "slo", "components", "alerts"):
+        assert field in payload
+
+    assert payload["overall"] in {"OK", "WARN", "ERROR", "HOLD"}
+
+    scores = payload["scores"]
+    assert set(scores.keys()) == {"P0", "P1", "P2", "P3"}
+    slo = payload["slo"]
+    for metric in (
+        "ws_gap_ms_p95",
+        "order_cycle_ms_p95",
+        "reject_rate",
+        "cancel_fail_rate",
+        "recon_mismatch",
+        "max_day_drawdown_bps",
+        "budget_remaining",
+    ):
+        assert metric in slo
+
+    components = payload["components"]
+    assert isinstance(components, list)
+    assert components, "components list must not be empty"
+
+    required_ids = {
+        "journal_outbox",
+        "guarded_startup",
+        "leader_fencing",
+        "conformance",
+        "recon",
+        "keys_security",
+        "compliance_worm",
+        "slo_watchdog",
+    }
+    assert required_ids.issubset({comp["id"] for comp in components})
+
+    for comp in components:
+        for field in ("id", "title", "group", "status", "summary", "metrics", "links"):
+            assert field in comp
+        assert comp["group"] in {"P0", "P1", "P2", "P3"}
+        assert comp["status"] in {"OK", "WARN", "ERROR", "HOLD"}
+        assert isinstance(comp["metrics"], dict)
+        assert isinstance(comp["links"], list)
+
+    alerts = payload["alerts"]
+    assert isinstance(alerts, list)
+    for alert in alerts:
+        for field in ("severity", "title", "msg", "since", "component_id"):
+            assert field in alert
+
+
+def test_status_stream_websocket_smoke(client):
+    with client.websocket_connect("/api/ui/status/stream/status") as ws:
+        message = ws.receive_text()
+        payload = json.loads(message)
+        assert "overall" in payload
+        assert "components" in payload

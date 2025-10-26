@@ -167,6 +167,7 @@ class MetricsState:
     })
     counters: Dict[str, float] = field(default_factory=dict)
     latency_samples_ms: List[float] = field(default_factory=list)
+    slo_breach_started_at: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
