@@ -1,4 +1,7 @@
 import json
+from datetime import datetime, timedelta, timezone
+
+from app.services import runtime
 
 
 def test_status_overview_contract(client):
@@ -62,3 +65,28 @@ def test_status_stream_websocket_smoke(client):
         payload = json.loads(message)
         assert "overall" in payload
         assert "components" in payload
+
+
+def test_critical_slo_triggers_auto_hold(client):
+    runtime.reset_for_tests()
+    state = runtime.get_state()
+    state.control.mode = "RUN"
+    state.control.safe_mode = False
+    state.control.auto_loop = True
+    state.loop.running = True
+    state.loop.status = "RUN"
+    state.metrics.slo["ws_gap_ms_p95"] = 5_000.0
+    breach_started = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    state.metrics.slo_breach_started_at["ws_gap_ms_p95"] = breach_started
+
+    resp = client.get("/api/ui/status/overview")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["overall"] == "HOLD"
+    assert state.control.mode == "HOLD"
+    assert state.control.safe_mode is True
+    assert state.control.auto_loop is False
+    assert state.loop.status == "HOLD"
+    assert state.loop.running is False
+
+    runtime.reset_for_tests()

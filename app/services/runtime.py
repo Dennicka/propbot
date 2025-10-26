@@ -555,6 +555,49 @@ def set_mode(mode: str) -> None:
         _STATE.control.mode = normalised
 
 
+def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
+    """Force the runtime into HOLD/SAFE_MODE and stop auto-loop if needed."""
+
+    persist_snapshot: Dict[str, object] | None = None
+    changed = False
+    with _STATE_LOCK:
+        control = _STATE.control
+        if control.mode != "HOLD":
+            control.mode = "HOLD"
+            changed = True
+        if not control.safe_mode:
+            control.safe_mode = True
+            changed = True
+        if control.auto_loop:
+            control.auto_loop = False
+            changed = True
+        loop_state = _STATE.loop
+        if loop_state.running:
+            loop_state.running = False
+            changed = True
+        if loop_state.status != "HOLD":
+            loop_state.status = "HOLD"
+            changed = True
+        if changed:
+            persist_snapshot = asdict(control)
+            duplicate = next(
+                (
+                    incident
+                    for incident in _STATE.incidents
+                    if incident.get("kind") == "auto_hold"
+                    and incident.get("details", {}).get("reason") == reason
+                ),
+                None,
+            )
+            if duplicate is None:
+                _STATE.incidents.append(
+                    {"ts": _ts(), "kind": "auto_hold", "details": {"reason": reason, "source": source}}
+                )
+    if persist_snapshot is not None:
+        _persist_control_snapshot(persist_snapshot)
+    return changed
+
+
 def set_last_plan(plan: Dict[str, object]) -> None:
     dryrun_state = ensure_dryrun_state()
     dryrun_state.last_plan = plan

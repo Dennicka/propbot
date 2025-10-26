@@ -277,10 +277,12 @@ class TelegramBot:
                 response = await self._handle_pause()
             elif command == "/resume":
                 response = await self._handle_resume()
-            elif command in {"/close_all", "/closeall"}:
+            elif command == "/status":
+                response = await self._handle_status()
+            elif command in {"/close_all", "/closeall", "/close"}:
                 response = await self._handle_close_all()
             else:
-                response = "Unknown command. Available: /pause, /resume, /close_all"
+                response = "Unknown command. Available: /pause, /resume, /status, /close"
         except Exception as exc:  # pragma: no cover - ensure failure is reported
             self.logger.exception("Telegram command failed", extra={"command": command})
             response = f"Command failed: {exc}"[:400]
@@ -301,6 +303,10 @@ class TelegramBot:
         set_mode("RUN")
         ledger.record_event(level="INFO", code="mode_change", payload={"mode": "RUN", "source": "telegram"})
         return "Trading resumed. SAFE_MODE=False."
+
+    async def _handle_status(self) -> str:
+        message = await build_status_message()
+        return message
 
     async def _handle_close_all(self) -> str:
         state = get_state()

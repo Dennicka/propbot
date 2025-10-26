@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-10-26
+
 ### Added
-- Added Telegram control/alerts bot.
+- Telegram control and alert bot with pause/resume/status/close commands and operator notifications.
+- System Status API with SLO-driven alerts and automatic HOLD/SAFE_MODE escalation.
+- Web/API control surface: `/api/ui/status/...`, `/api/ui/state`, `/api/ui/events` endpoints and UI panel updates.
+
+### Changed
+- Redacted API responses to mask API tokens and exchange keys.
 
 ## [0.1.0] - 2024-04-30
 

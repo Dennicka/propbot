@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
-from .runtime import RuntimeState, get_state
+from .runtime import RuntimeState, engage_safety_hold, get_state
+from ..utils import redact_sensitive_data
 
 
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
@@ -385,7 +386,7 @@ def _evaluate_slo(
     components: List[Dict[str, object]],
     *,
     now: datetime,
-) -> Tuple[List[Dict[str, object]], bool]:
+) -> Tuple[List[Dict[str, object]], bool, List[str]]:
     thresholds_cfg = state.config.thresholds.slo if state.config.thresholds else {}
     environment = state.control.environment or state.control.deployment_mode or "paper"
     values = dict(state.metrics.slo)
@@ -394,6 +395,7 @@ def _evaluate_slo(
     slo_component = component_lookup.get("slo_watchdog")
     alerts: List[Dict[str, object]] = []
     hold_required = False
+    hold_reasons: List[str] = []
     active_breaches = 0
 
     for metric, value in values.items():
@@ -434,12 +436,14 @@ def _evaluate_slo(
             severity = "critical"
             hold_required = True
             status_update = "HOLD"
+            hold_reasons.append(f"{metric} {comparator} {limit}")
 
         if metric == "recon_mismatch" and value > 0:
             status_update = "HOLD"
             severity = "critical"
             component_id = "recon"
             hold_required = True
+            hold_reasons.append("reconciliation mismatch > 0")
 
         component = component_lookup.get(component_id)
         if component:
@@ -474,7 +478,7 @@ def _evaluate_slo(
         else:
             slo_component["summary"] = "watching"
 
-    return alerts, hold_required
+    return alerts, hold_required, hold_reasons
 
 
 def _score(status: str) -> float:
@@ -489,7 +493,7 @@ def _score(status: str) -> float:
 def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     now = datetime.now(timezone.utc)
     components = _build_components(state)
-    alerts, hold_required = _evaluate_slo(state, components, now=now)
+    alerts, hold_required, hold_reasons = _evaluate_slo(state, components, now=now)
 
     scores: Dict[str, List[float]] = {group: [] for group in _GROUP_ORDER}
     for comp in components:
@@ -505,6 +509,10 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         if _SEVERITY_RANK[comp_status] > _SEVERITY_RANK[overall]:
             overall = comp_status
 
+    if hold_required:
+        reason = "; ".join(hold_reasons) if hold_reasons else "SLO breach"
+        engage_safety_hold(reason)
+
     if state.control.mode == "HOLD" or not state.control.preflight_passed or hold_required:
         overall = "HOLD"
 
@@ -516,7 +524,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
 
     thresholds = state.config.thresholds.slo if state.config.thresholds else {}
 
-    return {
+    snapshot = {
         "ts": now.isoformat(),
         "overall": overall,
         "scores": aggregate,
@@ -525,6 +533,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "components": components,
         "alerts": alerts,
     }
+    return redact_sensitive_data(snapshot)
 
 
 def get_status_overview() -> Dict[str, object]:
