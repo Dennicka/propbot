@@ -15,6 +15,16 @@ def test_status_overview_contract(client):
     assert "hold_active" in payload
     assert "resume_request" in payload
     assert "clock_skew_s" in payload
+    assert "auto_hedge" in payload
+    auto_block = payload["auto_hedge"]
+    for field in (
+        "auto_enabled",
+        "last_opportunity_checked_ts",
+        "last_execution_result",
+        "consecutive_failures",
+        "on_hold",
+    ):
+        assert field in auto_block
     safety_block = payload.get("safety")
     assert isinstance(safety_block, dict)
     assert safety_block.get("counters") is not None

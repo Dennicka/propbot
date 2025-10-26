@@ -109,6 +109,12 @@ class OpportunityScanner:
 _scanner = OpportunityScanner()
 
 
+def get_scanner() -> OpportunityScanner:
+    """Return the process-wide opportunity scanner instance."""
+
+    return _scanner
+
+
 def setup_scanner(app: FastAPI) -> None:
     app.state.opportunity_scanner = _scanner
 
@@ -121,4 +127,4 @@ def setup_scanner(app: FastAPI) -> None:
         await _scanner.stop()
 
 
-__all__ = ["OpportunityScanner", "setup_scanner"]
+__all__ = ["OpportunityScanner", "setup_scanner", "get_scanner"]

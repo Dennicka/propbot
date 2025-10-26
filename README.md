@@ -259,6 +259,36 @@ curl -s -X POST http://127.0.0.1:8000/api/arb/execute \
   -d '{"symbol": "BTCUSDT", "min_spread": 2.5, "notion_usdt": 1500, "leverage": 3}' | jq
 ```
 
+### Auto mode
+
+The cross-exchange loop now includes a guarded auto-execution daemon. To enable
+it set `AUTO_HEDGE_ENABLED=true` (and optionally tune
+`AUTO_HEDGE_SCAN_SECS`/`MAX_AUTO_FAILS_PER_MIN`) before starting the API
+service. When active the daemon:
+
+* reuses the existing opportunity scanner every `AUTO_HEDGE_SCAN_SECS` seconds;
+* skips execution whenever `hold_active` is set, SAFE_MODE is on, two-man resume
+  is pending, runaway counters hit, or any risk breach is present;
+* invokes the same `/api/arb/execute` flow as the manual REST path so all
+  guardrails (limits, runaway breaker, approvals) remain intact;
+* records each automatic fill or rejection in `data/hedge_log.json` with the
+  initiator set to `YOUR_NAME_OR_TOKEN`.
+
+Review the log via the new read-only endpoint:
+
+```bash
+curl -s -H 'Authorization: Bearer <API_TOKEN>' \
+  "http://127.0.0.1:8000/api/ui/hedge/log?limit=50" | jq
+```
+
+The system status payload (`/api/ui/status/overview`) now exposes an
+`auto_hedge` block showing whether auto mode is enabled, when the last
+opportunity was checked, the most recent result, and the number of consecutive
+failures. If more than `MAX_AUTO_FAILS_PER_MIN` errors occur inside a rolling
+minute the daemon engages HOLD automatically and records the reason. It will
+never clear HOLD on its own—the two-man resume flow still applies, and all risk
+limits continue to take precedence over profitability.
+
 Successful responses include the executed leg details (long venue, short venue)
 and the persisted position snapshot. If the spread collapses below the
 threshold or limits are exceeded, the endpoint returns a `400` with the
