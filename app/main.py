@@ -8,6 +8,7 @@ from .routers import arb, health, risk, ui
 from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
+from .telebot import setup_telegram_bot
 
 
 def _should_guard(request: Request) -> bool:
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(ui.router)
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
+    setup_telegram_bot(app)
     return app
 
 

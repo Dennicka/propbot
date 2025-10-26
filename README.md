@@ -39,6 +39,35 @@ SAFE_MODE=true PROFILE=paper AUTH_ENABLED=true API_TOKEN=devtoken123 \
 | Binance Futures Live | `PROFILE=live`, `SAFE_MODE=false` (по осознанному решению), `BINANCE_LV_API_KEY`, `BINANCE_LV_API_SECRET`, опционально `BINANCE_LV_BASE_URL` |
 | Paper симуляция | `PROFILE=paper`, `SAFE_MODE=true`, дополнительных ключей не требуется |
 
+### Telegram-бот для алертов и управления
+
+Фоновый сервис Telegram запускается вместе с FastAPI и может рассылать статусные сообщения, а также принимать команды управления. Чтобы включить его, задайте переменные окружения:
+
+- `TELEGRAM_ENABLE=true` — включает интеграцию (по умолчанию выключена).
+- `TELEGRAM_BOT_TOKEN` — токен бота, полученный у [@BotFather](https://core.telegram.org/bots#6-botfather).
+- `TELEGRAM_CHAT_ID` — идентификатор чата/пользователя, который будет получать уведомления и отправлять команды.
+- `TELEGRAM_PUSH_MINUTES=5` — интервал между автоматическими статусами (PnL, SAFE_MODE, активные позиции). Можно изменить на нужное количество минут.
+
+После запуска бот отправляет сводку вида:
+
+```
+Status:
+PnL=realized:<...>, unrealized:<...>, total:<...>
+Positions=<...>
+SAFE_MODE=<...>
+MODE=<...>
+PROFILE=<paper|testnet|live>
+RISK_BREACHES=<n>
+```
+
+Доступные команды из Telegram (должны приходить из `TELEGRAM_CHAT_ID`):
+
+- `/pause` — включает SAFE_MODE и переводит цикл в HOLD.
+- `/resume` — отключает SAFE_MODE и возобновляет торговый цикл (режим RUN).
+- `/close_all` — вызывает `cancel_all_orders` через существующий сервис и снимает активные ордера (работает только при `PROFILE=testnet`).
+
+> ⚠️ **WARNING:** команда `/resume` при `PROFILE=live` и `SAFE_MODE=false` разрешит размещение реальных ордеров. Используйте её только при полной готовности к торговле.
+
 ## 2. Запуск API и UI
 
 ```bash

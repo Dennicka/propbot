@@ -62,6 +62,23 @@ Copy `.env.example` to `.env` when overrides are required: `cp /Users/denis/prop
 
 > SAFE_MODE=true + PROFILE=paper гарантируют, что реальные ордера не покидают сервис — используется встроенный симулятор.
 
+### Optional Telegram control bot
+
+The FastAPI app can launch a Telegram bot that relays status updates and accepts simple control commands. Configure it via env vars:
+
+- `TELEGRAM_ENABLE=true` to activate the integration (disabled by default).
+- `TELEGRAM_BOT_TOKEN` with the token issued by [@BotFather](https://core.telegram.org/bots#6-botfather).
+- `TELEGRAM_CHAT_ID` pointing to the chat or user allowed to control PropBot.
+- `TELEGRAM_PUSH_MINUTES` with the status interval (default `5` minutes).
+
+Once enabled, PropBot sends periodic summaries (`PnL`, open positions, SAFE_MODE state, profile) and listens for commands from the authorised chat:
+
+- `/pause` — flips SAFE_MODE on and holds the trading loop.
+- `/resume` — disables SAFE_MODE and resumes trading.
+- `/close_all` — invokes the existing cancel-all routine (only honoured on `PROFILE=testnet`).
+
+> ⚠️ **WARNING:** issuing `/resume` when `PROFILE=live` and SAFE_MODE is already disabled will allow real orders to be placed.
+
 ## Runtime control patch API
 
 The dashboard issues `PATCH /api/ui/control` requests when the **Edit Config** modal is submitted. You can also invoke it directly:
