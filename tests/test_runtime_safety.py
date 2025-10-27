@@ -1,4 +1,4 @@
-import os
+import json
 
 import pytest
 
@@ -81,3 +81,15 @@ def test_cancel_counter_triggers_hold(monkeypatch):
     with pytest.raises(HoldActiveError):
         register_cancel_attempt(reason="test_counter", source="pytest")
     assert is_hold_active() is True
+
+
+def test_hold_reason_persisted_to_runtime_store(monkeypatch, tmp_path):
+    runtime_path = tmp_path / "runtime_state.json"
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
+    runtime.reset_for_tests()
+
+    runtime.engage_safety_hold("audit_hold", source="pytest")
+
+    payload = json.loads(runtime_path.read_text())
+    assert payload["safety"]["hold_active"] is True
+    assert payload["safety"]["hold_reason"] == "audit_hold"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Dict
 
 from typing import Dict
@@ -254,3 +255,15 @@ async def test_auto_daemon_simulates_in_dry_run_mode(monkeypatch, tmp_path) -> N
     assert overview["dry_run_mode"] is True
     assert runtime.get_state().control.dry_run_mode is True
     runtime.reset_for_tests()
+
+
+def test_auto_hedge_last_success_persisted(monkeypatch, tmp_path):
+    runtime_path = tmp_path / "runtime_state.json"
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
+    runtime.reset_for_tests()
+
+    ts = "2024-01-01T00:00:00+00:00"
+    runtime.update_auto_hedge_state(last_success_ts=ts, last_execution_result="ok")
+
+    payload = json.loads(runtime_path.read_text())
+    assert payload["auto_hedge"]["last_success_ts"] == ts

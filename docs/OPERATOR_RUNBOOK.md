@@ -26,7 +26,7 @@
 3. Запускайте контейнеры: `docker compose -f docker-compose.prod.yml --env-file
    .env.prod up -d`. Проверяйте healthcheck через
    `docker inspect --format '{{json .State.Health}}' propbot_app_prod | jq` —
-   статус `healthy` означает, что `/api/ui/status/overview` отдаёт 200.
+   статус `healthy` означает, что `/healthz` отдаёт `{ "ok": true }`.
 4. После старта убедитесь, что защита включена:
    ```bash
    curl -sfS -H "Authorization: Bearer $API_TOKEN" \
@@ -42,9 +42,44 @@
 6. Не снимайте лимиты по плечу/ноционалу — runaway guard и риск-блокировки
    используют их для защиты.
 
+## Going live
+
+После старта `docker compose -f docker-compose.prod.yml --env-file .env.prod up`
+выполните обязательные шаги перед переходом в реальную торговлю:
+
+1. Проверка здоровья процесса и фоновых демонов:
+   ```bash
+   curl -sf http://localhost:8000/healthz | jq
+   ```
+   Ожидаемый ответ — `{ "ok": true }`.
+2. Снимите сводку по флагам безопасности:
+   ```bash
+   curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+     http://localhost:8000/api/ui/status/overview | jq '.flags'
+   ```
+3. Убедитесь, что экспозиция и ноги хеджа соответствуют ожиданиям:
+   ```bash
+   curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+     http://localhost:8000/api/ui/positions | jq '.positions'
+   ```
+4. Проверьте, что `flags.hold_active=true`, `flags.safe_mode=true` и
+   `flags.dry_run_mode=true`. Первый запуск всегда выполняйте с
+   `DRY_RUN_MODE=true` и HOLD активным.
+5. Для выхода в бой задействуйте двухшаговый флоу `resume-request` →
+   `resume-confirm` (с `APPROVE_TOKEN`) → `resume`. Без подтверждения второго
+   оператора HOLD остаётся активен.
+6. Никогда не выключайте HOLD и `DRY_RUN_MODE` одновременно: сначала снимайте
+   HOLD через подтверждённый `resume-confirm`, затем вручную переводите
+   `DRY_RUN_MODE` и SAFE_MODE в боевой режим.
+
+Журнал `data/runtime_state.json` сохраняет причину HOLD и таймштамп
+(`safety.hold_reason`, `safety.hold_since`, `safety.last_released_ts`), а также
+время последней успешной хедж-операции (`auto_hedge.last_success_ts`).
+Используйте этот файл (или соответствующий endpoint UI) для аудита и расследований.
+
 ## Ежедневный мониторинг
 
-- `GET /api/healthz` — проверка живости.
+- `GET /healthz` — проверка живости.
 - `GET /api/ui/status/overview` — сводка SAFE_MODE/HOLD, причина HOLD,
   `two_man_resume_required`, runaway guard, `auto_hedge.consecutive_failures`.
 - `GET /api/ui/status/components` и `/api/ui/status/slo` — детализация
