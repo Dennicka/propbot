@@ -588,6 +588,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "hold_reason": safety_snapshot.get("hold_reason"),
         "hold_source": safety_snapshot.get("hold_source"),
         "operational_flags": state.control.flags,
+        "dry_run_mode": state.control.dry_run_mode,
         "runaway_guard": {
             "limits": dict(safety_snapshot.get("limits", {})),
             "counters": dict(safety_snapshot.get("counters", {})),
@@ -618,6 +619,7 @@ def get_status_components() -> Dict[str, object]:
         "components": snapshot["components"],
         "mode": snapshot.get("mode"),
         "safe_mode": snapshot.get("safe_mode"),
+        "dry_run_mode": snapshot.get("dry_run_mode"),
         "hold_active": snapshot.get("hold_active"),
         "hold_reason": snapshot.get("hold_reason"),
         "two_man_resume_required": snapshot.get("two_man_resume_required"),
@@ -636,6 +638,7 @@ def get_status_slo() -> Dict[str, object]:
         "alerts": snapshot["alerts"],
         "mode": snapshot.get("mode"),
         "safe_mode": snapshot.get("safe_mode"),
+        "dry_run_mode": snapshot.get("dry_run_mode"),
         "hold_active": snapshot.get("hold_active"),
         "two_man_resume_required": snapshot.get("two_man_resume_required"),
         "resume_pending": snapshot.get("resume_pending"),

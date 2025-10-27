@@ -139,6 +139,8 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "pnl_usdt": float(payload.get("pnl_usdt") or 0.0),
         "base_size": float(base_size),
     }
+    if payload.get("simulated") is not None:
+        record["simulated"] = bool(payload.get("simulated"))
     record["legs"] = [
         _normalise_leg(
             venue=long_venue,

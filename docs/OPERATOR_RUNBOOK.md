@@ -15,6 +15,8 @@
    - Биржевые API-ключи (`BINANCE_*`, `OKX_*`) по выбранному `PROFILE`.
    - `SAFE_MODE=true`, `MODE=HOLD` на первом запуске, `DRY_RUN_ONLY=true` для
      тестовой среды.
+   - `DRY_RUN_MODE=true` если нужно прогнать хедж в симуляции: реальные ордера
+     не уйдут на биржи, но все лимиты и HOLD остаются активными.
    - `APPROVE_TOKEN` (секрет второго оператора), `API_TOKEN` (для защищённых
      ручек и CLI), `AUTH_ENABLED=true`.
    - `RUNTIME_STATE_PATH=./data/runtime_state.json`, `POSITIONS_STORE_PATH` и
@@ -165,6 +167,12 @@
   Путь можно переопределить переменной окружения `POSITIONS_STORE_PATH`. Файл —
   обычный JSON-массив, поэтому в экстренной ситуации его можно просмотреть
   напрямую (`jq '.' data/hedge_positions.json`).
+- Если перед запуском установить `DRY_RUN_MODE=true`, то ручные и автоматические
+  хеджи выполняются в безопасной симуляции: реальные ордера не уходят на биржи,
+  но все лимиты риска и runaway guard продолжают работать. В `hedge_positions`
+  и `hedge_log` записи помечаются `status="simulated"`, алерты в Telegram
+  содержат пометку «DRY_RUN_MODE», а `/api/ui/status/overview`/`/state` явно
+  показывают `dry_run_mode=true`.
 - Для оперативной проверки используйте защищённый эндпоинт
   `GET /api/ui/positions` (тот же bearer-токен, что и для `/api/ui/alerts`).
   Ответ содержит массив позиций с обеими ногами (`legs[*]`), рассчитанный

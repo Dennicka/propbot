@@ -147,6 +147,7 @@ async def runtime_state() -> dict:
         "flags": state.control.flags,
         "safe_mode": state.control.safe_mode,
         "dry_run": state.control.dry_run,
+        "dry_run_mode": state.control.dry_run_mode,
         "two_man_rule": state.control.two_man_rule,
         "control": control_snapshot,
         "incidents": list(state.incidents),

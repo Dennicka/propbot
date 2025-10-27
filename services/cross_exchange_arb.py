@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
-from app.services.runtime import HoldActiveError, register_order_attempt
+from app.services.runtime import HoldActiveError, is_dry_run_mode, register_order_attempt
 from exchanges import BinanceFuturesClient, OKXFuturesClient
 
 
@@ -90,11 +90,30 @@ def execute_hedged_trade(
         long_client = _clients.okx
         short_client = _clients.binance
 
+    dry_run_mode = is_dry_run_mode()
+
+    def _simulated_order(exchange: str, side: str) -> Dict[str, object]:
+        return {
+            "exchange": exchange,
+            "symbol": symbol,
+            "side": side,
+            "notional_usdt": notion_usdt,
+            "leverage": leverage,
+            "status": "simulated",
+            "simulated": True,
+        }
+
     try:
         register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
-        long_order = long_client.open_long(symbol, notion_usdt, leverage)
+        if dry_run_mode:
+            long_order = _simulated_order(cheap_exchange, "long")
+        else:
+            long_order = long_client.open_long(symbol, notion_usdt, leverage)
         register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
-        short_order = short_client.open_short(symbol, notion_usdt, leverage)
+        if dry_run_mode:
+            short_order = _simulated_order(expensive_exchange, "short")
+        else:
+            short_order = short_client.open_short(symbol, notion_usdt, leverage)
     except HoldActiveError as exc:
         return {
             "symbol": symbol,
@@ -118,5 +137,8 @@ def execute_hedged_trade(
         "long_order": long_order,
         "short_order": short_order,
         "success": True,
+        "status": "simulated" if dry_run_mode else "executed",
+        "dry_run_mode": dry_run_mode,
+        "simulated": dry_run_mode,
         "details": spread_info,
     }
