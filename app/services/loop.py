@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from .. import ledger
+from .. import ledger, risk_governor
 from ..broker.router import ExecutionRouter
 from . import arbitrage
 from .dryrun import compute_metrics, select_cycle_symbol
@@ -95,6 +95,29 @@ async def run_cycle(*, allow_safe_mode: bool = True) -> LoopCycleResult:
         est_pnl_usdt=metrics.est_pnl_usdt,
         est_pnl_bps=metrics.est_pnl_bps,
     )
+
+    hold_reason = await risk_governor.validate(context="loop")
+    if hold_reason:
+        loop_state.last_error = hold_reason
+        loop_state.last_execution = None
+        loop_state.status = "HOLD"
+        loop_state.running = False
+        summary.status = "blocked"
+        summary.reason = hold_reason
+        update_loop_summary(summary.as_dict())
+        ledger.record_event(
+            level="WARNING",
+            code="risk_hold_engaged",
+            payload={"context": "loop", "reason": hold_reason},
+        )
+        loop_state.cycles_completed += 1
+        return LoopCycleResult(
+            ok=False,
+            symbol=symbol,
+            plan=plan_payload,
+            error=hold_reason,
+            summary=summary,
+        )
 
     if not plan.viable:
         reason = plan.reason or "plan not viable"

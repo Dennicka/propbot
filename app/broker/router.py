@@ -10,7 +10,7 @@ from .base import Broker
 from .binance import BinanceLiveBroker, BinanceTestnetBroker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
-from .. import ledger
+from .. import ledger, risk_governor
 from ..services import portfolio, risk
 from ..services.runtime import (
     HoldActiveError,
@@ -228,6 +228,9 @@ class ExecutionRouter:
                 )
             open_orders = await self._refresh_open_orders()
         else:
+            hold_reason = await risk_governor.validate(context="order_execution")
+            if hold_reason:
+                raise HoldActiveError(hold_reason)
             for index, leg in enumerate(plan.legs):
                 broker = self._resolve_broker(leg.exchange)
                 venue = self._venue_for_exchange(leg.exchange)
