@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Tuple
+from typing import Dict, Mapping, Tuple
 
 from app.services.hedge_log import append_entry
 from app.services.runtime import (
@@ -13,6 +13,7 @@ from app.services.runtime import (
     is_dry_run_mode,
     register_order_attempt,
 )
+from positions import create_position
 from exchanges import BinanceFuturesClient, OKXFuturesClient
 
 
@@ -213,6 +214,125 @@ def _log_partial_failure(
     )
 
 
+def _persist_partial_position(
+    *,
+    symbol: str,
+    notional_usdt: float,
+    leverage: float,
+    cheap_exchange: str,
+    expensive_exchange: str,
+    spread_info: Mapping[str, object] | None,
+    long_leg: Dict[str, object] | None,
+    short_leg: Dict[str, object] | None,
+) -> Dict[str, object] | None:
+    """Persist a partially hedged position to the durable store."""
+
+    if long_leg is None and short_leg is None:
+        return None
+
+    timestamp = _ts()
+
+    def _leg_payload(
+        leg: Dict[str, object] | None,
+        *,
+        venue: str,
+        symbol: str,
+        side: str,
+        status: str,
+    ) -> Dict[str, object]:
+        if leg:
+            entry_price = float(
+                leg.get("avg_price")
+                or leg.get("price")
+                or leg.get("entry_price")
+                or 0.0
+            )
+            base_size = float(leg.get("base_size") or leg.get("filled_qty") or 0.0)
+            notional_value = float(leg.get("notional_usdt") or notional_usdt)
+            if not base_size and entry_price:
+                try:
+                    base_size = notional_value / entry_price
+                except ZeroDivisionError:
+                    base_size = 0.0
+            payload = {
+                "venue": str(leg.get("exchange") or venue),
+                "symbol": str(leg.get("symbol") or symbol),
+                "side": str(leg.get("side") or side),
+                "notional_usdt": float(notional_value),
+                "entry_price": entry_price or None,
+                "base_size": base_size,
+                "timestamp": str(leg.get("timestamp") or timestamp),
+                "status": status,
+            }
+            return payload
+        return {
+            "venue": str(venue),
+            "symbol": str(symbol),
+            "side": str(side),
+            "notional_usdt": 0.0,
+            "entry_price": None,
+            "base_size": 0.0,
+            "timestamp": timestamp,
+            "status": "missing",
+        }
+
+    try:
+        entry_long_price = None
+        entry_short_price = None
+        if long_leg:
+            entry_long_price = float(
+                long_leg.get("avg_price")
+                or long_leg.get("price")
+                or long_leg.get("entry_price")
+                or 0.0
+            ) or None
+        if short_leg:
+            entry_short_price = float(
+                short_leg.get("avg_price")
+                or short_leg.get("price")
+                or short_leg.get("entry_price")
+                or 0.0
+            ) or None
+        legs = [
+            _leg_payload(
+                long_leg,
+                venue=cheap_exchange,
+                symbol=symbol,
+                side="long",
+                status="partial" if long_leg else "missing",
+            ),
+            _leg_payload(
+                short_leg,
+                venue=expensive_exchange,
+                symbol=symbol,
+                side="short",
+                status="partial" if short_leg else "missing",
+            ),
+        ]
+        spread_bps = 0.0
+        if isinstance(spread_info, Mapping):
+            try:
+                spread_bps = float(spread_info.get("spread_bps") or 0.0)
+            except (TypeError, ValueError):
+                spread_bps = 0.0
+        record = create_position(
+            symbol=symbol,
+            long_venue=cheap_exchange,
+            short_venue=expensive_exchange,
+            notional_usdt=float(notional_usdt),
+            entry_spread_bps=spread_bps,
+            leverage=float(leverage),
+            entry_long_price=entry_long_price,
+            entry_short_price=entry_short_price,
+            status="partial",
+            simulated=False,
+            legs=legs,
+        )
+        return record
+    except Exception:  # pragma: no cover - defensive persistence
+        return None
+
+
 def execute_hedged_trade(
     symbol: str, notion_usdt: float, leverage: float, min_spread: float
 ) -> dict:
@@ -299,6 +419,18 @@ def execute_hedged_trade(
                 fallback_price=float(spread_info["expensive_mark"]),
             )
     except HoldActiveError as exc:
+        partial_record = None
+        if not dry_run_mode and ((long_leg and not short_leg) or (short_leg and not long_leg)):
+            partial_record = _persist_partial_position(
+                symbol=spread_info["symbol"],
+                notional_usdt=notional,
+                leverage=leverage_value,
+                cheap_exchange=cheap_exchange,
+                expensive_exchange=expensive_exchange,
+                spread_info=spread_info,
+                long_leg=long_leg,
+                short_leg=short_leg,
+            )
         return {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
@@ -307,6 +439,7 @@ def execute_hedged_trade(
             "reason": exc.reason,
             "details": spread_info,
             "hold_active": True,
+            "partial_position": partial_record,
         }
     except Exception as exc:
         reason = str(exc)
@@ -323,6 +456,16 @@ def execute_hedged_trade(
                 short_leg=short_leg,
             )
             engage_safety_hold("hedge_leg_failed", source="cross_exchange_hedge")
+            _persist_partial_position(
+                symbol=spread_info["symbol"],
+                notional_usdt=notional,
+                leverage=leverage_value,
+                cheap_exchange=cheap_exchange,
+                expensive_exchange=expensive_exchange,
+                spread_info=spread_info,
+                long_leg=long_leg,
+                short_leg=short_leg,
+            )
         return {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),

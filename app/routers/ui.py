@@ -192,14 +192,20 @@ async def hedge_positions(request: Request) -> dict:
         base = dict(entry)
         legs_payload = _normalise_legs(entry.get("legs"), base)
         status = str(base.get("status") or "").lower()
-        is_open = status == "open"
+        is_open = status in {"open", "partial"}
         pair_upnl = 0.0
         rendered_legs: list[dict] = []
         for leg in legs_payload:
             venue = str(leg.get("venue") or "")
             symbol = str(leg.get("symbol") or "").upper()
             side = str(leg.get("side") or "").lower()
-            notional = float(leg.get("notional_usdt") or base.get("notional_usdt") or 0.0)
+            notional_raw = leg.get("notional_usdt")
+            if notional_raw in (None, ""):
+                notional_raw = base.get("notional_usdt")
+            try:
+                notional = float(notional_raw or 0.0)
+            except (TypeError, ValueError):
+                notional = 0.0
             entry_price = float(leg.get("entry_price") or 0.0)
             base_size = float(leg.get("base_size") or 0.0)
             if base_size <= 0.0 and entry_price:
@@ -228,11 +234,18 @@ async def hedge_positions(request: Request) -> dict:
                 else:
                     exposure_entry["long_notional"] += notional
                     exposure_entry["net_usdt"] += notional
+            status_fallback = leg.get("status")
+            if status_fallback in (None, ""):
+                status_fallback = base.get("status")
+            if status_fallback in (None, "") and is_open:
+                status_fallback = "open"
+            leg_status = str(status_fallback or "").lower()
             rendered_legs.append(
                 {
                     "venue": venue,
                     "symbol": symbol,
                     "side": side,
+                    "status": leg_status,
                     "notional_usdt": notional,
                     "entry_price": entry_price,
                     "mark_price": mark_price,
@@ -287,8 +300,11 @@ def _build_leg_payload(
     venue_key = "long_venue" if side != "short" else "short_venue"
     venue = str(leg.get("venue") or base.get(venue_key) or "")
     symbol = str(leg.get("symbol") or base.get("symbol") or "").upper()
+    notional_raw = leg.get("notional_usdt")
+    if notional_raw in (None, ""):
+        notional_raw = base.get("notional_usdt")
     try:
-        notional = float(leg.get("notional_usdt") or base.get("notional_usdt") or 0.0)
+        notional = float(notional_raw or 0.0)
     except (TypeError, ValueError):
         notional = 0.0
     entry_key = "entry_long_price" if side != "short" else "entry_short_price"
@@ -307,10 +323,14 @@ def _build_leg_payload(
         except ZeroDivisionError:
             base_size = 0.0
     timestamp = leg.get("timestamp") or base.get("timestamp")
+    status_value = leg.get("status")
+    if status_value in (None, ""):
+        status_value = base.get("status")
     return {
         "venue": venue,
         "symbol": symbol,
         "side": side,
+        "status": str(status_value or "").lower(),
         "notional_usdt": notional,
         "entry_price": entry_price,
         "base_size": base_size,

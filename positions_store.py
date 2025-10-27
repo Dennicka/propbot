@@ -169,6 +169,8 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
         leg_status = "simulated"
     elif status_value == "closed":
         leg_status = "closed"
+    elif status_value == "partial":
+        leg_status = "partial"
     else:
         leg_status = "open"
     record["legs"] = [
