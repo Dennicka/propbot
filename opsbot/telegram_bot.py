@@ -3,43 +3,47 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import secrets
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
-
-try:  # pragma: no cover - optional dependency guard
-    from telegram import Update
-    from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
-    _TELEGRAM_AVAILABLE = True
-except ModuleNotFoundError:  # pragma: no cover - allows tests without telegram package
-    Update = Any  # type: ignore
-    Application = Any  # type: ignore
-    ContextTypes = SimpleNamespace(DEFAULT_TYPE=Any)
-
-    class CommandHandler:  # type: ignore[no-redef]
-        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            raise RuntimeError("python-telegram-bot is required for ops bot support")
-
-    class _MissingBuilder:
-        def token(self, *_args: Any, **_kwargs: Any) -> "_MissingBuilder":
-            return self
-
-        def build(self) -> Any:
-            raise RuntimeError("python-telegram-bot is required for ops bot support")
-
-    def ApplicationBuilder() -> _MissingBuilder:  # type: ignore[override]
-        return _MissingBuilder()
-
-    _TELEGRAM_AVAILABLE = False
+from typing import Any, Callable, Dict
 
 from opsbot.notify import notify_ops
 
 LOGGER = logging.getLogger(__name__)
 
 _OPS_BOT_INSTANCE: "OpsTelegramBot | None" = None
+
+_TELEGRAM_COMPONENTS: Dict[str, Any] | None = None
+_TELEGRAM_IMPORT_FAILED = False
+
+
+def _load_telegram_components() -> Dict[str, Any] | None:
+    """Attempt to import python-telegram-bot primitives lazily."""
+
+    global _TELEGRAM_COMPONENTS, _TELEGRAM_IMPORT_FAILED
+    if _TELEGRAM_COMPONENTS is not None:
+        return _TELEGRAM_COMPONENTS
+    if _TELEGRAM_IMPORT_FAILED:
+        return None
+    try:
+        telegram = importlib.import_module("telegram")
+        telegram_ext = importlib.import_module("telegram.ext")
+    except ModuleNotFoundError:
+        _TELEGRAM_IMPORT_FAILED = True
+        return None
+    components = {
+        "Application": getattr(telegram_ext, "Application"),
+        "ApplicationBuilder": getattr(telegram_ext, "ApplicationBuilder"),
+        "CommandHandler": getattr(telegram_ext, "CommandHandler"),
+        "ContextTypes": getattr(telegram_ext, "ContextTypes", SimpleNamespace(DEFAULT_TYPE=Any)),
+        "Update": getattr(telegram, "Update", SimpleNamespace),
+    }
+    _TELEGRAM_COMPONENTS = components
+    return components
 
 
 @dataclass(frozen=True)
@@ -145,42 +149,50 @@ class OpsTelegramBot:
 
     def __init__(self, config: OpsTelegramBotConfig) -> None:
         self.config = config
-        self._application: Application | None = None
+        self._application: Any | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._components: Dict[str, Any] | None = None
         self.logger = LOGGER
 
     async def start(self) -> None:
-        if not self.config.can_run or not _TELEGRAM_AVAILABLE:
-            if not self.config.can_run:
-                self.logger.info("Ops Telegram bot disabled or missing credentials; skipping startup")
-            else:
-                self.logger.info("python-telegram-bot not installed; ops bot disabled")
+        if not self.config.can_run:
+            self.logger.info("Ops Telegram bot disabled or missing credentials; skipping startup")
             return
         if self._application is not None:
             return
+        components = _load_telegram_components()
+        if components is None:
+            self.logger.info("python-telegram-bot not installed; ops bot disabled")
+            return
+        builder: Callable[[], Any] = components["ApplicationBuilder"]
+        command_handler = components["CommandHandler"]
         self._loop = asyncio.get_running_loop()
-        self._application = ApplicationBuilder().token(self.config.token).build()
-        self._register_handlers(self._application)
+        self._application = builder().token(self.config.token).build()
+        self._components = components
+        self._register_handlers(self._application, command_handler)
         await self._application.initialize()
         await self._application.start()
-        if self._application.updater is not None:
-            await self._application.updater.start_polling()
+        updater = getattr(self._application, "updater", None)
+        if updater is not None:
+            await updater.start_polling()
         self.logger.info("Ops Telegram bot started")
 
     async def stop(self) -> None:
         app = self._application
         if app is None:
             return
-        if app.updater is not None:
-            await app.updater.stop()
+        updater = getattr(app, "updater", None)
+        if updater is not None:
+            await updater.stop()
         await app.stop()
         await app.shutdown()
         self._application = None
         self._loop = None
+        self._components = None
         self.logger.info("Ops Telegram bot stopped")
 
     def publish_alert(self, text: str) -> None:
-        if not text or not self.config.can_run or not _TELEGRAM_AVAILABLE:
+        if not text or not self.config.can_run or self._components is None:
             return
         if self._application is None or self._loop is None:
             return
@@ -196,14 +208,14 @@ class OpsTelegramBot:
         except RuntimeError:  # pragma: no cover - occurs when loop closing
             self.logger.debug("Event loop unavailable for ops alert", exc_info=True)
 
-    def _register_handlers(self, application: Application) -> None:
-        application.add_handler(CommandHandler("status", self._cmd_status))
-        application.add_handler(CommandHandler("positions", self._cmd_positions))
-        application.add_handler(CommandHandler("hold", self._cmd_hold))
-        application.add_handler(CommandHandler("resume_confirm", self._cmd_resume_confirm))
-        application.add_handler(CommandHandler("kill", self._cmd_kill))
+    def _register_handlers(self, application: Any, command_handler_cls: Callable[..., Any]) -> None:
+        application.add_handler(command_handler_cls("status", self._cmd_status))
+        application.add_handler(command_handler_cls("positions", self._cmd_positions))
+        application.add_handler(command_handler_cls("hold", self._cmd_hold))
+        application.add_handler(command_handler_cls("resume_confirm", self._cmd_resume_confirm))
+        application.add_handler(command_handler_cls("kill", self._cmd_kill))
 
-    def _is_authorized(self, update: Update) -> bool:
+    def _is_authorized(self, update: Any) -> bool:
         chat = update.effective_chat
         chat_id = getattr(chat, "id", None)
         if chat_id is None:
@@ -213,7 +225,7 @@ class OpsTelegramBot:
             self.logger.warning("Unauthorized Telegram command", extra={"chat_id": chat_id})
         return authorised
 
-    async def _reply(self, update: Update, text: str) -> None:
+    async def _reply(self, update: Any, text: str) -> None:
         message = update.effective_message
         if message is None or not text:
             return
@@ -222,19 +234,19 @@ class OpsTelegramBot:
         except Exception:  # pragma: no cover - best effort response
             self.logger.exception("Failed to send Telegram reply")
 
-    async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_status(self, update: Any, context: Any) -> None:
         if not self._is_authorized(update):
             return
         message = await self.process_status()
         await self._reply(update, message)
 
-    async def _cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_positions(self, update: Any, context: Any) -> None:
         if not self._is_authorized(update):
             return
         message = self.process_positions()
         await self._reply(update, message)
 
-    async def _cmd_hold(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_hold(self, update: Any, context: Any) -> None:
         if not self._is_authorized(update):
             return
         reason = " ".join(context.args) if context.args else "manual_hold"
@@ -242,7 +254,7 @@ class OpsTelegramBot:
         message = await self.process_hold(reason=reason, requested_by="telegram")
         await self._reply(update, message)
 
-    async def _cmd_resume_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_resume_confirm(self, update: Any, context: Any) -> None:
         if not self._is_authorized(update):
             return
         if len(context.args) < 1:
@@ -253,7 +265,7 @@ class OpsTelegramBot:
         message = await self.process_resume_confirm(token=token, note=note)
         await self._reply(update, message)
 
-    async def _cmd_kill(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _cmd_kill(self, update: Any, context: Any) -> None:
         if not self._is_authorized(update):
             return
         message = await self.process_kill()
