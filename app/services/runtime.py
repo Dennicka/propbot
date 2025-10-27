@@ -916,6 +916,12 @@ def reset_for_tests() -> None:
         limits = _STATE.safety.limits
         _STATE.safety = SafetyState(limits=limits)
         _STATE.auto_hedge = AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False))
+    try:
+        from positions_store import reset_store as _reset_positions_store
+    except Exception:  # pragma: no cover - defensive import
+        _reset_positions_store = None
+    if _reset_positions_store is not None:
+        _reset_positions_store()
     globals()["_STATE"] = _STATE
     _persist_safety_snapshot(_STATE.safety.as_dict())
     update_auto_hedge_state(

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
 from app.services import runtime
+from positions_store import append_record, list_records, mark_closed, reset_store
 
 
 _REQUIRED_FIELDS = {
@@ -20,32 +19,20 @@ _REQUIRED_FIELDS = {
     "leverage",
     "status",
     "pnl_usdt",
+    "legs",
 }
-
-
-def _ts() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def list_positions() -> List[Dict[str, Any]]:
     """Return all recorded hedge positions (both open and closed)."""
 
-    return runtime.get_positions_state()
+    return list_records()
 
 
 def list_open_positions() -> List[Dict[str, Any]]:
     """Return only open hedge positions."""
 
     return [entry for entry in list_positions() if entry.get("status") == "open"]
-
-
-def _with_defaults(record: Dict[str, Any]) -> Dict[str, Any]:
-    payload = dict(record)
-    payload.setdefault("pnl_usdt", 0.0)
-    payload.setdefault("status", "open")
-    payload.setdefault("timestamp", _ts())
-    payload.setdefault("id", uuid.uuid4().hex)
-    return payload
 
 
 def create_position(
@@ -80,9 +67,9 @@ def create_position(
             payload["base_size"] = float(notional_usdt) / float(entry_long_price)
         except ZeroDivisionError:
             payload["base_size"] = 0.0
-    payload = _with_defaults(payload)
-    runtime.append_position_state(payload)
-    return payload
+    record = append_record(payload)
+    runtime.append_position_state(record)
+    return record
 
 
 def close_position(
@@ -93,40 +80,19 @@ def close_position(
 ) -> Dict[str, Any]:
     """Close an existing position and compute realized PnL."""
 
-    positions = runtime.get_positions_state()
-    updated: Dict[str, Any] | None = None
-    for entry in positions:
-        if str(entry.get("id")) != str(position_id):
-            continue
-        if entry.get("status") == "closed":
-            updated = entry
-            break
-        base_size = float(entry.get("base_size") or 0.0)
-        if base_size == 0.0:
-            long_price = float(entry.get("entry_long_price") or exit_long_price or 1.0)
-            if long_price:
-                base_size = float(entry.get("notional_usdt", 0.0)) / float(long_price)
-        pnl = (float(exit_short_price) - float(exit_long_price)) * base_size
-        entry.update(
-            {
-                "status": "closed",
-                "pnl_usdt": float(pnl),
-                "exit_long_price": float(exit_long_price),
-                "exit_short_price": float(exit_short_price),
-                "closed_ts": _ts(),
-            }
-        )
-        updated = entry
-        break
-    if updated is None:
-        raise KeyError(f"position {position_id} not found")
-    runtime.set_positions_state(positions)
+    updated = mark_closed(
+        position_id,
+        exit_long_price=float(exit_long_price),
+        exit_short_price=float(exit_short_price),
+    )
+    runtime.set_positions_state(list_records())
     return updated
 
 
 def reset_positions() -> None:
     """Clear all stored positions (used in tests)."""
 
+    reset_store()
     runtime.set_positions_state([])
 
 
@@ -135,3 +101,13 @@ def validate_record_structure(entries: Iterable[Dict[str, Any]]) -> None:
         missing = _REQUIRED_FIELDS - set(entry)
         if missing:
             raise ValueError(f"position record missing fields: {', '.join(sorted(missing))}")
+        legs = entry.get("legs")
+        if not isinstance(legs, list) or len(legs) != 2:
+            raise ValueError("position record missing leg metadata")
+        for leg in legs:
+            if not isinstance(leg, dict):
+                raise ValueError("invalid leg payload")
+            required_leg = {"venue", "symbol", "side", "notional_usdt", "timestamp"}
+            missing_leg = required_leg - set(leg)
+            if missing_leg:
+                raise ValueError(f"position leg missing fields: {', '.join(sorted(missing_leg))}")

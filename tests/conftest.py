@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from app import ledger
 from app.main import app
 from app.services.loop import hold_loop
 from app.services.runtime import reset_for_tests
+from positions import reset_positions
 
 
 @pytest.fixture
@@ -50,3 +52,12 @@ def reset_idem_and_rate_limiters():
         limiter.set_clock(time.monotonic)
         default_limits = getattr(app.state, "default_rate_limits", (limiter.rate_per_min, limiter.burst))
         limiter.set_limits(*default_limits)
+
+
+@pytest.fixture(autouse=True)
+def override_positions_store(monkeypatch, tmp_path: Path):
+    path = tmp_path / "hedge_positions.json"
+    monkeypatch.setenv("POSITIONS_STORE_PATH", str(path))
+    reset_positions()
+    yield
+    reset_positions()

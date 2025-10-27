@@ -150,6 +150,10 @@ below:
   - When enabled the same flag also activates the lightweight operations
     notifier that mirrors HOLD/RESUME, kill-switch, and auto-hedge alerts to
     Telegram.
+- **Persistence**
+  - `RUNTIME_STATE_PATH` — JSON snapshot of loop/control state.
+  - `POSITIONS_STORE_PATH` — durable cross-exchange hedge position ledger
+    (default `data/hedge_positions.json`).
 - **Binance / OKX keys**
   - `BINANCE_UM_API_KEY_TESTNET` / `BINANCE_UM_API_SECRET_TESTNET` — Binance
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
@@ -177,6 +181,21 @@ profiles and keep `.env` outside version control.
   `GET /api/ui/alerts` endpoint. Supply the same bearer token used for the rest
   of the UI API (`Authorization: Bearer <API_TOKEN>`). This feed is intended for
   internal desks only; do not expose it publicly.
+
+### Hedge positions persistence & monitoring
+
+- All cross-exchange hedge positions (including both legs, entry prices,
+  leverage, timestamps, and status) are durably mirrored to the JSON file at
+  `data/hedge_positions.json`. Override the location with
+  `POSITIONS_STORE_PATH` if the default path does not suit your deployment
+  layout.
+- The token-protected `GET /api/ui/positions` endpoint exposes the same data to
+  operators. The response includes each position with its long/short legs,
+  calculated unrealised PnL per leg, the pair-level `unrealized_pnl_usdt`, and a
+  venue exposure summary (`long_notional`, `short_notional`, `net_usdt`). When
+  mark prices are unavailable (for example, in offline tests) the endpoint falls
+  back to entry prices so unrealised PnL is reported as `0` rather than raising
+  an error.
 
 ## Safety reminder for Binance live
 
