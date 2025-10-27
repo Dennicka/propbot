@@ -33,6 +33,11 @@ def reset_auth_env(monkeypatch):
     monkeypatch.delenv("IDEM_TTL_SEC", raising=False)
     monkeypatch.delenv("API_RATE_PER_MIN", raising=False)
     monkeypatch.delenv("API_BURST", raising=False)
+    monkeypatch.setenv("TELEGRAM_ENABLE", "false")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("OPS_ALERTS_FILE", raising=False)
+    monkeypatch.delenv("OPS_ALERTS_DIR", raising=False)
 
 
 @pytest.fixture(autouse=True)

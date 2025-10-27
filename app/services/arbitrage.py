@@ -24,6 +24,17 @@ from .runtime import (
 logger = logging.getLogger(__name__)
 
 
+def _emit_ops_alert(kind: str, text: str, extra: Dict[str, object] | None = None) -> None:
+    try:
+        from ..opsbot.notifier import emit_alert
+    except Exception:
+        return
+    try:
+        emit_alert(kind=kind, text=text, extra=extra or None)
+    except Exception:
+        pass
+
+
 @dataclass
 class PreflightCheck:
     name: str
@@ -645,6 +656,11 @@ class ArbitrageEngine:
             register_order_attempt(reason="runaway_orders_per_min", source="arbitrage_leg_a")
         except HoldActiveError as exc:
             update_guard("runaway_breaker", "HOLD", "orders blocked", {"reason": exc.reason})
+            _emit_ops_alert(
+                "runaway_guard_hold",
+                "Runaway guard blocked leg A",
+                {"reason": exc.reason, "stage": "leg_a"},
+            )
             return {
                 "ok": False,
                 "executed": False,
@@ -662,6 +678,11 @@ class ArbitrageEngine:
                 hedge_order = self._hedge_out(pair_cfg, order_size)
             except HoldActiveError as exc:
                 update_guard("runaway_breaker", "HOLD", "orders blocked", {"reason": exc.reason})
+                _emit_ops_alert(
+                    "runaway_guard_hold",
+                    "Runaway guard blocked hedge unwind",
+                    {"reason": exc.reason, "stage": "hedge"},
+                )
                 return {
                     "ok": False,
                     "executed": False,
@@ -679,6 +700,11 @@ class ArbitrageEngine:
         except HoldActiveError as exc:
             update_guard("runaway_breaker", "HOLD", "orders blocked", {"reason": exc.reason})
             transitions.append("HOLD")
+            _emit_ops_alert(
+                "runaway_guard_hold",
+                "Runaway guard blocked leg B",
+                {"reason": exc.reason, "stage": "leg_b"},
+            )
             return {
                 "ok": False,
                 "executed": False,

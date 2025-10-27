@@ -147,6 +147,9 @@ below:
   - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` — credentials issued by
     BotFather.
   - `TELEGRAM_PUSH_MINUTES` — periodic status push interval (minutes).
+  - When enabled the same flag also activates the lightweight operations
+    notifier that mirrors HOLD/RESUME, kill-switch, and auto-hedge alerts to
+    Telegram.
 - **Binance / OKX keys**
   - `BINANCE_UM_API_KEY_TESTNET` / `BINANCE_UM_API_SECRET_TESTNET` — Binance
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
@@ -159,6 +162,21 @@ below:
 
 For live trading, populate the `BINANCE_LV_*` variables only in locked-down
 profiles and keep `.env` outside version control.
+
+### Operations alerts & audit trail
+
+- Every operator-facing action (HOLD/RESUME flow, kill switch, cancel-all,
+  hedge outcomes, runaway guard trips) now appends a structured record to
+  `data/ops_alerts.json`. This file contains sensitive operational context and
+  should stay on secured hosts.
+- With `TELEGRAM_ENABLE=true` plus valid `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID`, the notifier also pushes the same text to the Telegram
+  control chat via the official Bot API. Network errors are swallowed so CI and
+  offline environments are unaffected.
+- Operators can review recent activity through the token-protected
+  `GET /api/ui/alerts` endpoint. Supply the same bearer token used for the rest
+  of the UI API (`Authorization: Bearer <API_TOKEN>`). This feed is intended for
+  internal desks only; do not expose it publicly.
 
 ## Safety reminder for Binance live
 
