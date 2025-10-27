@@ -167,39 +167,66 @@ below:
   - `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_API_PASSPHRASE` — OKX perpetual
     hedge client credentials (use a restricted sub-account and IP whitelist).
 
-## Старт в продакшене
+## Deployment / prod
 
-Прежде чем запускать PropBot на 24/7 сервере, подготовьте постоянный каталог
-данных и переменные окружения:
+Перед запуском производственного инстанса подготовьте окружение так, чтобы
+бот стартовал безопасно (SAFE_MODE/HOLD и `DRY_RUN_MODE=true`).
 
-1. Создайте директорию `data/` рядом с `docker-compose.prod.yml` и выдайте ей
-   права пользователя контейнера (UID 1000):
+1. **Каталог с данными.** Создайте директорию `data/` рядом с репозиторием и
+   настройте права пользователя контейнера (UID 1000):
    ```bash
    sudo mkdir -p /opt/propbot/data
    sudo chown 1000:1000 /opt/propbot/data
    sudo chmod 770 /opt/propbot/data
    ```
-   В каталоге будут храниться `runtime_state.json`, `hedge_positions.json`,
-   `ops_alerts.json`, `hedge_log.json`, SQLite-леджер и другие артефакты, поэтому
-   диск должен быть постоянным.
-2. Скопируйте `.env.example` или `deploy/env.example.prod` в `.env` и заполните
-   обязательные значения:
-   - Биржевые ключи (`BINANCE_*`, `OKX_*`) в зависимости от профиля.
-   - `APPROVE_TOKEN` — секрет второго оператора для двухшагового RESUME.
-   - `API_TOKEN` — bearer для защищённых ручек `/api/ui/*` и CLI.
-   - `TELEGRAM_ENABLE=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — если
-     требуется Telegram-оповещение.
-   - Лимиты риска (`MAX_POSITION_USDT`, `MAX_DAILY_LOSS_USDT`,
-     runaway-ограничения `MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`).
-   - `SAFE_MODE=true` и `MODE=HOLD` на первом запуске.
-   - `RUNTIME_STATE_PATH=./data/runtime_state.json` — путь до снапшота
-     управляющего состояния.
-3. Убедитесь, что авто-хедж демон включён только когда заполнены лимиты и есть
-   осознанная стратегия: `AUTO_HEDGE_ENABLED=true` активирует демон, он не
-   снимает HOLD автоматически и уважает runaway guard. Не снимайте лимиты по
-   плечу/ноционалу — бот ожидает их для защиты.
-4. Поднимите сервис: `docker compose -f deploy/docker-compose.prod.yml --env-file
-   .env up -d` и проверьте `/api/ui/status/overview` (должен вернуться HOLD).
+   Этот путь примонтируется в контейнер как `/app/data` (см.
+   `docker-compose.prod.yml`). Здесь лежат `runtime_state.json`,
+   `hedge_log.json`, `hedge_positions.json`, `ops_alerts.json`, `alerts.json`,
+   файлы авто-хеджа и другие журналы — держите каталог на постоянном диске и
+   включите регулярный бэкап. Потеря содержимого = потеря истории и контекста
+   состояний.
+2. **Файл окружения.** Скопируйте шаблон и заполните секреты:
+   ```bash
+   cp .env.prod.example .env.prod
+   ```
+   Обновите значения `API_TOKEN`, `APPROVE_TOKEN`, биржевые ключи
+   (`BINANCE_*`, `OKX_*`), лимиты риска (`MAX_POSITION_USDT`,
+   `MAX_DAILY_LOSS_USDT`, `MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`), настройки
+   Telegram (`TELEGRAM_ENABLE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`). По
+   умолчанию шаблон уже включает `SAFE_MODE=true`, `DRY_RUN_ONLY=true`,
+   `DRY_RUN_MODE=true` и комментарии с подсказками — оставьте их включёнными до
+   тех пор, пока оба оператора не пройдут двухшаговый `resume-request` →
+   `resume-confirm` и не убедятся, что лимиты соблюдены.
+3. **Старт сервисов.** Запустите контейнеры в фоне:
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+   ```
+   Проверить статус healthcheck можно командой
+   ```bash
+   docker inspect --format '{{json .State.Health}}' propbot_app_prod | jq
+   ```
+   Контейнер считается здоровым, когда `/api/ui/status/overview` отвечает 200.
+4. **Проверка безопасности.** Убедитесь, что бот поднялся в HOLD/SAFE_MODE и с
+   `DRY_RUN_MODE=true`:
+   ```bash
+   curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+     http://localhost:8000/api/ui/status/overview | jq '.flags'
+   ```
+   В ответе `safe_mode`, `hold_active` и `dry_run_mode` должны быть `true`.
+   При необходимости дополнительно проверьте `GET /api/ui/state` и
+   `GET /api/ui/control-state` — они отражают активные guard'ы и режим HOLD.
+5. **Двухшаговый запуск торгов.** Переход к реальным сделкам разрешён только
+   после ручного флоу:
+   1. Первый оператор отправляет `POST /api/ui/resume-request` с причиной.
+   2. Второй оператор подтверждает `POST /api/ui/resume-confirm` с
+      `APPROVE_TOKEN`.
+   3. Только после этого (и отключения SAFE_MODE/DRY_RUN вручную) выполняется
+      `POST /api/ui/resume`.
+
+> ⚠️ JSON-файлы в `data/` (runtime_state_store, hedge_log, alerts, позиции и т.д.)
+> редактируйте вручную только в аварийных случаях. Эти файлы — единственный
+> источник истины об истории состояний; потеря или порча приведёт к утрате
+> журнала и нарушению расследований.
 
 ## Ежедневный мониторинг
 
