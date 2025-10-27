@@ -45,6 +45,9 @@ def create_app() -> FastAPI:
     app.include_router(ui_status.router, prefix="/api/ui/status")
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
+    from .opsbot import setup_notifier as setup_ops_notifier
+
+    setup_ops_notifier(app)
     setup_telegram_bot(app)
     setup_opportunity_scanner(app)
     setup_auto_hedge_daemon(app)

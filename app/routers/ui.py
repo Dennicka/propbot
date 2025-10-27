@@ -42,6 +42,17 @@ from ..security import require_token
 from positions import list_positions
 from ..utils import redact_sensitive_data
 
+
+def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
+    try:
+        from ..opsbot.notifier import emit_alert
+    except Exception:
+        return
+    try:
+        emit_alert(kind=kind, text=text, extra=extra or None)
+    except Exception:
+        pass
+
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 
@@ -211,6 +222,11 @@ async def patch_control(payload: ControlPatchPayload) -> dict:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     if changes:
         ledger.record_event(level="INFO", code="control_patch", payload={"changes": changes})
+        _emit_ops_alert(
+            "control_patch",
+            "Control configuration updated",
+            {"changes": changes},
+        )
     return {"control": control_as_dict(), "changes": changes}
 
 
@@ -440,6 +456,11 @@ async def hold(payload: HoldPayload | None = None) -> dict:
         code="mode_change",
         payload={"mode": "HOLD", "reason": reason, "requested_by": requested_by or "ui"},
     )
+    _emit_ops_alert(
+        "mode_change",
+        f"HOLD engaged: {reason}",
+        {"requested_by": requested_by or "ui", "source": "ui"},
+    )
     state = get_state()
     safety = get_safety_status()
     return {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "safety": safety, "ts": _ts()}
@@ -457,6 +478,11 @@ async def resume_request(payload: ResumeRequestPayload) -> dict:
         level="INFO",
         code="resume_requested",
         payload={"reason": reason, "requested_by": payload.requested_by or "ui"},
+    )
+    _emit_ops_alert(
+        "resume_requested",
+        f"Resume requested: {reason}",
+        {"requested_by": payload.requested_by or "ui"},
     )
     return {
         "resume_request": request_snapshot,
@@ -489,6 +515,15 @@ async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
             "reason": resume_info.get("reason"),
         },
     )
+    _emit_ops_alert(
+        "resume_confirmed",
+        "Resume confirmation recorded",
+        {
+            "actor": payload.actor or "ui",
+            "hold_cleared": result.get("hold_cleared", False),
+            "reason": resume_info.get("reason"),
+        },
+    )
     return {
         "hold_cleared": result.get("hold_cleared", False),
         "hold_active": safety.get("hold_active", False),
@@ -507,6 +542,7 @@ async def resume() -> dict:
     await resume_loop()
     set_mode("RUN")
     ledger.record_event(level="INFO", code="mode_change", payload={"mode": "RUN"})
+    _emit_ops_alert("mode_change", "Mode switched to RUN", {"source": "ui"})
     state = get_state()
     safety = get_safety_status()
     return {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "ts": _ts()}
@@ -516,6 +552,7 @@ async def resume() -> dict:
 async def stop() -> dict:
     loop_state = await stop_loop()
     ledger.record_event(level="INFO", code="loop_stop_requested", payload={"status": loop_state.status})
+    _emit_ops_alert("loop_stop_requested", "Loop stop requested", {"status": loop_state.status})
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
@@ -525,6 +562,7 @@ async def reset() -> dict:
     loop_state = await reset_loop()
     set_mode("HOLD")
     ledger.record_event(level="INFO", code="loop_reset", payload={"mode": "HOLD"})
+    _emit_ops_alert("loop_reset", "Loop reset to HOLD", {"mode": "HOLD"})
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
 
@@ -544,6 +582,7 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     if venue:
         event_payload["venue"] = venue
     ledger.record_event(level="INFO", code="cancel_all", payload=event_payload)
+    _emit_ops_alert("cancel_all", "Cancel-all executed", event_payload)
     return {"result": result, "ts": _ts()}
 
 
@@ -570,6 +609,7 @@ async def kill_switch() -> dict:
         detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
     ledger.record_event(level="CRITICAL", code="kill_switch", payload=result)
+    _emit_ops_alert("kill_switch", "Kill switch engaged", result)
     risk.refresh_runtime_state()
     return {
         "ts": _ts(),
@@ -599,6 +639,7 @@ async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
             "symbol": payload.symbol,
         })
     ledger.record_event(level="INFO", code="flatten_requested", payload=event_payload)
+    _emit_ops_alert("flatten_requested", "Exposure flatten requested", event_payload)
     return {"result": result, "ts": _ts()}
 
 
@@ -612,4 +653,21 @@ async def last_plan() -> dict:
 async def hedge_log(request: Request, limit: int = Query(100, ge=1, le=1_000)) -> dict:
     require_token(request)
     return {"entries": read_entries(limit=limit)}
+
+
+@router.get("/alerts")
+async def ops_alerts(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    since: str | None = Query(default=None),
+) -> dict:
+    """Return recent operator alerts, protected by API token."""
+
+    require_token(request)
+    try:
+        from ..opsbot.notifier import get_recent_alerts
+    except Exception:
+        return {"alerts": []}
+    alerts = get_recent_alerts(limit=limit, since=since)
+    return {"alerts": alerts}
 

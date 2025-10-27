@@ -81,6 +81,17 @@ def _env_optional_float(name: str) -> float | None:
         return None
 
 
+def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
+    try:
+        from ..opsbot.notifier import emit_alert
+    except Exception:
+        return
+    try:
+        emit_alert(kind=kind, text=text, extra=extra or None)
+    except Exception:
+        pass
+
+
 def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
     mapping: Dict[str, float] = {}
     base = os.environ.get(name)
@@ -673,6 +684,11 @@ def record_resume_request(reason: str, *, requested_by: str | None = None) -> Di
         snapshot = safety.as_dict()
     _persist_safety_snapshot(snapshot)
     resume_snapshot = snapshot.get("resume_request")
+    _emit_ops_alert(
+        "resume_requested",
+        f"Resume requested: {reason}",
+        {"requested_by": requested_by or "system"},
+    )
     return dict(resume_snapshot) if isinstance(resume_snapshot, Mapping) else {}
 
 
@@ -684,6 +700,11 @@ def approve_resume(actor: str | None = None) -> Dict[str, object]:
         cleared = safety.clear_hold()
         safety_snapshot = safety.as_dict()
     _persist_safety_snapshot(safety_snapshot)
+    _emit_ops_alert(
+        "resume_confirmed",
+        "Resume approval processed",
+        {"actor": actor or "system", "hold_cleared": cleared},
+    )
     return {"hold_cleared": cleared, "safety": safety_snapshot}
 
 
@@ -854,6 +875,12 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
         _persist_control_snapshot(persist_snapshot)
     if safety_snapshot is not None:
         _persist_safety_snapshot(safety_snapshot)
+    if changed or hold_changed:
+        _emit_ops_alert(
+            "safety_hold",
+            f"Safety hold engaged: {reason}",
+            {"source": source},
+        )
     return changed or hold_changed
 
 

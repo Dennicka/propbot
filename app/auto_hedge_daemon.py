@@ -33,6 +33,17 @@ INITIATOR = "YOUR_NAME_OR_TOKEN"
 _FAIL_WINDOW = 60.0
 
 
+def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
+    try:
+        from .opsbot.notifier import emit_alert
+    except Exception:
+        return
+    try:
+        emit_alert(kind=kind, text=text, extra=extra or None)
+    except Exception:
+        pass
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -225,6 +236,12 @@ class AutoHedgeDaemon:
         if self._max_failures > 0 and failures > self._max_failures:
             engage_safety_hold(f"auto_hedge_failures:{reason}", source="auto_hedge_daemon")
         logger.warning("auto hedge rejected: %s", reason)
+        alert_payload: Dict[str, object] = {"failures": failures, "reason": reason}
+        if isinstance(candidate, Mapping):
+            alert_payload["symbol"] = candidate.get("symbol")
+        if isinstance(trade_result, Mapping):
+            alert_payload["result"] = trade_result.get("result")
+        _emit_ops_alert("auto_hedge_failure", f"Auto hedge failure: {reason}", alert_payload)
 
     async def run_cycle(self) -> None:
         enabled = self._is_enabled()
@@ -336,6 +353,15 @@ class AutoHedgeDaemon:
             trade_result.get("expensive_exchange"),
             notional,
             trade_result.get("spread_bps"),
+        )
+        _emit_ops_alert(
+            "auto_hedge_executed",
+            f"Auto hedge executed for {symbol}",
+            {
+                "symbol": symbol,
+                "notional_usdt": notional,
+                "spread_bps": trade_result.get("spread_bps"),
+            },
         )
 
 
