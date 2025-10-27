@@ -72,3 +72,17 @@ def test_control_patch_persists_and_loads(monkeypatch, tmp_path):
     assert reloaded.min_spread_bps == pytest.approx(10)
     assert reloaded.loop_pair == "ETHUSDT"
     assert reloaded.loop_venues == ["binance-um", "okx-perp"]
+
+
+def test_runtime_state_file_contains_summary(monkeypatch, tmp_path):
+    _set_runtime_path(monkeypatch, tmp_path)
+
+    runtime_file = tmp_path / "runtime_state.json"
+    assert runtime_file.exists()
+
+    data = json.loads(runtime_file.read_text())
+    assert data["hold_active"] is True
+    assert data["safe_mode"] is True
+    assert data["two_man_resume_required"] is runtime.get_state().control.two_man_rule
+    assert "runaway_limits" in data and isinstance(data["runaway_limits"], dict)
+    assert "operational_flags" in data and isinstance(data["operational_flags"], dict)

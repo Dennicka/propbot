@@ -338,6 +338,7 @@ class AutoHedgeDaemon:
         update_auto_hedge_state(
             last_execution_result="ok",
             last_execution_ts=ts,
+            last_success_ts=ts,
             consecutive_failures=0,
         )
         self._failure_events.clear()

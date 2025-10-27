@@ -21,6 +21,9 @@ def reset_runtime_state(monkeypatch):
 
 
 def test_engage_safety_hold_sets_flag_and_status():
+    if runtime.is_hold_active():
+        runtime.record_resume_request("release_for_test", requested_by="pytest")
+        runtime.approve_resume(actor="pytest")
     assert runtime.is_hold_active() is False
 
     runtime.engage_safety_hold("unit_test_hold", source="pytest")
@@ -31,6 +34,14 @@ def test_engage_safety_hold_sets_flag_and_status():
     assert safety["hold_reason"] == "unit_test_hold"
     assert safety["limits"]["max_orders_per_min"] == 300
     assert safety["limits"]["max_cancels_per_min"] == 600
+
+
+def test_restart_bootstraps_hold_and_safe_mode():
+    safety = runtime.get_safety_status()
+    assert safety["hold_active"] is True
+    control = runtime.get_state().control
+    assert control.mode == "HOLD"
+    assert control.safe_mode is True
 
 
 def test_resume_request_and_confirm_flow(monkeypatch):
@@ -53,6 +64,8 @@ def test_resume_request_and_confirm_flow(monkeypatch):
 def test_order_counter_triggers_hold(monkeypatch):
     monkeypatch.setenv("MAX_ORDERS_PER_MIN", "1")
     runtime.reset_for_tests()
+    runtime.record_resume_request("counter_test_orders", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
     register_order_attempt(reason="test_counter", source="pytest")
     with pytest.raises(HoldActiveError):
         register_order_attempt(reason="test_counter", source="pytest")
@@ -62,6 +75,8 @@ def test_order_counter_triggers_hold(monkeypatch):
 def test_cancel_counter_triggers_hold(monkeypatch):
     monkeypatch.setenv("MAX_CANCELS_PER_MIN", "1")
     runtime.reset_for_tests()
+    runtime.record_resume_request("counter_test_cancels", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
     register_cancel_attempt(reason="test_counter", source="pytest")
     with pytest.raises(HoldActiveError):
         register_cancel_attempt(reason="test_counter", source="pytest")
