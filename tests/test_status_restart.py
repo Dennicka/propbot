@@ -121,6 +121,8 @@ def test_restart_restores_status_and_positions(monkeypatch, tmp_path):
     positions_path = tmp_path / "hedge_positions.json"
     monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
     monkeypatch.setenv("POSITIONS_STORE_PATH", str(positions_path))
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("APPROVE_TOKEN", "pytest-approve")
     _write_runtime_state(runtime_path)
     _write_positions_store(positions_path)
 

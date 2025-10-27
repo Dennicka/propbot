@@ -42,6 +42,32 @@
 6. Не снимайте лимиты по плечу/ноционалу — runaway guard и риск-блокировки
    используют их для защиты.
 
+## Startup validation / go-live safety
+
+- Контейнер теперь выполняет жёсткий preflight: при старте `app/main.py`
+  вызывает `startup_validation.validate_startup()`. Если конфигурация
+  небезопасна (непрописанные токены, отсутствующие пути `data/`, лимиты со
+  значением `0`, попытка live-старта без HOLD), процесс завершится c ошибкой и
+  контейнер останется остановленным.
+- Перед тем как выключать HOLD и `DRY_RUN_MODE`, убедитесь, что выполнен
+  чек-лист:
+  - биржевые сети доступны (ping до REST/WebSocket Binance и OKX успешен);
+  - `APPROVE_TOKEN` заполнен и хранится отдельно от `API_TOKEN`;
+  - пути `RUNTIME_STATE_PATH`, `POSITIONS_STORE_PATH`, `HEDGE_LOG_PATH`,
+    `OPS_ALERTS_FILE` указывают на том с правом записи;
+  - лимиты риска (`MAX_OPEN_POSITIONS`, `MAX_NOTIONAL_PER_POSITION_USDT`,
+    `MAX_TOTAL_NOTIONAL_USDT`, `MAX_LEVERAGE`) проставлены в положительные
+    значения;
+  - `SAFE_MODE=true`, HOLD активен, `DRY_RUN_MODE=true` для проверки без
+    реальных ордеров.
+- Комбинация `DRY_RUN_MODE=true` + HOLD оставляет стратегию в безопасном режиме
+  обкатки: ордера не отправляются, но мониторинг и отчёты работают. Используйте
+  её для тестов и после перезагрузок.
+- Реальную торговлю можно продолжить только вручную после двухшагового флоу
+  `/api/ui/resume-request` → `/api/ui/resume-confirm` (c `APPROVE_TOKEN`) →
+  `/api/ui/resume`. Любая попытка стартовать контейнер сразу в live режиме
+  блокируется валидацией.
+
 ## Going live
 
 После старта `docker compose -f docker-compose.prod.yml --env-file .env.prod up`

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("APPROVE_TOKEN", "pytest-approve")
+os.environ.setdefault("AUTH_ENABLED", "false")
 
 from app import ledger
 from app.main import app

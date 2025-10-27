@@ -120,7 +120,7 @@ def test_ui_state_and_controls(client, monkeypatch):
         json={"token": "unit-test-token", "actor": "pytest"},
     )
     assert missing_token.status_code == 401
-    assert missing_token.json()["detail"] == "approve_token_missing"
+    assert missing_token.json()["detail"] == "invalid_token"
 
     monkeypatch.setenv("APPROVE_TOKEN", "unit-test-token")
 
