@@ -178,6 +178,20 @@ async def execute(plan_body: ExecutePayload) -> dict:
                 )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
         simulated = bool(trade_result.get("simulated"))
+        long_order = trade_result.get("long_order") or {}
+        short_order = trade_result.get("short_order") or {}
+        long_price = float(
+            long_order.get("price")
+            or long_order.get("avg_price")
+            or trade_result.get("details", {}).get("cheap_mark", 0.0)
+            or 0.0
+        )
+        short_price = float(
+            short_order.get("price")
+            or short_order.get("avg_price")
+            or trade_result.get("details", {}).get("expensive_mark", 0.0)
+            or 0.0
+        )
         position = create_position(
             symbol=plan_body.symbol,
             long_venue=str(trade_result.get("cheap_exchange")),
@@ -185,10 +199,11 @@ async def execute(plan_body: ExecutePayload) -> dict:
             notional_usdt=plan_body.notion_usdt,
             entry_spread_bps=float(trade_result.get("spread_bps", 0.0)),
             leverage=plan_body.leverage,
-            entry_long_price=float(trade_result.get("long_order", {}).get("price", 0.0)),
-            entry_short_price=float(trade_result.get("short_order", {}).get("price", 0.0)),
-            status="simulated" if simulated else None,
+            entry_long_price=long_price,
+            entry_short_price=short_price,
+            status="simulated" if simulated else "open",
             simulated=simulated,
+            legs=trade_result.get("legs"),
         )
         trade_result["position"] = position
         alert_payload = {

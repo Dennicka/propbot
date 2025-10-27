@@ -90,6 +90,10 @@ def _normalise_leg(
     entry_price: float | None,
     leverage: float | None,
     timestamp: str,
+    status: str | None = None,
+    simulated: bool | None = None,
+    filled_qty: float | None = None,
+    base_size: float | None = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "venue": str(venue),
@@ -99,12 +103,30 @@ def _normalise_leg(
         "entry_price": float(entry_price) if entry_price not in (None, "") else None,
         "leverage": float(leverage) if leverage not in (None, "") else None,
         "timestamp": timestamp,
+        "status": str(status or "open"),
     }
+    if simulated is not None:
+        payload["simulated"] = bool(simulated)
+    if filled_qty not in (None, ""):
+        try:
+            payload["filled_qty"] = float(filled_qty)
+        except (TypeError, ValueError):
+            payload["filled_qty"] = 0.0
     entry_price_value = payload.get("entry_price")
-    if entry_price_value:
+    if base_size not in (None, ""):
+        try:
+            payload["base_size"] = float(base_size)
+        except (TypeError, ValueError):
+            payload["base_size"] = 0.0
+    elif payload.get("filled_qty") not in (None, ""):
+        try:
+            payload["base_size"] = float(payload["filled_qty"])
+        except (TypeError, ValueError):
+            payload["base_size"] = 0.0
+    elif entry_price_value:
         try:
             payload["base_size"] = payload["notional_usdt"] / float(entry_price_value)
-        except ZeroDivisionError:
+        except (ZeroDivisionError, TypeError, ValueError):
             payload["base_size"] = 0.0
     else:
         payload["base_size"] = 0.0
@@ -139,8 +161,16 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "pnl_usdt": float(payload.get("pnl_usdt") or 0.0),
         "base_size": float(base_size),
     }
-    if payload.get("simulated") is not None:
-        record["simulated"] = bool(payload.get("simulated"))
+    simulated_flag = payload.get("simulated")
+    if simulated_flag is not None:
+        record["simulated"] = bool(simulated_flag)
+    status_value = str(record.get("status") or "open").lower()
+    if status_value == "simulated":
+        leg_status = "simulated"
+    elif status_value == "closed":
+        leg_status = "closed"
+    else:
+        leg_status = "open"
     record["legs"] = [
         _normalise_leg(
             venue=long_venue,
@@ -150,6 +180,8 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
             entry_price=record["entry_long_price"],
             leverage=record["leverage"],
             timestamp=timestamp,
+            status=leg_status,
+            simulated=bool(simulated_flag) if simulated_flag is not None else None,
         ),
         _normalise_leg(
             venue=short_venue,
@@ -159,8 +191,54 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
             entry_price=record["entry_short_price"],
             leverage=record["leverage"],
             timestamp=timestamp,
+            status=leg_status,
+            simulated=bool(simulated_flag) if simulated_flag is not None else None,
         ),
     ]
+    legs_override = payload.get("legs")
+    if isinstance(legs_override, Iterable):
+        overrides: Dict[str, Mapping[str, Any]] = {}
+        for entry in legs_override:
+            if isinstance(entry, Mapping):
+                side_key = str(entry.get("side") or "").lower()
+                if side_key in {"long", "short"}:
+                    overrides[side_key] = entry
+        for idx, leg in enumerate(record["legs"]):
+            override = overrides.get(leg["side"])
+            if not override:
+                continue
+            venue_override = override.get("venue") or override.get("exchange") or leg["venue"]
+            notional_override = override.get("notional_usdt")
+            leverage_override = override.get("leverage")
+            timestamp_override = override.get("timestamp")
+            simulated_override = override.get("simulated")
+            status_override = override.get("status")
+            price_override = (
+                override.get("entry_price")
+                if override.get("entry_price") not in (None, "")
+                else override.get("price")
+                if override.get("price") not in (None, "")
+                else override.get("avg_price")
+            )
+            new_leg = _normalise_leg(
+                venue=str(venue_override),
+                symbol=str(override.get("symbol") or leg["symbol"]),
+                side=leg["side"],
+                notional_usdt=float(notional_override) if notional_override not in (None, "") else leg["notional_usdt"],
+                entry_price=price_override if price_override not in (None, "") else leg.get("entry_price"),
+                leverage=float(leverage_override) if leverage_override not in (None, "") else leg.get("leverage"),
+                timestamp=str(timestamp_override) if timestamp_override not in (None, "") else leg["timestamp"],
+                status=str(status_override) if status_override not in (None, "") else leg.get("status"),
+                simulated=bool(simulated_override) if simulated_override is not None else leg.get("simulated"),
+                filled_qty=override.get("filled_qty"),
+                base_size=override.get("base_size"),
+            )
+            raw_payload = override.get("raw")
+            if isinstance(raw_payload, Mapping):
+                new_leg["raw"] = {str(key): value for key, value in raw_payload.items()}
+            elif raw_payload is not None:
+                new_leg["raw"] = raw_payload
+            record["legs"][idx] = new_leg
     return record
 
 

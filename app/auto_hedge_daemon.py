@@ -328,6 +328,18 @@ class AutoHedgeDaemon:
             return
 
         simulated = bool(trade_result.get("simulated"))
+        long_order = trade_result.get("long_order") or {}
+        short_order = trade_result.get("short_order") or {}
+        long_price = _maybe_float(
+            long_order.get("price")
+            or long_order.get("avg_price")
+            or trade_result.get("details", {}).get("cheap_mark")
+        )
+        short_price = _maybe_float(
+            short_order.get("price")
+            or short_order.get("avg_price")
+            or trade_result.get("details", {}).get("expensive_mark")
+        )
         position = create_position(
             symbol=symbol,
             long_venue=str(trade_result.get("cheap_exchange") or candidate.get("long_venue") or ""),
@@ -335,10 +347,11 @@ class AutoHedgeDaemon:
             notional_usdt=notional,
             entry_spread_bps=_coerce_float(trade_result.get("spread_bps", candidate.get("spread_bps"))),
             leverage=leverage,
-            entry_long_price=_maybe_float(trade_result.get("long_order", {}).get("price")),
-            entry_short_price=_maybe_float(trade_result.get("short_order", {}).get("price")),
-            status="simulated" if simulated else None,
+            entry_long_price=long_price,
+            entry_short_price=short_price,
+            status="simulated" if simulated else "open",
             simulated=simulated,
+            legs=trade_result.get("legs"),
         )
         trade_result["position"] = position
         ts = _ts()

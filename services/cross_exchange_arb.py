@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Dict, Tuple
 
-from app.services.runtime import HoldActiveError, is_dry_run_mode, register_order_attempt
+from app.services.hedge_log import append_entry
+from app.services.runtime import (
+    HoldActiveError,
+    engage_safety_hold,
+    is_dry_run_mode,
+    register_order_attempt,
+)
 from exchanges import BinanceFuturesClient, OKXFuturesClient
+
+
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -22,44 +33,184 @@ _clients = _ExchangeClients(
 
 
 def _determine_cheapest(
-    binance_quote: Dict[str, float], okx_quote: Dict[str, float]
+    binance_mark: Dict[str, float], okx_mark: Dict[str, float]
 ) -> Tuple[str, float]:
-    if binance_quote["ask"] <= okx_quote["ask"]:
-        return "binance", float(binance_quote["ask"])
-    return "okx", float(okx_quote["ask"])
+    if binance_mark["mark_price"] <= okx_mark["mark_price"]:
+        return "binance", float(binance_mark["mark_price"])
+    return "okx", float(okx_mark["mark_price"])
 
 
 def _determine_most_expensive(
-    binance_quote: Dict[str, float], okx_quote: Dict[str, float]
+    binance_mark: Dict[str, float], okx_mark: Dict[str, float]
 ) -> Tuple[str, float]:
-    if binance_quote["bid"] >= okx_quote["bid"]:
-        return "binance", float(binance_quote["bid"])
-    return "okx", float(okx_quote["bid"])
+    if binance_mark["mark_price"] >= okx_mark["mark_price"]:
+        return "binance", float(binance_mark["mark_price"])
+    return "okx", float(okx_mark["mark_price"])
+
+
+def _client_for(venue: str) -> BinanceFuturesClient | OKXFuturesClient:
+    if venue == "binance":
+        return _clients.binance
+    if venue == "okx":
+        return _clients.okx
+    raise ValueError(f"unknown exchange venue: {venue}")
+
+
+def _build_leg(
+    *,
+    exchange: str,
+    symbol: str,
+    side: str,
+    notional_usdt: float,
+    leverage: float,
+    price: float,
+    filled_qty: float,
+    status: str,
+    simulated: bool,
+    raw: Dict[str, object] | None = None,
+) -> Dict[str, object]:
+    base_size = float(filled_qty)
+    entry = {
+        "exchange": exchange,
+        "symbol": symbol,
+        "side": side,
+        "status": status,
+        "avg_price": float(price),
+        "price": float(price),
+        "filled_qty": base_size,
+        "base_size": base_size,
+        "notional_usdt": float(notional_usdt),
+        "leverage": float(leverage),
+        "simulated": simulated,
+    }
+    if raw:
+        if raw.get("order_id"):
+            entry["order_id"] = raw.get("order_id")
+        entry["raw"] = raw
+    return entry
+
+
+def _simulate_leg(
+    *,
+    exchange: str,
+    symbol: str,
+    side: str,
+    notional_usdt: float,
+    leverage: float,
+    price: float,
+) -> Dict[str, object]:
+    price_value = float(price) if price else 0.0
+    if price_value <= 0:
+        filled_qty = 0.0
+    else:
+        filled_qty = float(notional_usdt) / price_value
+    return _build_leg(
+        exchange=exchange,
+        symbol=symbol,
+        side=side,
+        notional_usdt=notional_usdt,
+        leverage=leverage,
+        price=price_value,
+        filled_qty=filled_qty,
+        status="simulated",
+        simulated=True,
+    )
+
+
+def _normalise_order(
+    *,
+    order: Dict[str, object],
+    exchange: str,
+    symbol: str,
+    side: str,
+    notional_usdt: float,
+    leverage: float,
+    fallback_price: float,
+) -> Dict[str, object]:
+    price = float(order.get("avg_price") or order.get("price") or fallback_price or 0.0)
+    filled_qty = float(order.get("filled_qty") or order.get("base_size") or 0.0)
+    if not filled_qty and price > 0:
+        filled_qty = float(notional_usdt) / float(price)
+    status = str(order.get("status") or "filled").lower()
+    payload = dict(order)
+    payload.setdefault("order_id", order.get("order_id"))
+    return _build_leg(
+        exchange=exchange,
+        symbol=symbol,
+        side=side,
+        notional_usdt=notional_usdt,
+        leverage=leverage,
+        price=price,
+        filled_qty=filled_qty,
+        status=status,
+        simulated=False,
+        raw=payload,
+    )
 
 
 def check_spread(symbol: str) -> dict:
     """Inspect quotes from both exchanges and compute the actionable spread."""
 
-    binance_quote = _clients.binance.get_best_bid_ask(symbol)
-    okx_quote = _clients.okx.get_best_bid_ask(symbol)
+    symbol_upper = str(symbol).upper()
+    binance_mark = _clients.binance.get_mark_price(symbol_upper)
+    okx_mark = _clients.okx.get_mark_price(symbol_upper)
 
-    cheap_exchange, cheap_ask = _determine_cheapest(binance_quote, okx_quote)
-    expensive_exchange, expensive_bid = _determine_most_expensive(
-        binance_quote, okx_quote
+    binance_price = float(binance_mark.get("mark_price") or 0.0)
+    okx_price = float(okx_mark.get("mark_price") or 0.0)
+
+    cheap_exchange, cheap_price = _determine_cheapest(
+        {"mark_price": binance_price}, {"mark_price": okx_price}
+    )
+    expensive_exchange, expensive_price = _determine_most_expensive(
+        {"mark_price": binance_price}, {"mark_price": okx_price}
     )
 
-    spread = float(expensive_bid) - float(cheap_ask)
-    spread_bps = (spread / float(cheap_ask)) * 10_000 if cheap_ask else 0.0
+    spread = float(expensive_price) - float(cheap_price)
+    spread_bps = (spread / float(cheap_price)) * 10_000 if cheap_price else 0.0
 
     return {
-        "symbol": symbol,
+        "symbol": symbol_upper,
         "cheap": cheap_exchange,
         "expensive": expensive_exchange,
-        "cheap_ask": float(cheap_ask),
-        "expensive_bid": float(expensive_bid),
+        "cheap_mark": float(cheap_price),
+        "expensive_mark": float(expensive_price),
+        "cheap_ask": float(cheap_price),
+        "expensive_bid": float(expensive_price),
+        "binance_mark_price": binance_price,
+        "okx_mark_price": okx_price,
         "spread": spread,
         "spread_bps": float(spread_bps),
     }
+
+
+def _log_partial_failure(
+    *,
+    symbol: str,
+    notional_usdt: float,
+    leverage: float,
+    cheap_exchange: str,
+    expensive_exchange: str,
+    reason: str,
+    long_leg: Dict[str, object] | None,
+    short_leg: Dict[str, object] | None,
+) -> None:
+    append_entry(
+        {
+            "timestamp": _ts(),
+            "symbol": symbol,
+            "long_venue": cheap_exchange,
+            "short_venue": expensive_exchange,
+            "notional_usdt": float(notional_usdt),
+            "leverage": float(leverage),
+            "result": f"partial_failure:{reason}",
+            "status": "partial_failure",
+            "simulated": False,
+            "dry_run_mode": False,
+            "legs": [leg for leg in (long_leg, short_leg) if leg],
+            "error": reason,
+            "initiator": "cross_exchange_execute",
+        }
+    )
 
 
 def execute_hedged_trade(
@@ -72,7 +223,7 @@ def execute_hedged_trade(
 
     if spread_value < float(min_spread):
         return {
-            "symbol": symbol,
+            "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
             "spread": spread_value,
             "success": False,
@@ -83,40 +234,73 @@ def execute_hedged_trade(
     cheap_exchange = spread_info["cheap"]
     expensive_exchange = spread_info["expensive"]
 
-    if cheap_exchange == "binance":
-        long_client = _clients.binance
-        short_client = _clients.okx
-    else:
-        long_client = _clients.okx
-        short_client = _clients.binance
+    long_client = _client_for(cheap_exchange)
+    short_client = _client_for(expensive_exchange)
 
     dry_run_mode = is_dry_run_mode()
+    notional = float(notion_usdt)
+    leverage_value = float(leverage)
 
-    def _simulated_order(exchange: str, side: str) -> Dict[str, object]:
-        return {
-            "exchange": exchange,
-            "symbol": symbol,
-            "side": side,
-            "notional_usdt": notion_usdt,
-            "leverage": leverage,
-            "status": "simulated",
-            "simulated": True,
-        }
+    long_leg = None
+    short_leg = None
 
     try:
         register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
         if dry_run_mode:
-            long_order = _simulated_order(cheap_exchange, "long")
+            long_leg = _simulate_leg(
+                exchange=cheap_exchange,
+                symbol=spread_info["symbol"],
+                side="long",
+                notional_usdt=notional,
+                leverage=leverage_value,
+                price=float(spread_info["cheap_mark"]),
+            )
         else:
-            long_order = long_client.open_long(symbol, notion_usdt, leverage)
+            long_order = long_client.place_order(
+                spread_info["symbol"],
+                "long",
+                notional,
+                leverage_value,
+            )
+            long_leg = _normalise_order(
+                order=long_order,
+                exchange=cheap_exchange,
+                symbol=spread_info["symbol"],
+                side="long",
+                notional_usdt=notional,
+                leverage=leverage_value,
+                fallback_price=float(spread_info["cheap_mark"]),
+            )
+
         register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
         if dry_run_mode:
-            short_order = _simulated_order(expensive_exchange, "short")
+            short_leg = _simulate_leg(
+                exchange=expensive_exchange,
+                symbol=spread_info["symbol"],
+                side="short",
+                notional_usdt=notional,
+                leverage=leverage_value,
+                price=float(spread_info["expensive_mark"]),
+            )
         else:
-            short_order = short_client.open_short(symbol, notion_usdt, leverage)
+            short_order = short_client.place_order(
+                spread_info["symbol"],
+                "short",
+                notional,
+                leverage_value,
+            )
+            short_leg = _normalise_order(
+                order=short_order,
+                exchange=expensive_exchange,
+                symbol=spread_info["symbol"],
+                side="short",
+                notional_usdt=notional,
+                leverage=leverage_value,
+                fallback_price=float(spread_info["expensive_mark"]),
+            )
     except HoldActiveError as exc:
         return {
-            "symbol": symbol,
+            "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
             "spread": spread_value,
             "success": False,
@@ -124,21 +308,49 @@ def execute_hedged_trade(
             "details": spread_info,
             "hold_active": True,
         }
-    long_order.setdefault("price", float(spread_info["cheap_ask"]))
-    short_order.setdefault("price", float(spread_info["expensive_bid"]))
+    except Exception as exc:
+        reason = str(exc)
+        partial = bool(long_leg and not short_leg and not dry_run_mode)
+        if partial:
+            _log_partial_failure(
+                symbol=spread_info["symbol"],
+                notional_usdt=notional,
+                leverage=leverage_value,
+                cheap_exchange=cheap_exchange,
+                expensive_exchange=expensive_exchange,
+                reason=reason,
+                long_leg=long_leg,
+                short_leg=short_leg,
+            )
+            engage_safety_hold("hedge_leg_failed", source="cross_exchange_hedge")
+        return {
+            "symbol": spread_info["symbol"],
+            "min_spread": float(min_spread),
+            "spread": spread_value,
+            "success": False,
+            "reason": "short_leg_failed" if partial else "order_failed",
+            "details": spread_info,
+            "long_leg": long_leg,
+            "short_leg": short_leg,
+            "error": reason,
+            "hold_engaged": partial,
+        }
 
-    return {
-        "symbol": symbol,
+    legs = [leg for leg in (long_leg, short_leg) if leg]
+    result = {
+        "symbol": spread_info["symbol"],
         "min_spread": float(min_spread),
         "spread": spread_value,
         "spread_bps": float(spread_info.get("spread_bps", 0.0)),
         "cheap_exchange": cheap_exchange,
         "expensive_exchange": expensive_exchange,
-        "long_order": long_order,
-        "short_order": short_order,
+        "legs": legs,
+        "long_order": long_leg,
+        "short_order": short_leg,
         "success": True,
         "status": "simulated" if dry_run_mode else "executed",
         "dry_run_mode": dry_run_mode,
         "simulated": dry_run_mode,
         "details": spread_info,
     }
+    return result

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 from app.services import runtime
 from positions_store import append_record, list_records, mark_closed, reset_store
@@ -52,6 +52,7 @@ def create_position(
     entry_short_price: float | None = None,
     status: str | None = None,
     simulated: bool | None = None,
+    legs: Iterable[Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     """Create and persist a new hedge position."""
 
@@ -73,6 +74,8 @@ def create_position(
         payload["status"] = str(status)
     if simulated is not None:
         payload["simulated"] = bool(simulated)
+    if legs is not None:
+        payload["legs"] = [dict(leg) for leg in legs]
     if entry_long_price not in (None, 0) and notional_usdt:
         try:
             payload["base_size"] = float(notional_usdt) / float(entry_long_price)
