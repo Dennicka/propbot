@@ -19,11 +19,20 @@ from positions import reset_positions
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(monkeypatch) -> TestClient:
     reset_for_tests()
     runtime.record_resume_request("tests_bootstrap", requested_by="pytest")
     runtime.approve_resume(actor="pytest")
     ledger.reset()
+    monkeypatch.setattr(
+        "services.opportunity_scanner.check_spread",
+        lambda symbol: {
+            "cheap": "binance",
+            "expensive": "okx",
+            "spread": 10.0,
+            "spread_bps": 15.0,
+        },
+    )
     # ensure background loop is not running between tests
     try:
         import asyncio

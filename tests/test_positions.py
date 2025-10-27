@@ -1,7 +1,7 @@
 import json
 import math
 
-from positions import close_position, create_position, list_positions
+from positions import close_position, create_position, list_open_positions, list_positions
 from positions_store import get_store_path, list_records
 from services.risk_manager import can_open_new_position
 
@@ -75,3 +75,25 @@ def test_risk_manager_blocks_excess_notional(monkeypatch):
     allowed, reason = can_open_new_position(800.0, 2.0)
     assert allowed is False
     assert reason == "total_notional_limit_exceeded"
+
+
+def test_simulated_positions_ignored_by_limits(monkeypatch):
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "1")
+    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "1000")
+    create_position(
+        symbol="BTCUSDT",
+        long_venue="binance-um",
+        short_venue="okx-perp",
+        notional_usdt=800.0,
+        entry_spread_bps=10.0,
+        leverage=2.0,
+        status="simulated",
+        simulated=True,
+        entry_long_price=30_000.0,
+        entry_short_price=30_010.0,
+    )
+    assert list_open_positions() == []
+
+    allowed, reason = can_open_new_position(900.0, 2.0)
+    assert allowed is True
+    assert reason == ""
