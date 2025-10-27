@@ -40,6 +40,7 @@ from ..services import portfolio, risk
 from ..services.hedge_log import read_entries
 from ..security import require_token
 from positions import list_positions
+from opsbot.notify import notify_ops, read_alerts
 from ..utils import redact_sensitive_data
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
@@ -433,7 +434,7 @@ async def hold(payload: HoldPayload | None = None) -> dict:
     reason = (payload.reason.strip() if payload and payload.reason else "manual_hold")
     requested_by = payload.requested_by if payload else None
     await hold_loop()
-    engage_safety_hold(reason, source="ui")
+    engage_safety_hold(reason, source="ui", metadata={"requested_by": requested_by or "ui"})
     set_mode("HOLD")
     ledger.record_event(
         level="INFO",
@@ -477,9 +478,22 @@ async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
     if not expected_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
     if not secrets.compare_digest(payload.token, expected_token):
+        notify_ops(
+            "RESUME CONFIRM DENIED",
+            {"reason": "invalid_token", "source": "ui", "actor": payload.actor or "ui"},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
     result = approve_resume(actor=payload.actor)
     safety = get_safety_status()
+    notify_ops(
+        "RESUME CONFIRMED",
+        {
+            "reason": resume_info.get("reason"),
+            "source": "ui",
+            "actor": payload.actor or "ui",
+            "status": "hold_cleared" if result.get("hold_cleared") else "pending_hold",
+        },
+    )
     ledger.record_event(
         level="INFO",
         code="resume_confirmed",
@@ -568,8 +582,13 @@ async def kill_switch() -> dict:
     except HoldActiveError as exc:
         safety = get_safety_status()
         detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
+        notify_ops(
+            "KILL FAILED",
+            {"source": "ui", "reason": detail.get("reason") or detail.get("error") or "hold_active"},
+        )
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
     ledger.record_event(level="CRITICAL", code="kill_switch", payload=result)
+    notify_ops("KILL ACTIVATED", {"source": "ui", "details": result})
     risk.refresh_runtime_state()
     return {
         "ts": _ts(),
@@ -608,6 +627,13 @@ async def last_plan() -> dict:
     if plan is None:
         return {"last_plan": None}
     return {"last_plan": plan}
+
+
+@router.get("/alerts")
+async def ops_alerts(limit: int = Query(50, ge=1, le=500)) -> dict:
+    return {"alerts": read_alerts(limit=limit), "ts": _ts()}
+
+
 @router.get("/hedge/log")
 async def hedge_log(request: Request, limit: int = Query(100, ge=1, le=1_000)) -> dict:
     require_token(request)

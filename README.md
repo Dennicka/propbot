@@ -142,11 +142,12 @@ below:
   - `AUTH_ENABLED` + `API_TOKEN` — enable bearer auth for mutating routes.
   - `IDEM_TTL_SEC`, `API_RATE_PER_MIN`, `API_BURST` — idempotency and rate
     limit configuration.
-- **Telegram control bot**
-  - `TELEGRAM_ENABLE=true` to start the bot alongside FastAPI.
+- **Operations Telegram bot**
+  - `TELEGRAM_ENABLE=true` to start the restricted ops bot alongside FastAPI.
   - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` — credentials issued by
-    BotFather.
-  - `TELEGRAM_PUSH_MINUTES` — periodic status push interval (minutes).
+    BotFather for the operator chat/channel.
+  - `TWO_MAN_TOKEN` — shared secret required by `/resume_confirm` to clear HOLD
+    under the two-man rule.
 - **Binance / OKX keys**
   - `BINANCE_UM_API_KEY_TESTNET` / `BINANCE_UM_API_SECRET_TESTNET` — Binance
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
@@ -201,6 +202,29 @@ HOLD. The `/api/ui/status/overview` payload now exposes `hold_active`, the last
 resume request, and the current reason so operators can coordinate responses.
 
 This two-step confirmation is **required** before any real-money deployment.
+
+## Операторский Telegram-бот (боевой режим)
+
+Боевой инстанс запускает Telegram-бота только для операторов:
+
+- задайте `TELEGRAM_ENABLE=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` и
+  `TWO_MAN_TOKEN` в `.env` (не коммитьте их в git и не передавайте третьим
+  лицам);
+- бот понимает команды `/status`, `/positions`, `/hold <reason>`,
+  `/resume_confirm <token> <note>` и `/kill`;
+- `/resume_confirm` сравнивает `<token>` с `TWO_MAN_TOKEN` и лишь затем вызывает
+  внутренний `approve_resume` — подтверждение должно делать второй оператор;
+- `/hold` и `/kill` переводят систему в HOLD через те же безопасные пути, что и
+  API/UI, не трогают биржи напрямую;
+- `/status` и `/positions` читают текущий runtime state (SAFE_MODE, HOLD,
+  последние хедж-позиции, риск-бричи) и не создают новых ордеров;
+- бот никогда не размещает ручные сделки, он лишь стопит/разрешает работу и
+  читает статусы.
+
+Все события бот также журналирует в `data/ops_alerts.json`, доступно через
+`GET /api/ui/alerts` без авторизации. Используйте только приватные каналы и не
+раскрывайте токены или chat ID — компрометация даёт злоумышленнику доступ к
+HOLD/KILL операциям.
 
 ## Runaway order breakers & status surface
 

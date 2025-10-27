@@ -25,6 +25,7 @@ from .services.runtime import (
     set_last_opportunity_state,
     update_auto_hedge_state,
 )
+from opsbot.notify import notify_ops
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class AutoHedgeDaemon:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._failure_events: list[float] = []
+        self._last_warning_count = 0
 
     def _is_enabled(self) -> bool:
         if self._enabled_override is not None:
@@ -199,6 +201,27 @@ class AutoHedgeDaemon:
             "initiator": INITIATOR,
         }
 
+    def _alert_context(
+        self,
+        *,
+        candidate: Mapping[str, Any] | None,
+        trade_result: Mapping[str, Any] | None,
+    ) -> Dict[str, Any]:
+        context: Dict[str, Any] = {}
+        if isinstance(candidate, Mapping):
+            context.update(candidate)
+        if isinstance(trade_result, Mapping):
+            context.update(trade_result)
+        details = {
+            "symbol": context.get("symbol"),
+            "long_venue": context.get("cheap_exchange") or context.get("long_venue"),
+            "short_venue": context.get("expensive_exchange") or context.get("short_venue"),
+            "notional_usdt": context.get("notional_suggestion") or context.get("notional_usdt"),
+            "leverage": context.get("leverage_suggestion") or context.get("leverage"),
+            "spread_bps": context.get("spread_bps") or context.get("entry_spread_bps"),
+        }
+        return {key: value for key, value in details.items() if value is not None}
+
     def _register_failure(
         self,
         *,
@@ -222,6 +245,25 @@ class AutoHedgeDaemon:
                 candidate=candidate, result=f"rejected: {reason}", timestamp=ts, trade_result=trade_result
             )
         )
+        notify_ops(
+            "AUTO-HEDGE BLOCKED",
+            {
+                **self._alert_context(candidate=candidate, trade_result=trade_result),
+                "reason": reason,
+                "source": "auto_hedge_daemon",
+            },
+        )
+        if self._max_failures > 0:
+            warn_threshold = max(1, self._max_failures - 1)
+            if failures >= warn_threshold and failures != self._last_warning_count:
+                notify_ops(
+                    "AUTO-HEDGE WARNING",
+                    {
+                        "reason": f"failure_count={failures}/{self._max_failures}",
+                        "source": "auto_hedge_daemon",
+                    },
+                )
+                self._last_warning_count = failures
         if self._max_failures > 0 and failures > self._max_failures:
             engage_safety_hold(f"auto_hedge_failures:{reason}", source="auto_hedge_daemon")
         logger.warning("auto hedge rejected: %s", reason)
@@ -231,6 +273,7 @@ class AutoHedgeDaemon:
         update_auto_hedge_state(enabled=enabled)
         if not enabled:
             self._failure_events.clear()
+            self._last_warning_count = 0
             update_auto_hedge_state(last_execution_result="disabled", consecutive_failures=0)
             return
 
@@ -324,10 +367,19 @@ class AutoHedgeDaemon:
             consecutive_failures=0,
         )
         self._failure_events.clear()
+        self._last_warning_count = 0
         append_entry(
             self._build_log_entry(
                 candidate=candidate, result="accepted", timestamp=ts, trade_result=trade_result
             )
+        )
+        notify_ops(
+            "AUTO-HEDGE OK",
+            {
+                **self._alert_context(candidate=candidate, trade_result=trade_result),
+                "reason": "executed",
+                "source": "auto_hedge_daemon",
+            },
         )
         set_last_opportunity_state(None, "blocked_by_risk")
         logger.info(

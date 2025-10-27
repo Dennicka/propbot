@@ -10,6 +10,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Tuple
 
+from opsbot.notify import notify_ops
+
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
 from .marketdata import MarketDataAggregator
@@ -807,7 +809,12 @@ def set_mode(mode: str) -> None:
         _STATE.control.mode = normalised
 
 
-def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
+def engage_safety_hold(
+    reason: str,
+    *,
+    source: str = "slo_monitor",
+    metadata: Mapping[str, Any] | None = None,
+) -> bool:
     """Force the runtime into HOLD/SAFE_MODE and stop auto-loop if needed."""
 
     persist_snapshot: Dict[str, object] | None = None
@@ -854,7 +861,16 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
         _persist_control_snapshot(persist_snapshot)
     if safety_snapshot is not None:
         _persist_safety_snapshot(safety_snapshot)
-    return changed or hold_changed
+    triggered = changed or hold_changed
+    if triggered:
+        details: Dict[str, Any] = {"reason": reason, "source": source}
+        if metadata:
+            try:
+                details.update({str(key): value for key, value in metadata.items()})
+            except Exception:  # pragma: no cover - defensive merge
+                details["metadata"] = dict(metadata)
+        notify_ops("HOLD TRIGGERED", details)
+    return triggered
 
 
 def set_last_plan(plan: Dict[str, object]) -> None:

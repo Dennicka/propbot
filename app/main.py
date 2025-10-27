@@ -9,7 +9,7 @@ from .routers import ui_status
 from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
-from .telebot import setup_telegram_bot
+from opsbot import setup_opsbot
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
 
@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_status.router, prefix="/api/ui/status")
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
-    setup_telegram_bot(app)
+    setup_opsbot(app)
     setup_opportunity_scanner(app)
     setup_auto_hedge_daemon(app)
     return app
