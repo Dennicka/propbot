@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import ledger
 from .routers import arb, health, risk, ui
 from .routers import ui_status
+from .routers import ui_alerts
 from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(risk.router)
     app.include_router(ui.router)
+    app.include_router(ui_alerts.router)
     app.include_router(ui_status.router, prefix="/api/ui/status")
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)

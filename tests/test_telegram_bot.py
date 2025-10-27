@@ -8,7 +8,9 @@ from app.telebot.telegram_bot import (
     TelegramBot,
     TelegramBotConfig,
     format_status_message,
+    setup_telegram_bot,
 )
+from fastapi import FastAPI
 
 
 def test_config_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,3 +68,12 @@ async def test_status_command_returns_snapshot(monkeypatch: pytest.MonkeyPatch) 
     message = await bot._handle_status()
 
     assert message == "Status: ok"
+
+
+def test_setup_skips_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEGRAM_ENABLE", raising=False)
+    app = FastAPI()
+
+    setup_telegram_bot(app)
+
+    assert getattr(app.state, "telegram_bot", None) is None

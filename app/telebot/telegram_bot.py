@@ -4,15 +4,19 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Awaitable, Callable, Iterable, TYPE_CHECKING
 
-import httpx
 from fastapi import FastAPI
 
 from .. import ledger
 from ..services import portfolio, risk
 from ..services.loop import cancel_all_orders, hold_loop, resume_loop
 from ..services.runtime import get_state, set_mode, set_open_orders
+
+if TYPE_CHECKING:  # pragma: no cover - import heavy dependencies only for type checking
+    from telegram import Update
+    from telegram.ext import Application
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -130,10 +134,8 @@ async def build_status_message() -> str:
 class TelegramBot:
     def __init__(self, config: TelegramBotConfig):
         self.config = config
-        self._client: httpx.AsyncClient | None = None
-        self._tasks: list[asyncio.Task[Any]] = []
-        self._stop_event = asyncio.Event()
-        self._update_offset = 0
+        self._application: Application | None = None
+        self._polling_task: asyncio.Task[Any] | None = None
         self.logger = LOGGER
 
     def is_authorized_chat(self, chat_id: Any) -> bool:
@@ -141,47 +143,113 @@ class TelegramBot:
             return False
         return str(chat_id) == str(self.config.chat_id)
 
+    def _load_ptb(self) -> tuple[Any, ...]:
+        try:
+            from telegram.ext import AIORateLimiter, ApplicationBuilder, CommandHandler, MessageHandler, filters
+        except ModuleNotFoundError as exc:  # pragma: no cover - surfaced in CI when optional dependency missing
+            raise RuntimeError("python-telegram-bot is not installed") from exc
+        return AIORateLimiter, ApplicationBuilder, CommandHandler, MessageHandler, filters
+
+    def _command_wrapper(
+        self, handler: Callable[[], Awaitable[str]]
+    ) -> Callable[["Update", Any], Awaitable[None]]:
+        async def _wrapped(update: "Update", context: Any) -> None:
+            chat = update.effective_chat
+            chat_id = getattr(chat, "id", None)
+            if not self.is_authorized_chat(chat_id):
+                self.logger.warning(
+                    "Ignoring Telegram message from unauthorized chat",
+                    extra={"chat_id": chat_id},
+                )
+                return
+            try:
+                message = await handler()
+            except Exception as exc:  # pragma: no cover - ensure user is notified
+                self.logger.exception("Telegram command failed", extra={"handler": handler.__name__})
+                message = f"Command failed: {exc}"[:400]
+            await self.send_message(message)
+
+        return _wrapped
+
+    async def _status_job(self, *_: Any) -> None:
+        try:
+            await self.send_status_update()
+        except Exception:  # pragma: no cover - logged for observability
+            self.logger.exception("Failed to push Telegram status update")
+
     async def start(self) -> None:
         if not self.config.can_run:
             self.logger.info("Telegram bot disabled or missing credentials; skipping startup")
             return
-        if self._client is not None:
+        if self._application is not None:
             return
+
+        AIORateLimiter, ApplicationBuilder, CommandHandler, MessageHandler, filters = self._load_ptb()
         self.logger.info("Starting Telegram bot background tasks")
-        base_url = f"https://api.telegram.org/bot{self.config.token}/"
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=20.0)
-        await self._discard_pending_updates()
-        self._stop_event.clear()
-        status_task = asyncio.create_task(self._status_loop(), name="telegram-status-loop")
-        command_task = asyncio.create_task(self._command_loop(), name="telegram-command-loop")
-        self._tasks = [status_task, command_task]
+        application = (
+            ApplicationBuilder()
+            .token(self.config.token)
+            .rate_limiter(AIORateLimiter())
+            .build()
+        )
+        application.add_handler(CommandHandler("pause", self._command_wrapper(self._handle_pause)))
+        application.add_handler(CommandHandler("resume", self._command_wrapper(self._handle_resume)))
+        application.add_handler(CommandHandler("status", self._command_wrapper(self._handle_status)))
+        application.add_handler(
+            CommandHandler(
+                ["close", "close_all", "closeall"],
+                self._command_wrapper(self._handle_close_all),
+            )
+        )
+        application.add_handler(MessageHandler(filters.COMMAND, self._command_wrapper(self._handle_unknown)))
+        interval = max(1, int(self.config.push_minutes)) * 60
+        if application.job_queue is not None:
+            application.job_queue.run_repeating(
+                self._status_job,
+                interval=interval,
+                first=10,
+                name="opsbot-status",
+            )
+
+        await application.initialize()
+        await application.start()
+        updater = application.updater
+        if updater is not None:
+            self._polling_task = asyncio.create_task(
+                updater.start_polling(drop_pending_updates=True),
+                name="telegram-updater-polling",
+            )
+        self._application = application
 
     async def stop(self) -> None:
-        self._stop_event.set()
-        for task in self._tasks:
-            task.cancel()
-        for task in self._tasks:
+        if self._application is None:
+            return
+        updater = self._application.updater
+        if updater is not None:
+            await updater.stop()
+        if self._polling_task is not None:
             try:
-                await task
+                await self._polling_task
             except asyncio.CancelledError:
-                continue
-            except Exception:  # pragma: no cover - defensive logging
-                self.logger.exception("Telegram task exited with error")
-        self._tasks.clear()
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+                pass
+            self._polling_task = None
+        await self._application.stop()
+        await self._application.shutdown()
+        self._application = None
         self.logger.info("Telegram bot stopped")
 
     async def send_message(self, text: str) -> None:
         if not self.config.can_run:
             return
-        if self._client is None:
-            self.logger.warning("Telegram client not initialized; message skipped")
+        if self._application is None:
+            self.logger.warning("Telegram application not initialized; message skipped")
+            return
+        bot = getattr(self._application, "bot", None)
+        if bot is None:
+            self.logger.warning("Telegram bot API not ready; message skipped")
             return
         try:
-            response = await self._client.post("sendMessage", json={"chat_id": self.config.chat_id, "text": text})
-            response.raise_for_status()
+            await bot.send_message(chat_id=self.config.chat_id, text=text)
         except Exception as exc:  # pragma: no cover - network failures are logged
             self.logger.warning("Failed to send Telegram message", extra={"error": str(exc)})
 
@@ -190,103 +258,6 @@ class TelegramBot:
             return
         message = await build_status_message()
         await self.send_message(message)
-
-    async def _wait(self, seconds: float) -> None:
-        try:
-            await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
-        except asyncio.TimeoutError:
-            return
-
-    async def _status_loop(self) -> None:
-        interval = max(1, int(self.config.push_minutes)) * 60
-        while not self._stop_event.is_set():
-            try:
-                await self.send_status_update()
-            except Exception:  # pragma: no cover - logged for observability
-                self.logger.exception("Failed to push Telegram status update")
-            await self._wait(interval)
-
-    async def _command_loop(self) -> None:
-        if self._client is None:
-            return
-        while not self._stop_event.is_set():
-            try:
-                payload = await self._client.get(
-                    "getUpdates",
-                    params={"offset": self._update_offset, "timeout": 30, "allowed_updates": ["message"]},
-                )
-                payload.raise_for_status()
-                data = payload.json()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # pragma: no cover - log and retry
-                self.logger.warning("Telegram update polling failed", extra={"error": str(exc)})
-                await self._wait(5)
-                continue
-            updates = data.get("result", []) if isinstance(data, dict) else []
-            if not isinstance(updates, list):
-                updates = []
-            for update in updates:
-                update_id = update.get("update_id")
-                if isinstance(update_id, int):
-                    self._update_offset = update_id + 1
-                try:
-                    await self._handle_update(update)
-                except Exception:  # pragma: no cover - ensure loop keeps running
-                    self.logger.exception("Failed to handle Telegram update")
-
-    async def _discard_pending_updates(self) -> None:
-        if self._client is None:
-            return
-        try:
-            response = await self._client.get("getUpdates", params={"timeout": 0})
-            response.raise_for_status()
-            data = response.json()
-            updates = data.get("result", []) if isinstance(data, dict) else []
-            if updates:
-                last_id = max(update.get("update_id", 0) for update in updates if isinstance(update, dict))
-                if isinstance(last_id, int) and last_id:
-                    self._update_offset = last_id + 1
-        except Exception:  # pragma: no cover - best effort priming
-            self.logger.debug("Failed to discard pending Telegram updates", exc_info=True)
-
-    async def _handle_update(self, update: dict[str, Any]) -> None:
-        message = update.get("message") if isinstance(update, dict) else None
-        if not isinstance(message, dict):
-            return
-        chat = message.get("chat")
-        chat_id = None
-        if isinstance(chat, dict):
-            chat_id = chat.get("id")
-        if not self.is_authorized_chat(chat_id):
-            self.logger.warning("Ignoring Telegram message from unauthorized chat", extra={"chat_id": chat_id})
-            return
-        text = message.get("text")
-        if not isinstance(text, str):
-            return
-        text = text.strip()
-        if not text:
-            return
-        command = text.split()[0].lower()
-        if "@" in command:
-            command = command.split("@", 1)[0]
-        if not command:
-            return
-        try:
-            if command == "/pause":
-                response = await self._handle_pause()
-            elif command == "/resume":
-                response = await self._handle_resume()
-            elif command == "/status":
-                response = await self._handle_status()
-            elif command in {"/close_all", "/closeall", "/close"}:
-                response = await self._handle_close_all()
-            else:
-                response = "Unknown command. Available: /pause, /resume, /status, /close"
-        except Exception as exc:  # pragma: no cover - ensure failure is reported
-            self.logger.exception("Telegram command failed", extra={"command": command})
-            response = f"Command failed: {exc}"[:400]
-        await self.send_message(response)
 
     async def _handle_pause(self) -> str:
         state = get_state()
@@ -317,9 +288,17 @@ class TelegramBot:
         ledger.record_event(level="INFO", code="cancel_all", payload={"source": "telegram", **result})
         return "Cancel-all requested."
 
+    async def _handle_unknown(self) -> str:
+        return "Unknown command. Available: /pause, /resume, /status, /close"
+
 
 def setup_telegram_bot(app: FastAPI) -> None:
     config = TelegramBotConfig.from_env()
+    app.state.telegram_bot = None
+    if not config.enabled:
+        LOGGER.info("Telegram bot disabled; skipping setup")
+        return
+
     bot = TelegramBot(config)
     app.state.telegram_bot = bot
 

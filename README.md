@@ -174,6 +174,30 @@ rotation, exports, safe restarts) see `docs/OPERATOR_RUNBOOK.md`. Операто
 пользоваться Telegram-ботом или локальным `propbotctl` (CLI требует локального
 или SSH-доступа к хосту и bearer-токен).
 
+## Operations Telegram bot
+
+PropBot ships with an optional Telegram assistant for the trading desk. The bot
+subscribes operators to HOLD/RESUME actions, automatic hedge attempts, and kill
+switch events, and also exposes `/pause`, `/resume`, `/status`, and
+`/close_all` controls directly from an authorised chat. When the two-man rule is
+active, resume confirmations must still be approved with the shared
+`APPROVE_TOKEN` before `/resume` can succeed.
+
+The Telegram integration is disabled by default. To enable it, configure the
+following variables in `.env`:
+
+- `TELEGRAM_ENABLE=true` — start the bot alongside FastAPI.
+- `TELEGRAM_BOT_TOKEN` — bot token issued by `@BotFather`.
+- `TELEGRAM_CHAT_ID` — numeric chat ID that is allowed to run commands and
+  receive alerts.
+- `TELEGRAM_PUSH_MINUTES` — interval between automatic status snapshots.
+- `APPROVE_TOKEN` — shared secret used for two-man resume confirmation (also
+  required for `/api/ui/resume-confirm`).
+
+When `TELEGRAM_ENABLE` is left unset/false the application skips importing the
+Telegram client library; CI and local tests therefore run without pulling the
+`python-telegram-bot` dependency or contacting Telegram.
+
 ## HOLD / Two-Man resume flow
 
 PropBot keeps the cross-exchange hedge engine untouched, but live trading now
