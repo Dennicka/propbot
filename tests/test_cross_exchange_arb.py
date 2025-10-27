@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 import pytest
 
+from app.services import runtime
+
 from services import cross_exchange_arb
 from services.cross_exchange_arb import _ExchangeClients
 from services.risk_manager import can_open_new_position, reset_positions
@@ -72,6 +74,12 @@ def test_check_spread_identifies_exchanges(stub_clients):
 
 
 def test_execute_hedged_trade_success(monkeypatch):
+    runtime.reset_for_tests()
+    runtime.record_resume_request("cross_execute", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
+    state = runtime.get_state()
+    state.control.safe_mode = False
+    state.control.mode = "RUN"
     binance_stub = StubClient("binance", bid=20500.0, ask=20490.0)
     okx_stub = StubClient("okx", bid=20550.0, ask=20540.0)
     monkeypatch.setattr(

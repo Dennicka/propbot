@@ -12,6 +12,8 @@ from services.opportunity_scanner import get_scanner
 @pytest.mark.asyncio
 async def test_auto_daemon_executes_success(monkeypatch, tmp_path) -> None:
     runtime.reset_for_tests()
+    runtime.record_resume_request("auto_daemon_success", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
     state = runtime.get_state()
     state.control.safe_mode = False
     state.control.mode = "RUN"
@@ -99,6 +101,8 @@ async def test_auto_daemon_skips_when_hold_active(monkeypatch, tmp_path) -> None
 @pytest.mark.asyncio
 async def test_auto_daemon_triggers_hold_after_failures(monkeypatch, tmp_path) -> None:
     runtime.reset_for_tests()
+    runtime.record_resume_request("auto_daemon_failures", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
     state = runtime.get_state()
     state.control.safe_mode = False
     state.control.mode = "RUN"

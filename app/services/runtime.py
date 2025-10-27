@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import os
-import json
 import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
-from pathlib import Path
 from typing import Any, Dict, List, Mapping, Tuple
 
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
+from ..runtime_state_store import (
+    load_runtime_payload as _store_load_runtime_payload,
+    write_runtime_payload as _store_write_runtime_payload,
+)
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
 from .marketdata import MarketDataAggregator
 
@@ -25,11 +27,7 @@ DEFAULT_CONFIG_PATHS = {
 _UNSET = object()
 
 
-def _runtime_state_path() -> Path:
-    override = os.environ.get("RUNTIME_STATE_PATH")
-    if override:
-        return Path(override)
-    return Path("data/runtime_state.json")
+_STATE_LOCK = threading.RLock()
 
 
 def _resolve_config_path() -> str:
@@ -330,6 +328,7 @@ class AutoHedgeState:
     last_execution_result: str | None = "idle"
     last_execution_ts: str | None = None
     consecutive_failures: int = 0
+    last_success_ts: str | None = None
 
     def as_dict(self) -> Dict[str, object | None]:
         return {
@@ -338,6 +337,7 @@ class AutoHedgeState:
             "last_execution_result": self.last_execution_result,
             "last_execution_ts": self.last_execution_ts,
             "consecutive_failures": self.consecutive_failures,
+            "last_success_ts": self.last_success_ts,
         }
 
 
@@ -718,6 +718,7 @@ def _register_action_counter(
     triggered_hold = False
     detail = ""
     hold_blocked = False
+    snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
         safety = _STATE.safety
         now = time.time()
@@ -744,11 +745,14 @@ def _register_action_counter(
                     safety.counters.orders_placed_last_min = projected
                 else:
                     safety.counters.cancels_last_min = projected
+            snapshot = safety.as_dict()
     if hold_blocked:
         raise HoldActiveError("hold_active")
     if triggered_hold:
         engage_safety_hold(reason, source=source)
         raise HoldActiveError(detail or f"{action}_limit")
+    if snapshot is not None:
+        _persist_safety_snapshot(snapshot)
 
 
 def register_order_attempt(delta: int = 1, *, reason: str, source: str) -> None:
@@ -824,8 +828,14 @@ def set_mode(mode: str) -> None:
     normalised = mode.upper()
     if normalised not in {"RUN", "HOLD"}:
         raise ValueError(f"unsupported mode {mode}")
+    snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
-        _STATE.control.mode = normalised
+        control = _STATE.control
+        if control.mode != normalised:
+            control.mode = normalised
+            snapshot = asdict(control)
+    if snapshot is not None:
+        _persist_control_snapshot(snapshot)
 
 
 def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
@@ -916,6 +926,7 @@ def reset_for_tests() -> None:
         limits = _STATE.safety.limits
         _STATE.safety = SafetyState(limits=limits)
         _STATE.auto_hedge = AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False))
+        _enforce_safe_start(_STATE)
     try:
         from positions_store import reset_store as _reset_positions_store
     except Exception:  # pragma: no cover - defensive import
@@ -929,6 +940,7 @@ def reset_for_tests() -> None:
         last_checked_ts=None,
         last_execution_result="idle",
         last_execution_ts=None,
+        last_success_ts=None,
         consecutive_failures=0,
     )
 
@@ -997,6 +1009,7 @@ def update_auto_hedge_state(
     last_checked_ts: str | None | object = _UNSET,
     last_execution_result: str | None | object = _UNSET,
     last_execution_ts: str | None | object = _UNSET,
+    last_success_ts: str | None | object = _UNSET,
     consecutive_failures: int | object = _UNSET,
 ) -> Dict[str, object | None]:
     with _STATE_LOCK:
@@ -1009,6 +1022,8 @@ def update_auto_hedge_state(
             auto_state.last_execution_result = last_execution_result  # type: ignore[assignment]
         if last_execution_ts is not _UNSET:
             auto_state.last_execution_ts = last_execution_ts  # type: ignore[assignment]
+        if last_success_ts is not _UNSET:
+            auto_state.last_success_ts = last_success_ts  # type: ignore[assignment]
         if consecutive_failures is not _UNSET:
             try:
                 auto_state.consecutive_failures = int(consecutive_failures)  # type: ignore[arg-type]
@@ -1167,37 +1182,47 @@ def _apply_control_updates(control: ControlState, updates: Mapping[str, object])
 
 
 def _load_runtime_payload() -> Dict[str, Any]:
-    path = _runtime_state_path()
-    if not path.exists():
-        return {}
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    if not raw:
-        return {}
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+    payload = _store_load_runtime_payload()
     if not isinstance(payload, Mapping):
         return {}
     return dict(payload)
 
 
+def _runtime_status_snapshot() -> Dict[str, Any]:
+    with _STATE_LOCK:
+        control = _STATE.control
+        safety = _STATE.safety
+        auto = _STATE.auto_hedge
+        resume_request = safety.resume_request
+        resume_pending = bool(resume_request and getattr(resume_request, "approved_ts", None) is None)
+        status: Dict[str, Any] = {
+            "mode": control.mode,
+            "safe_mode": control.safe_mode,
+            "two_man_resume_required": control.two_man_rule,
+            "resume_pending": resume_pending,
+            "hold_active": safety.hold_active,
+            "hold_reason": safety.hold_reason,
+            "hold_source": safety.hold_source,
+            "hold_since": safety.hold_since,
+            "last_hold_release_ts": safety.last_released_ts,
+            "runaway_counters": safety.counters.as_dict(),
+            "runaway_limits": safety.limits.as_dict(),
+            "auto_hedge_enabled": auto.enabled,
+            "auto_hedge_consecutive_failures": auto.consecutive_failures,
+            "auto_hedge_last_execution_result": auto.last_execution_result,
+            "auto_hedge_last_execution_ts": auto.last_execution_ts,
+            "auto_hedge_last_success_ts": getattr(auto, "last_success_ts", None),
+            "risk_limits": _STATE.risk.limits.as_dict(),
+            "operational_flags": control.flags,
+        }
+        return status
+
+
 def _persist_runtime_payload(updates: Mapping[str, Any]) -> None:
-    path = _runtime_state_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
     payload = _load_runtime_payload()
     payload.update(updates)
-    try:
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    payload.update(_runtime_status_snapshot())
+    _store_write_runtime_payload(payload)
 
 
 def _persist_control_snapshot(snapshot: Mapping[str, object]) -> None:
@@ -1239,6 +1264,8 @@ def _load_persisted_state(state: RuntimeState) -> None:
         auto_state.last_execution_result = str(last_result) if last_result else "idle"
         last_ts = auto_payload.get("last_execution_ts")
         auto_state.last_execution_ts = str(last_ts) if last_ts else None
+        last_success = auto_payload.get("last_success_ts")
+        auto_state.last_success_ts = str(last_success) if last_success else None
         try:
             auto_state.consecutive_failures = int(auto_payload.get("consecutive_failures", 0))
         except (TypeError, ValueError):
@@ -1278,10 +1305,30 @@ def _load_persisted_state(state: RuntimeState) -> None:
             safety.resume_request = None
 
 
+def _enforce_safe_start(state: RuntimeState) -> None:
+    control = state.control
+    control.mode = "HOLD"
+    control.safe_mode = True
+    control.auto_loop = False
+    state.loop.running = False
+    state.loop.status = "HOLD"
+    safety = state.safety
+    if not safety.hold_active:
+        safety.engage_hold("restart_safe_mode", source="bootstrap")
+    else:
+        safety.hold_reason = safety.hold_reason or "restart_safe_mode"
+        safety.hold_source = safety.hold_source or "bootstrap"
+    safety.resume_request = None
+
+
 _STATE = _bootstrap_runtime()
 _load_persisted_state(_STATE)
 _sync_loop_from_control(_STATE)
-_STATE_LOCK = threading.RLock()
+_enforce_safe_start(_STATE)
+_persist_runtime_payload({
+    "control": asdict(_STATE.control),
+    "safety": _STATE.safety.as_dict(),
+})
 class HoldActiveError(RuntimeError):
     """Raised when execution should stop due to the global hold flag."""
 

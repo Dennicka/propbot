@@ -2,12 +2,20 @@ import pytest
 
 from app import ledger
 from app.services import loop
-from app.services.runtime import get_loop_state, get_state, reset_for_tests
+from app.services.runtime import (
+    approve_resume,
+    get_loop_state,
+    get_state,
+    record_resume_request,
+    reset_for_tests,
+)
 
 
 @pytest.mark.asyncio
 async def test_run_cycle_updates_loop_state():
     reset_for_tests()
+    record_resume_request("loop_cycle", requested_by="pytest")
+    approve_resume(actor="pytest")
     ledger.reset()
     result = await loop.run_cycle()
     loop_state = get_loop_state()
@@ -23,6 +31,8 @@ async def test_run_cycle_updates_loop_state():
 @pytest.mark.asyncio
 async def test_resume_and_hold_toggle_auto_loop():
     reset_for_tests()
+    record_resume_request("loop_auto", requested_by="pytest")
+    approve_resume(actor="pytest")
     ledger.reset()
     state = get_state()
     state.control.safe_mode = False
@@ -39,6 +49,8 @@ async def test_resume_and_hold_toggle_auto_loop():
 @pytest.mark.asyncio
 async def test_cancel_all_orders_clears_open_orders():
     reset_for_tests()
+    record_resume_request("loop_cancel", requested_by="pytest")
+    approve_resume(actor="pytest")
     ledger.reset()
     state = get_state()
     state.control.environment = "testnet"
