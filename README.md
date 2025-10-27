@@ -158,6 +158,89 @@ below:
   - `BINANCE_UM_API_KEY_TESTNET` / `BINANCE_UM_API_SECRET_TESTNET` — Binance
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
   - `BINANCE_LV_API_KEY` / `BINANCE_LV_API_SECRET` — Binance Futures live keys
+
+## Старт в продакшене
+
+Прежде чем запускать PropBot на 24/7 сервере, подготовьте постоянный каталог
+данных и переменные окружения:
+
+1. Создайте директорию `data/` рядом с `docker-compose.prod.yml` и выдайте ей
+   права пользователя контейнера (UID 1000):
+   ```bash
+   sudo mkdir -p /opt/propbot/data
+   sudo chown 1000:1000 /opt/propbot/data
+   sudo chmod 770 /opt/propbot/data
+   ```
+   В каталоге будут храниться `runtime_state.json`, `hedge_positions.json`,
+   `ops_alerts.json`, `hedge_log.json`, SQLite-леджер и другие артефакты, поэтому
+   диск должен быть постоянным.
+2. Скопируйте `.env.example` или `deploy/env.example.prod` в `.env` и заполните
+   обязательные значения:
+   - Биржевые ключи (`BINANCE_*`, `OKX_*`) в зависимости от профиля.
+   - `APPROVE_TOKEN` — секрет второго оператора для двухшагового RESUME.
+   - `API_TOKEN` — bearer для защищённых ручек `/api/ui/*` и CLI.
+   - `TELEGRAM_ENABLE=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — если
+     требуется Telegram-оповещение.
+   - Лимиты риска (`MAX_POSITION_USDT`, `MAX_DAILY_LOSS_USDT`,
+     runaway-ограничения `MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`).
+   - `SAFE_MODE=true` и `MODE=HOLD` на первом запуске.
+   - `RUNTIME_STATE_PATH=./data/runtime_state.json` — путь до снапшота
+     управляющего состояния.
+3. Убедитесь, что авто-хедж демон включён только когда заполнены лимиты и есть
+   осознанная стратегия: `AUTO_HEDGE_ENABLED=true` активирует демон, он не
+   снимает HOLD автоматически и уважает runaway guard. Не снимайте лимиты по
+   плечу/ноционалу — бот ожидает их для защиты.
+4. Поднимите сервис: `docker compose -f deploy/docker-compose.prod.yml --env-file
+   .env up -d` и проверьте `/api/ui/status/overview` (должен вернуться HOLD).
+
+## Ежедневный мониторинг
+
+Операторы отслеживают жизнеспособность инстанса следующими инструментами:
+
+- `GET /api/healthz` — базовая проверка живости контейнера.
+- `GET /api/ui/status/overview` — общий статус, включающий SAFE_MODE, HOLD,
+  runaway guard, auto-hedge (`consecutive_failures`).
+- `GET /api/ui/status/components` и `GET /api/ui/status/slo` — детализация
+  алертов и компонентов (требуется `API_TOKEN`).
+- `GET /api/ui/positions` — экспозиция и PnL по открытым ногам.
+- `GET /api/ui/alerts` — история событий (защищён bearer-токеном).
+- Telegram-бот присылает HOLD/RESUME, runaway guard, kill switch, попытки
+  авто-хеджа, ручные подтверждения RESUME.
+
+Фиксируйте любые неожиданные `consecutive_failures` авто-хеджа, рост runaway
+счётчиков и ручные HOLD — это ранние сигналы проблем.
+
+## Crash / Restart recovery
+
+При падении сервера и перезапуске контейнера бот автоматически стартует в
+SAFE_MODE/HOLD, даже если до сбоя шла торговля.
+
+1. После рестарта прочитайте `runtime_state.json` (через API) и убедитесь, что
+   `hold_active=true`, `safe_mode=true`.
+2. Проверьте `/api/ui/status/overview`, `/api/ui/positions`, `/api/ui/alerts` —
+   восстановленные лимиты и статусы должны совпадать с тем, что было до сбоя.
+3. Убедитесь, что runaway guard и risk-лимиты не превышены, а экспозиция
+   соответствует ожиданиям.
+4. Выполните существующий двухшаговый RESUME-флоу: `POST /api/ui/hold` (если
+   нужно зафиксировать причину), затем `POST /api/ui/resume-request` и `POST
+   /api/ui/resume-confirm` с `APPROVE_TOKEN`. Только после этого можно отправить
+   `POST /api/ui/resume` и снять HOLD.
+5. JSON-файлы в `data/` редактируйте вручную только при крайней необходимости —
+   они служат аудиторским следом и должны бэкапиться.
+
+## Safety / Controls
+
+- **HOLD** — принудительная остановка торгового цикла; включает SAFE_MODE.
+- **SAFE_MODE** — запрет на выставление ордеров, мониторинг остаётся активным.
+- **Kill switch** — аварийное отключение, приводящее к HOLD и SAFE_MODE до ручной
+  проверки.
+- **Runaway guard** — лимиты на заявки/отмены в минуту, активирует HOLD при
+  превышении.
+- **Two-man rule** — обязательное двойное подтверждение через `resume-request`
+  и `resume-confirm` с `APPROVE_TOKEN`. Без него торговля не возобновится.
+
+После каждого рестарта повторяйте ручной двухшаговый RESUME. Автоторговля не
+возобновляется сама, даже если `runtime_state.json` содержит `safe_mode=false`.
     (`BINANCE_LV_BASE_URL` optional).
   - `BINANCE_LV_API_KEY_TESTNET` / `BINANCE_LV_API_SECRET_TESTNET` — optional
     segregated credentials when running live and testnet bots in parallel.

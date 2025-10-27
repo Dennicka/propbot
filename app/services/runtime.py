@@ -1278,6 +1278,32 @@ def _load_persisted_state(state: RuntimeState) -> None:
         safety.hold_source = safety_payload.get("hold_source") or None
         safety.hold_since = safety_payload.get("hold_since") or None
         safety.last_released_ts = safety_payload.get("last_released_ts") or None
+        limits_payload = safety_payload.get("limits")
+        if isinstance(limits_payload, Mapping):
+            max_orders_value = limits_payload.get("max_orders_per_min")
+            try:
+                safety.limits.max_orders_per_min = max(0, int(float(max_orders_value)))
+            except (TypeError, ValueError):
+                pass
+            max_cancels_value = limits_payload.get("max_cancels_per_min")
+            try:
+                safety.limits.max_cancels_per_min = max(0, int(float(max_cancels_value)))
+            except (TypeError, ValueError):
+                pass
+        counters_payload = safety_payload.get("counters")
+        if isinstance(counters_payload, Mapping):
+            orders_counter = counters_payload.get("orders_placed_last_min")
+            try:
+                safety.counters.orders_placed_last_min = max(
+                    0, int(float(orders_counter))
+                )
+            except (TypeError, ValueError):
+                pass
+            cancels_counter = counters_payload.get("cancels_last_min")
+            try:
+                safety.counters.cancels_last_min = max(0, int(float(cancels_counter)))
+            except (TypeError, ValueError):
+                pass
         skew_value = safety_payload.get("clock_skew_s")
         if isinstance(skew_value, (int, float)):
             safety.clock_skew_s = float(skew_value)

@@ -567,6 +567,8 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     thresholds = state.config.thresholds.slo if state.config.thresholds else {}
 
     safety_snapshot = state.safety.status_payload()
+    resume_request = state.safety.resume_request
+    resume_pending = bool(resume_request and getattr(resume_request, "approved_ts", None) is None)
     snapshot = {
         "ts": now.isoformat(),
         "overall": overall,
@@ -579,6 +581,17 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "safety": safety_snapshot,
         "resume_request": safety_snapshot.get("resume_request"),
         "clock_skew_s": skew_value,
+        "mode": state.control.mode,
+        "safe_mode": state.control.safe_mode,
+        "two_man_resume_required": state.control.two_man_rule,
+        "resume_pending": resume_pending,
+        "hold_reason": safety_snapshot.get("hold_reason"),
+        "hold_source": safety_snapshot.get("hold_source"),
+        "operational_flags": state.control.flags,
+        "runaway_guard": {
+            "limits": dict(safety_snapshot.get("limits", {})),
+            "counters": dict(safety_snapshot.get("counters", {})),
+        },
     }
     auto_payload = state.auto_hedge.as_dict()
     snapshot["auto_hedge"] = {
@@ -587,6 +600,8 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "last_execution_result": auto_payload.get("last_execution_result"),
         "consecutive_failures": int(auto_payload.get("consecutive_failures", 0) or 0),
         "on_hold": bool(state.safety.hold_active),
+        "last_execution_ts": auto_payload.get("last_execution_ts"),
+        "last_success_ts": auto_payload.get("last_success_ts"),
     }
     return redact_sensitive_data(snapshot)
 
@@ -598,7 +613,18 @@ def get_status_overview() -> Dict[str, object]:
 
 def get_status_components() -> Dict[str, object]:
     snapshot = get_status_overview()
-    return {"ts": snapshot["ts"], "components": snapshot["components"]}
+    return {
+        "ts": snapshot["ts"],
+        "components": snapshot["components"],
+        "mode": snapshot.get("mode"),
+        "safe_mode": snapshot.get("safe_mode"),
+        "hold_active": snapshot.get("hold_active"),
+        "hold_reason": snapshot.get("hold_reason"),
+        "two_man_resume_required": snapshot.get("two_man_resume_required"),
+        "resume_pending": snapshot.get("resume_pending"),
+        "runaway_guard": snapshot.get("runaway_guard"),
+        "auto_hedge": snapshot.get("auto_hedge"),
+    }
 
 
 def get_status_slo() -> Dict[str, object]:
@@ -608,5 +634,12 @@ def get_status_slo() -> Dict[str, object]:
         "slo": snapshot["slo"],
         "thresholds": snapshot["thresholds"],
         "alerts": snapshot["alerts"],
+        "mode": snapshot.get("mode"),
+        "safe_mode": snapshot.get("safe_mode"),
+        "hold_active": snapshot.get("hold_active"),
+        "two_man_resume_required": snapshot.get("two_man_resume_required"),
+        "resume_pending": snapshot.get("resume_pending"),
+        "runaway_guard": snapshot.get("runaway_guard"),
+        "auto_hedge": snapshot.get("auto_hedge"),
     }
 
