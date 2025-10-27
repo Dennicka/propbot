@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Dict
 
+from typing import Dict
+
 import pytest
 
 from app.auto_hedge_daemon import AutoHedgeDaemon
@@ -48,8 +50,27 @@ async def test_auto_daemon_executes_success(monkeypatch, tmp_path) -> None:
             "cheap_exchange": "binance-um",
             "expensive_exchange": "okx-perp",
             "spread_bps": 18.2,
-            "long_order": {"price": 21000.0},
-            "short_order": {"price": 21010.0},
+            "status": "executed",
+            "legs": [
+                {
+                    "side": "long",
+                    "venue": "binance-um",
+                    "price": 21000.0,
+                    "avg_price": 21000.0,
+                    "notional_usdt": notional,
+                    "status": "filled",
+                },
+                {
+                    "side": "short",
+                    "venue": "okx-perp",
+                    "price": 21010.0,
+                    "avg_price": 21010.0,
+                    "notional_usdt": notional,
+                    "status": "filled",
+                },
+            ],
+            "long_order": {"price": 21000.0, "avg_price": 21000.0, "status": "filled"},
+            "short_order": {"price": 21010.0, "avg_price": 21010.0, "status": "filled"},
         }
 
     monkeypatch.setattr("app.auto_hedge_daemon.execute_hedged_trade", fake_execute)
@@ -191,17 +212,21 @@ async def test_auto_daemon_simulates_in_dry_run_mode(monkeypatch, tmp_path) -> N
             self._bid = bid
             self._ask = ask
 
-        def get_best_bid_ask(self, symbol: str) -> Dict[str, float]:
-            return {"symbol": symbol, "bid": self._bid, "ask": self._ask}
+        def get_mark_price(self, symbol: str) -> Dict[str, float]:
+            mid = (self._bid + self._ask) / 2.0
+            return {"symbol": symbol, "mark_price": mid}
 
-        def open_long(self, *args, **kwargs):  # pragma: no cover - should not be called
-            raise AssertionError("open_long must not execute in DRY_RUN_MODE")
+        def get_position(self, symbol: str) -> Dict[str, float]:  # pragma: no cover - unused
+            return {"symbol": symbol, "size": 0.0, "side": "flat"}
 
-        def open_short(self, *args, **kwargs):  # pragma: no cover - should not be called
-            raise AssertionError("open_short must not execute in DRY_RUN_MODE")
+        def place_order(self, *args, **kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("place_order must not execute in DRY_RUN_MODE")
 
-        def close_position(self, symbol: str) -> Dict[str, str]:
-            return {"exchange": self.name, "symbol": symbol, "status": "stub"}
+        def cancel_all(self, symbol: str) -> Dict[str, str]:  # pragma: no cover - unused
+            return {"exchange": self.name, "symbol": symbol, "status": "skipped"}
+
+        def get_account_limits(self) -> Dict[str, float]:  # pragma: no cover - unused
+            return {"exchange": self.name, "available_balance": 0.0}
 
     monkeypatch.setattr(
         cross_exchange_arb,

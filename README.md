@@ -161,6 +161,11 @@ below:
   - `BINANCE_UM_API_KEY_TESTNET` / `BINANCE_UM_API_SECRET_TESTNET` — Binance
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
   - `BINANCE_LV_API_KEY` / `BINANCE_LV_API_SECRET` — Binance Futures live keys
+    for the legacy router (kept for completeness).
+  - `BINANCE_API_KEY` / `BINANCE_API_SECRET` — primary credentials used by the
+    new Binance USDⓈ-M hedge client.
+  - `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_API_PASSPHRASE` — OKX perpetual
+    hedge client credentials (use a restricted sub-account and IP whitelist).
 
 ## Старт в продакшене
 
@@ -381,6 +386,17 @@ curl -s -X POST http://127.0.0.1:8000/api/arb/execute \
   -H 'Content-Type: application/json' \
   -d '{"symbol": "BTCUSDT", "min_spread": 2.5, "notion_usdt": 1500, "leverage": 3}' | jq
 ```
+
+The response returns both legs with their execution status, average fill price,
+and leverage. Successful live trades are appended to
+`data/hedge_positions.json` with leg status `open`; simulated runs are tagged as
+`simulated` so they can be filtered in the operator UI.
+
+> ⚠️ **Operational discipline:** Always validate the flow in
+> `DRY_RUN_MODE=true` first. Only after simulated cycles succeed, the operator
+> should inspect `/api/ui/status/overview`, verify that HOLD is engaged and all
+> guards are green, and then follow the two-man `resume-request`/`resume-confirm`
+> process to clear HOLD before disabling `DRY_RUN_MODE` for live execution.
 
 ### Dry-run mode for hedging
 

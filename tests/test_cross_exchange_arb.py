@@ -16,35 +16,37 @@ class StubClient:
         self.name = name
         self._bid = bid
         self._ask = ask
-        self.open_orders: list[Dict[str, Any]] = []
+        self.placed_orders: list[Dict[str, Any]] = []
 
-    def get_best_bid_ask(self, symbol: str) -> Dict[str, Any]:
-        return {"symbol": symbol, "bid": self._bid, "ask": self._ask}
+    def get_mark_price(self, symbol: str) -> Dict[str, Any]:
+        # Use ask for mark to keep expectations deterministic.
+        return {"symbol": symbol, "mark_price": float(self._ask)}
 
-    def open_long(self, symbol: str, qty_usdt: float, leverage: float) -> Dict[str, Any]:
+    def get_position(self, symbol: str) -> Dict[str, Any]:  # pragma: no cover - unused
+        return {"symbol": symbol, "size": 0.0, "side": "flat"}
+
+    def place_order(self, symbol: str, side: str, notional_usdt: float, leverage: float) -> Dict[str, Any]:
+        price = float(self._ask if side == "long" else self._bid)
+        qty = float(notional_usdt) / price if price else 0.0
         order = {
             "exchange": self.name,
             "symbol": symbol,
-            "side": "long",
-            "notional_usdt": qty_usdt,
-            "leverage": leverage,
+            "side": side,
+            "avg_price": price,
+            "filled_qty": qty,
+            "status": "filled",
+            "order_id": f"{self.name}-order",
+            "notional_usdt": float(notional_usdt),
+            "leverage": float(leverage),
         }
-        self.open_orders.append(order)
+        self.placed_orders.append(order)
         return order
 
-    def open_short(self, symbol: str, qty_usdt: float, leverage: float) -> Dict[str, Any]:
-        order = {
-            "exchange": self.name,
-            "symbol": symbol,
-            "side": "short",
-            "notional_usdt": qty_usdt,
-            "leverage": leverage,
-        }
-        self.open_orders.append(order)
-        return order
+    def cancel_all(self, symbol: str) -> Dict[str, Any]:  # pragma: no cover - unused
+        return {"exchange": self.name, "symbol": symbol, "status": "cancelled"}
 
-    def close_position(self, symbol: str) -> Dict[str, Any]:  # pragma: no cover - unused in tests
-        return {"exchange": self.name, "symbol": symbol, "status": "closed"}
+    def get_account_limits(self) -> Dict[str, Any]:  # pragma: no cover - unused
+        return {"exchange": self.name, "available_balance": 0.0}
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +59,7 @@ def _reset_state():
 @pytest.fixture
 def stub_clients(monkeypatch):
     binance_stub = StubClient("binance", bid=20500.0, ask=20499.0)
-    okx_stub = StubClient("okx", bid=20510.0, ask=20505.0)
+    okx_stub = StubClient("okx", bid=20510.0, ask=20510.0)
     monkeypatch.setattr(
         cross_exchange_arb,
         "_clients",
@@ -91,8 +93,10 @@ def test_execute_hedged_trade_success(monkeypatch):
         "ETHUSDT", notion_usdt=1000.0, leverage=3.0, min_spread=20.0
     )
     assert result["success"] is True
+    assert result["status"] == "executed"
     assert result["long_order"]["exchange"] == "binance"
     assert result["short_order"]["exchange"] == "okx"
+    assert all(leg["status"] == "filled" for leg in result["legs"])
 
 
 def test_risk_limits_block(monkeypatch):

@@ -110,12 +110,15 @@ def test_runaway_breaker_triggers_hold(client, monkeypatch):
             "cheap": "binance",
             "expensive": "okx",
             "cheap_ask": 100.0,
+            "cheap_mark": 100.0,
             "expensive_bid": 102.5,
+            "expensive_mark": 102.5,
             "spread": 2.5,
             "spread_bps": 25.0,
         }
 
     monkeypatch.setattr("services.cross_exchange_arb.check_spread", fake_spread)
+    monkeypatch.setattr("services.cross_exchange_arb.is_dry_run_mode", lambda: True)
 
     payload = {
         "symbol": "ETHUSDT",
