@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from app.services.runtime import (
+    approve_resume,
     engage_safety_hold,
     get_state,
     is_hold_active,
+    record_resume_request,
     reset_for_tests,
 )
 from positions import list_positions, reset_positions
@@ -94,6 +96,8 @@ def test_runaway_breaker_triggers_hold(client, monkeypatch):
     monkeypatch.setenv("MAX_ORDERS_PER_MIN", "3")
     reset_positions()
     reset_for_tests()
+    record_resume_request("runaway_breaker_test", requested_by="pytest")
+    approve_resume(actor="pytest")
     state = get_state()
     state.control.safe_mode = False
     monkeypatch.setattr(

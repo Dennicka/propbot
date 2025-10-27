@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import ledger
 from app.main import app
+from app.services import runtime
 from app.services.loop import hold_loop
 from app.services.runtime import reset_for_tests
 from positions import reset_positions
@@ -16,6 +17,8 @@ from positions import reset_positions
 @pytest.fixture
 def client() -> TestClient:
     reset_for_tests()
+    runtime.record_resume_request("tests_bootstrap", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
     ledger.reset()
     # ensure background loop is not running between tests
     try:

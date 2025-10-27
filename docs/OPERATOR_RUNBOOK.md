@@ -3,6 +3,75 @@
 Рабочая памятка для операторов PropBot без доступа к коду. Все шаги предполагают,
 что у вас есть сеть до инстанса и API-токен (если включена авторизация).
 
+## Старт в продакшене
+
+1. Подготовьте постоянный каталог `/opt/propbot/data` (или другой путь),
+   примонтированный в контейнер как `/app/data`. В нём лежат
+   `runtime_state.json`, `hedge_positions.json`, `hedge_log.json`,
+   `ops_alerts.json`, SQLite-леджер и выгрузки — всё это должно переживать
+   рестарт сервера.
+2. Скопируйте `deploy/env.example.prod` в `.env` и заполните ключевые
+   переменные:
+   - Биржевые API-ключи (`BINANCE_*`, `OKX_*`) по выбранному `PROFILE`.
+   - `SAFE_MODE=true`, `MODE=HOLD` на первом запуске, `DRY_RUN_ONLY=true` для
+     тестовой среды.
+   - `APPROVE_TOKEN` (секрет второго оператора), `API_TOKEN` (для защищённых
+     ручек и CLI), `AUTH_ENABLED=true`.
+   - `RUNTIME_STATE_PATH=./data/runtime_state.json`, `POSITIONS_STORE_PATH` и
+     прочие пути оставляйте в `data/`.
+   - Лимиты риска и runaway guard (`MAX_POSITION_USDT`, `MAX_DAILY_LOSS_USDT`,
+     `MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`).
+   - Telegram (`TELEGRAM_ENABLE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
+     `TELEGRAM_PUSH_MINUTES`).
+   - Авто-хедж: `AUTO_HEDGE_ENABLED=true` только при заданных лимитах и стратегии
+     — демон уважает HOLD и runaway guard, но не снимает их.
+3. Запустите сервис: `docker compose -f deploy/docker-compose.prod.yml --env-file
+   .env up -d`. Проверите `GET /api/ui/status/overview` — бот должен находиться в
+   SAFE_MODE/HOLD.
+4. Не снимайте лимиты по плечу/ноционалу: runaway guard и риск-блокировки
+   используют их для защиты.
+
+## Ежедневный мониторинг
+
+- `GET /api/healthz` — проверка живости.
+- `GET /api/ui/status/overview` — сводка SAFE_MODE/HOLD, причина HOLD,
+  `two_man_resume_required`, runaway guard, `auto_hedge.consecutive_failures`.
+- `GET /api/ui/status/components` и `/api/ui/status/slo` — детализация
+  алертов (нужен `API_TOKEN`).
+- `GET /api/ui/alerts` — журнал HOLD, kill switch, runaway guard, auto-hedge,
+  подтверждений RESUME.
+- `GET /api/ui/positions` — активные ноги хеджа, экспозиция и unrealized PnL.
+- Telegram-бот дублирует критичные события (HOLD, runaway guard, kill switch,
+  auto-hedge, двухшаговый RESUME).
+
+Следите за ростом `consecutive_failures`, runaway-счётчиков и повторными HOLD —
+это сигналы к расследованию.
+
+## Crash / Restart recovery
+
+1. После любого рестарта бот запускается в SAFE_MODE/HOLD, даже если до сбоя шла
+   торговля.
+2. Проверьте `/api/ui/status/overview`, `/api/ui/positions`, `/api/ui/alerts` —
+   `runtime_state.json` восстановит лимиты и причину HOLD, но автоторговля не
+   начнётся.
+3. Сверьте runaway guard и риск-лимиты, убедитесь, что экспозиция соответствует
+   ожиданиям. При необходимости изучите `data/hedge_log.json` и
+   `data/ops_alerts.json`.
+4. Возобновление торговли всегда через двухшаговый флоу: `resume-request`
+   → ожидание второго оператора → `resume-confirm` с `APPROVE_TOKEN` → `resume`.
+5. Файлы в `data/` редактируйте вручную только в аварийных случаях; храните
+   бэкапы для аудита.
+
+## Safety / Controls
+
+- **HOLD** — ручная или автоматическая остановка петли (включает SAFE_MODE).
+- **SAFE_MODE** — запрет на выставление ордеров, мониторинг продолжается.
+- **Kill switch** — мгновенное отключение, всегда приводит к HOLD и SAFE_MODE.
+- **Runaway guard** — лимиты на заявки/отмены в минуту; при превышении включают
+  HOLD и фиксируют причину в `runtime_state.json`.
+- **Two-man rule** — `resume-confirm` с `APPROVE_TOKEN`, без него HOLD не будет
+  снят.
+
  codex/add-operator-runbook-documentation-30d5c6
  ⚠️ **LIVE-торговля:** связка `PROFILE=live` и `DRY_RUN_ONLY=false` означает реальные заявки на бирже. Всегда запускайте сервис в HOLD (`mode=HOLD`) и с `SAFE_MODE=true`, проверяйте лимиты и пары (`loop_pair`/`loop_venues`), баланс и ключи, и только после ручной проверки переводите бота в `RUN` и снимаете `SAFE_MODE`.
 
@@ -234,3 +303,10 @@
  main
 - Проверьте, что папка `./data` существует на хосте и имеет права на запись для пользователя/группы, под которыми запускается Docker (`chown`/`chmod` при необходимости).
 - Не удаляйте содержимое `./data` без бэкапа — там находятся рабочие журналы и состояние бота.
+
+## Чеклист оператора после рестарта
+
+- Бот поднялся и находится в SAFE_MODE/HOLD.
+- Оператор проверил статусные ручки, алерты и лимиты риска.
+- Оператор выполнил ручной двухшаговый RESUME (`resume-request` → `resume-confirm`).
+- Только после подтверждения бот может снова торговать.

@@ -190,6 +190,8 @@ async def hedge_positions(request: Request) -> dict:
     for entry in positions:
         base = dict(entry)
         legs_payload = _normalise_legs(entry.get("legs"), base)
+        status = str(base.get("status") or "").lower()
+        is_open = status == "open"
         pair_upnl = 0.0
         rendered_legs: list[dict] = []
         for leg in legs_payload:
@@ -216,14 +218,15 @@ async def hedge_positions(request: Request) -> dict:
                     pnl = (entry_price - mark_price) * base_size
                 else:
                     pnl = (mark_price - entry_price) * base_size
-            pair_upnl += pnl
-            exposure_entry = exposure_totals[venue]
-            if side == "short":
-                exposure_entry["short_notional"] += notional
-                exposure_entry["net_usdt"] -= notional
-            else:
-                exposure_entry["long_notional"] += notional
-                exposure_entry["net_usdt"] += notional
+            if is_open:
+                pair_upnl += pnl
+                exposure_entry = exposure_totals[venue]
+                if side == "short":
+                    exposure_entry["short_notional"] += notional
+                    exposure_entry["net_usdt"] -= notional
+                else:
+                    exposure_entry["long_notional"] += notional
+                    exposure_entry["net_usdt"] += notional
             rendered_legs.append(
                 {
                     "venue": venue,
@@ -233,13 +236,14 @@ async def hedge_positions(request: Request) -> dict:
                     "entry_price": entry_price,
                     "mark_price": mark_price,
                     "base_size": base_size,
-                    "unrealized_pnl_usdt": pnl,
+                    "unrealized_pnl_usdt": pnl if is_open else 0.0,
                     "timestamp": leg.get("timestamp"),
                 }
             )
-        aggregate_upnl += pair_upnl
+        if is_open:
+            aggregate_upnl += pair_upnl
         base["legs"] = rendered_legs
-        base["unrealized_pnl_usdt"] = pair_upnl
+        base["unrealized_pnl_usdt"] = pair_upnl if is_open else 0.0
         enriched.append(base)
     exposure = {
         venue: {
