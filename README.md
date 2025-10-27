@@ -205,7 +205,7 @@ below:
    ```bash
    docker inspect --format '{{json .State.Health}}' propbot_app_prod | jq
    ```
-   Контейнер считается здоровым, когда `/api/ui/status/overview` отвечает 200.
+   Контейнер считается здоровым, когда `/healthz` отвечает `{ "ok": true }`.
 4. **Проверка безопасности.** Убедитесь, что бот поднялся в HOLD/SAFE_MODE и с
    `DRY_RUN_MODE=true`:
    ```bash
@@ -228,11 +228,45 @@ below:
 > источник истины об истории состояний; потеря или порча приведёт к утрате
 > журнала и нарушению расследований.
 
+## Going live
+
+После запуска `docker-compose.prod.yml` выполните быстрый чек-лист перед
+реальным исполнением:
+
+1. Убедитесь, что процесс и демоны живы:
+   ```bash
+   curl -sf http://localhost:8000/healthz | jq
+   ```
+   Ответ должен быть `{ "ok": true }`.
+2. Изучите `/api/ui/status/overview` и проверьте флаги безопасности:
+   ```bash
+   curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+     http://localhost:8000/api/ui/status/overview | jq '.flags'
+   ```
+3. Сверьте открытые ноги и экспозицию:
+   ```bash
+   curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+     http://localhost:8000/api/ui/positions | jq '.positions'
+   ```
+4. Убедитесь, что бот остаётся в HOLD (`flags.hold_active=true`) и
+   `dry_run_mode=true`. Первую загрузку проводите только с
+   `DRY_RUN_MODE=true`.
+5. Чтобы перейти к реальным сделкам, выполните двухшаговый процесс
+   `resume-request` → `resume-confirm` (с `APPROVE_TOKEN`) → `resume`. Без
+   подтверждения второго оператора HOLD не снимается.
+6. Никогда не отключайте HOLD и `DRY_RUN_MODE` одновременно: сначала снимите
+   HOLD через подтверждённый `resume-confirm`, затем, после финальных проверок,
+   переключайте `DRY_RUN_MODE` и SAFE_MODE.
+
+Для аудита используйте `data/runtime_state.json`: в нём фиксируются
+`safety.hold_reason`, `safety.hold_since`, `safety.last_released_ts` и
+`auto_hedge.last_success_ts` — это источник истины при расследованиях.
+
 ## Ежедневный мониторинг
 
 Операторы отслеживают жизнеспособность инстанса следующими инструментами:
 
-- `GET /api/healthz` — базовая проверка живости контейнера.
+- `GET /healthz` — базовая проверка живости контейнера.
 - `GET /api/ui/status/overview` — общий статус, включающий SAFE_MODE, HOLD,
   runaway guard, auto-hedge (`consecutive_failures`).
 - `GET /api/ui/status/components` и `GET /api/ui/status/slo` — детализация
