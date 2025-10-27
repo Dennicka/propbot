@@ -33,9 +33,10 @@ def list_open_positions() -> List[Dict[str, Any]]:
     """Return only open hedge positions."""
 
     open_positions = []
+    open_like_status = {"open", "partial"}
     for entry in list_positions():
         status_value = str(entry.get("status", "")).lower()
-        if status_value != "open":
+        if status_value not in open_like_status:
             continue
         if bool(entry.get("simulated")):
             continue

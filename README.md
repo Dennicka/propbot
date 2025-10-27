@@ -9,6 +9,9 @@
    (см. `safe_mode`, `dry_run_mode` и `hold_active` в статусе).
 4. Проверьте состояние через `/api/ui/status/overview`, `/api/ui/status/components`,
    `/api/ui/status/slo` и `/api/ui/positions`.
+   - Появление позиции со статусом `partial` означает, что одна нога сделки уже
+     исполнена, а вторая остановлена HOLD/лимитом — закройте хвост вручную на
+     бирже и восстановите баланс штатными средствами.
 5. Убедитесь, что `/healthz` отвечает `{"ok": true}`.
 6. Для реальной торговли выполните ручной двухшаговый RESUME: сначала
    `POST /api/ui/resume-request`, затем `POST /api/ui/resume-confirm` с
