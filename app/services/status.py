@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 
 from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
 from ..utils import redact_sensitive_data
+from ..version import APP_VERSION
 
 
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
@@ -577,6 +578,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "thresholds": thresholds,
         "components": components,
         "alerts": alerts,
+        "build_version": APP_VERSION,
         "hold_active": safety_snapshot.get("hold_active", False),
         "safety": safety_snapshot,
         "resume_request": safety_snapshot.get("resume_request"),
@@ -616,6 +618,7 @@ def get_status_components() -> Dict[str, object]:
     snapshot = get_status_overview()
     return {
         "ts": snapshot["ts"],
+        "build_version": snapshot.get("build_version"),
         "components": snapshot["components"],
         "mode": snapshot.get("mode"),
         "safe_mode": snapshot.get("safe_mode"),
@@ -633,6 +636,7 @@ def get_status_slo() -> Dict[str, object]:
     snapshot = get_status_overview()
     return {
         "ts": snapshot["ts"],
+        "build_version": snapshot.get("build_version"),
         "slo": snapshot["slo"],
         "thresholds": snapshot["thresholds"],
         "alerts": snapshot["alerts"],

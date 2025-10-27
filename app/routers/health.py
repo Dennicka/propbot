@@ -29,29 +29,38 @@ def _is_task_running(task) -> bool:
 
 def _auto_hedge_healthy(app) -> bool:
     auto_daemon = getattr(app.state, "auto_hedge_daemon", None)
-    if _is_task_running(getattr(auto_daemon, "_task", None)):
-        return True
+    task_running = _is_task_running(getattr(auto_daemon, "_task", None))
     if get_auto_hedge_state is None:  # pragma: no cover - import guard
-        return False
+        return task_running
     try:
         state = get_auto_hedge_state()
     except Exception:  # pragma: no cover - defensive fallback
         return False
-    last_result = getattr(state, "last_execution_result", "") or ""
-    if isinstance(last_result, str) and last_result.startswith("error"):
+    enabled = bool(getattr(state, "enabled", False))
+    last_result = str(getattr(state, "last_execution_result", "") or "")
+    if not enabled:
+        return True
+    if not task_running:
+        return False
+    if last_result.lower().startswith("error"):
         return False
     return True
 
 
 def _scanner_healthy(app) -> bool:
     scanner = getattr(app.state, "opportunity_scanner", None)
-    if _is_task_running(getattr(scanner, "_task", None)):
+    task_running = _is_task_running(getattr(scanner, "_task", None))
+    if scanner is None:
         return True
-    if get_last_opportunity_state is None:  # pragma: no cover - import guard
+    if not task_running:
         return False
+    if get_last_opportunity_state is None:  # pragma: no cover - import guard
+        return task_running
     try:
-        get_last_opportunity_state()
+        _, status = get_last_opportunity_state()
     except Exception:  # pragma: no cover - defensive fallback
+        return False
+    if isinstance(status, str) and status.lower().startswith("error"):
         return False
     return True
 

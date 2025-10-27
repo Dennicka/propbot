@@ -32,12 +32,15 @@ def list_positions() -> List[Dict[str, Any]]:
 def list_open_positions() -> List[Dict[str, Any]]:
     """Return only open hedge positions."""
 
-    open_statuses = {"open", "simulated"}
-    return [
-        entry
-        for entry in list_positions()
-        if str(entry.get("status", "")).lower() in open_statuses
-    ]
+    open_positions = []
+    for entry in list_positions():
+        status_value = str(entry.get("status", "")).lower()
+        if status_value != "open":
+            continue
+        if bool(entry.get("simulated")):
+            continue
+        open_positions.append(entry)
+    return open_positions
 
 
 def create_position(

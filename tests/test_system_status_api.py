@@ -1,4 +1,6 @@
 import json
+
+from app.version import APP_VERSION
 from datetime import datetime, timedelta, timezone
 
 from app.services import runtime
@@ -11,6 +13,8 @@ def test_status_overview_contract(client):
 
     for field in ("ts", "overall", "scores", "slo", "components", "alerts"):
         assert field in payload
+
+    assert payload["build_version"] == APP_VERSION
 
     assert "hold_active" in payload
     assert "resume_request" in payload
@@ -84,6 +88,7 @@ def test_status_stream_websocket_smoke(client):
         payload = json.loads(message)
         assert "overall" in payload
         assert "components" in payload
+        assert payload.get("build_version") == APP_VERSION
 
 
 def test_critical_slo_triggers_auto_hold(client):

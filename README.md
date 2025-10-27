@@ -1,3 +1,22 @@
+## Production Quickstart
+
+1. Скопируйте `.env.prod.example` в `.env.prod`, задайте все обязательные секреты,
+   `APPROVE_TOKEN`, ключи бирж, Telegram, а также значения `REPO` (организация в
+   GHCR, например `REPO=my-org`) и `TAG` (например `TAG=main`) для образа в
+   `docker-compose.prod.yml`.
+2. Запустите стэк: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d`.
+3. Подтвердите, что `DRY_RUN_MODE=true` и сервис стартовал в SAFE_MODE/HOLD
+   (см. `safe_mode`, `dry_run_mode` и `hold_active` в статусе).
+4. Проверьте состояние через `/api/ui/status/overview`, `/api/ui/status/components`,
+   `/api/ui/status/slo` и `/api/ui/positions`.
+5. Убедитесь, что `/healthz` отвечает `{"ok": true}`.
+6. Для реальной торговли выполните ручной двухшаговый RESUME: сначала
+   `POST /api/ui/resume-request`, затем `POST /api/ui/resume-confirm` с
+   `APPROVE_TOKEN`.
+
+⚠️ Без ручного двухшагового RESUME хеджер остаётся в SAFE_MODE/HOLD и не начнёт
+реально торговать, даже если контейнер уже запущен.
+
 # PropBot v0.1.2
 
 Production-ready arbitrage runner with FastAPI, Binance Futures integration, SQLite
