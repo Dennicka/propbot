@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Dict, List, Literal, Union
+from typing import Annotated, Dict, List, Literal, Mapping, Union
 import os
 import secrets
 
@@ -23,6 +23,17 @@ from services.cross_exchange_arb import check_spread, execute_hedged_trade
 from services.risk_manager import can_open_new_position
 
 router = APIRouter()
+
+
+def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
+    try:
+        from ..opsbot.notifier import emit_alert
+    except Exception:
+        return
+    try:
+        emit_alert(kind=kind, text=text, extra=extra or None)
+    except Exception:
+        pass
 
 
 class PreviewRequest(BaseModel):
@@ -166,6 +177,7 @@ async def execute(plan_body: ExecutePayload) -> dict:
                     detail={"error": detail, "reason": safety.get("hold_reason")},
                 )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+        simulated = bool(trade_result.get("simulated"))
         position = create_position(
             symbol=plan_body.symbol,
             long_venue=str(trade_result.get("cheap_exchange")),
@@ -175,8 +187,24 @@ async def execute(plan_body: ExecutePayload) -> dict:
             leverage=plan_body.leverage,
             entry_long_price=float(trade_result.get("long_order", {}).get("price", 0.0)),
             entry_short_price=float(trade_result.get("short_order", {}).get("price", 0.0)),
+            status="simulated" if simulated else None,
+            simulated=simulated,
         )
         trade_result["position"] = position
+        alert_payload = {
+            "symbol": plan_body.symbol,
+            "notional_usdt": plan_body.notion_usdt,
+            "leverage": plan_body.leverage,
+            "spread_bps": trade_result.get("spread_bps"),
+            "simulated": simulated,
+            "dry_run_mode": bool(trade_result.get("dry_run_mode")),
+        }
+        alert_text = (
+            f"Manual hedge simulated for {plan_body.symbol} (DRY_RUN_MODE)"
+            if simulated
+            else f"Manual hedge executed for {plan_body.symbol}"
+        )
+        _emit_ops_alert("manual_hedge_execute", alert_text, alert_payload)
         return trade_result
 
     payload = plan_body.model_dump()
@@ -244,6 +272,7 @@ async def confirm(payload: ConfirmPayload) -> dict:
         detail = trade_result.get("reason", "spread_below_threshold")
         set_last_opportunity_state(opportunity, "blocked_by_risk")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+    simulated = bool(trade_result.get("simulated"))
     position = create_position(
         symbol=str(opportunity.get("symbol")),
         long_venue=str(trade_result.get("cheap_exchange")),
@@ -253,8 +282,24 @@ async def confirm(payload: ConfirmPayload) -> dict:
         leverage=leverage,
         entry_long_price=float(trade_result.get("long_order", {}).get("price", 0.0)),
         entry_short_price=float(trade_result.get("short_order", {}).get("price", 0.0)),
+        status="simulated" if simulated else None,
+        simulated=simulated,
     )
     trade_result["position"] = position
     trade_result["opportunity_id"] = opportunity.get("id")
+    alert_payload = {
+        "symbol": opportunity.get("symbol"),
+        "notional_usdt": notional,
+        "leverage": leverage,
+        "spread_bps": trade_result.get("spread_bps"),
+        "simulated": simulated,
+        "dry_run_mode": bool(trade_result.get("dry_run_mode")),
+    }
+    alert_text = (
+        f"Manual opportunity simulated for {opportunity.get('symbol')} (DRY_RUN_MODE)"
+        if simulated
+        else f"Manual opportunity executed for {opportunity.get('symbol')}"
+    )
+    _emit_ops_alert("manual_hedge_confirm", alert_text, alert_payload)
     set_last_opportunity_state(None, "blocked_by_risk")
     return trade_result

@@ -16,6 +16,7 @@ def test_status_overview_contract(client):
     assert "resume_request" in payload
     assert "clock_skew_s" in payload
     assert "auto_hedge" in payload
+    assert "dry_run_mode" in payload
     auto_block = payload["auto_hedge"]
     for field in (
         "auto_enabled",

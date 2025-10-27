@@ -88,11 +88,12 @@ exports) are stored under `./data` and persist between restarts.
    The directory is mounted as `/app/data` and must remain writable so
    `runtime_state.json`, `ledger.db`, exports, and checkpoints survive restarts.
 4. Copy `deploy/env.example.prod` to `.env`, then fill in API keys, `PROFILE`,
-   `SAFE_MODE`, `DRY_RUN_ONLY`, Telegram settings, risk limits, and the bearer
+   `SAFE_MODE`, `DRY_RUN_ONLY`, `DRY_RUN_MODE`, Telegram settings, risk limits, and the bearer
    `API_TOKEN` (never commit secrets to git).
 5. Keep the bot paused on first boot: `SAFE_MODE=true`, `DRY_RUN_ONLY=true` (for
    paper/testnet) or leave `SAFE_MODE=true` and plan to send `mode=HOLD` via
-   Telegram/CLI in live environments.
+   Telegram/CLI in live environments. Use `DRY_RUN_MODE=true` to simulate the
+   cross-exchange hedge even when connected to live venues.
 6. Start the stack: `docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d`.
 7. Validate the instance with Swagger (`https://<host>/docs`) and run `python3
    cli/propbotctl.py --base-url https://<host> status` to confirm the bot stays in
@@ -125,6 +126,8 @@ below:
   - `SAFE_MODE` — when `true`, blocks live order placement (recommended
     default).
   - `DRY_RUN_ONLY` — forces the internal paper broker, regardless of profile.
+  - `DRY_RUN_MODE` — simulates cross-exchange hedge execution without sending
+    orders to external venues while keeping all risk guards active.
   - `TWO_MAN_RULE` — require two-man approval before resuming trading.
   - `POST_ONLY`, `REDUCE_ONLY`, `ORDER_NOTIONAL_USDT`, `MAX_SLIPPAGE_BPS`,
     `MIN_SPREAD_BPS`, `POLL_INTERVAL_SEC`, `TAKER_FEE_BPS_*` — runtime loop
@@ -378,6 +381,19 @@ curl -s -X POST http://127.0.0.1:8000/api/arb/execute \
   -H 'Content-Type: application/json' \
   -d '{"symbol": "BTCUSDT", "min_spread": 2.5, "notion_usdt": 1500, "leverage": 3}' | jq
 ```
+
+### Dry-run mode for hedging
+
+Set `DRY_RUN_MODE=true` in the environment to run the entire cross-exchange
+pipeline in a “safe” simulation. Manual `/api/arb/execute` calls and the auto
+hedge daemon still evaluate opportunities, enforce risk limits, respect HOLD and
+two-man approvals, and register activity with the runaway guard, but **no orders
+are sent to external venues**. Instead, simulated fills are recorded in
+`data/hedge_log.json` and the hedge positions store with `status="simulated"`.
+Alerts emitted to Telegram/ops channels explicitly mention DRY_RUN_MODE so
+operators see that a training run occurred. The System Status overview and UI
+runtime payloads expose a `dry_run_mode` flag, making it obvious when the bot is
+in simulation.
 
 ### Auto mode
 

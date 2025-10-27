@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from typing import Dict
+
 import pytest
 
 from app.auto_hedge_daemon import AutoHedgeDaemon
 from app.services import runtime
 from app.services.hedge_log import read_entries, reset_log
+from app.services.status import get_status_overview
 from positions import list_positions
+from services import cross_exchange_arb
 from services.opportunity_scanner import get_scanner
 
 
@@ -147,3 +151,81 @@ async def test_auto_daemon_triggers_hold_after_failures(monkeypatch, tmp_path) -
     assert runtime.is_hold_active()
     reason = runtime.get_safety_status().get("hold_reason")
     assert reason and reason.startswith("auto_hedge_failures")
+
+
+@pytest.mark.asyncio
+async def test_auto_daemon_simulates_in_dry_run_mode(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DRY_RUN_MODE", "true")
+    monkeypatch.setenv("AUTO_HEDGE_ENABLED", "true")
+    monkeypatch.setenv("HEDGE_LOG_PATH", str(tmp_path / "hedge_log.json"))
+    monkeypatch.setenv("POSITIONS_STORE_PATH", str(tmp_path / "hedge_positions.json"))
+
+    runtime.reset_for_tests()
+    runtime.record_resume_request("dry_run_mode", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
+    state = runtime.get_state()
+    state.control.safe_mode = False
+    state.control.mode = "RUN"
+    reset_log()
+
+    candidate = {
+        "id": "dryrun",
+        "symbol": "BTCUSDT",
+        "long_venue": "binance-um",
+        "short_venue": "okx-perp",
+        "spread": 15.0,
+        "spread_bps": 20.0,
+        "min_spread": 5.0,
+        "notional_suggestion": 500.0,
+        "leverage_suggestion": 2.0,
+    }
+
+    async def fake_scan_once():
+        return {"candidate": candidate, "status": "allowed"}
+
+    monkeypatch.setattr(get_scanner(), "scan_once", fake_scan_once)
+
+    class NoOrderClient:
+        def __init__(self, name: str, bid: float, ask: float) -> None:
+            self.name = name
+            self._bid = bid
+            self._ask = ask
+
+        def get_best_bid_ask(self, symbol: str) -> Dict[str, float]:
+            return {"symbol": symbol, "bid": self._bid, "ask": self._ask}
+
+        def open_long(self, *args, **kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("open_long must not execute in DRY_RUN_MODE")
+
+        def open_short(self, *args, **kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("open_short must not execute in DRY_RUN_MODE")
+
+        def close_position(self, symbol: str) -> Dict[str, str]:
+            return {"exchange": self.name, "symbol": symbol, "status": "stub"}
+
+    monkeypatch.setattr(
+        cross_exchange_arb,
+        "_clients",
+        cross_exchange_arb._ExchangeClients(
+            binance=NoOrderClient("binance-um", bid=20050.0, ask=20000.0),
+            okx=NoOrderClient("okx-perp", bid=20070.0, ask=20060.0),
+        ),
+    )
+
+    daemon = AutoHedgeDaemon()
+    await daemon.run_cycle()
+
+    positions = list_positions()
+    assert len(positions) == 1
+    assert positions[0]["status"] == "simulated"
+    assert positions[0].get("simulated") is True
+
+    entries = read_entries()
+    assert len(entries) == 1
+    assert entries[0]["status"] == "simulated"
+    assert entries[0].get("simulated") is True
+
+    overview = get_status_overview()
+    assert overview["dry_run_mode"] is True
+    assert runtime.get_state().control.dry_run_mode is True
+    runtime.reset_for_tests()

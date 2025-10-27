@@ -32,7 +32,12 @@ def list_positions() -> List[Dict[str, Any]]:
 def list_open_positions() -> List[Dict[str, Any]]:
     """Return only open hedge positions."""
 
-    return [entry for entry in list_positions() if entry.get("status") == "open"]
+    open_statuses = {"open", "simulated"}
+    return [
+        entry
+        for entry in list_positions()
+        if str(entry.get("status", "")).lower() in open_statuses
+    ]
 
 
 def create_position(
@@ -45,6 +50,8 @@ def create_position(
     leverage: float,
     entry_long_price: float | None = None,
     entry_short_price: float | None = None,
+    status: str | None = None,
+    simulated: bool | None = None,
 ) -> Dict[str, Any]:
     """Create and persist a new hedge position."""
 
@@ -62,6 +69,10 @@ def create_position(
         if entry_short_price is not None
         else None,
     }
+    if status:
+        payload["status"] = str(status)
+    if simulated is not None:
+        payload["simulated"] = bool(simulated)
     if entry_long_price not in (None, 0) and notional_usdt:
         try:
             payload["base_size"] = float(notional_usdt) / float(entry_long_price)

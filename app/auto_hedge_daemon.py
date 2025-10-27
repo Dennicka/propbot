@@ -21,6 +21,7 @@ from .services.hedge_log import append_entry
 from .services.runtime import (
     engage_safety_hold,
     get_state,
+    is_dry_run_mode,
     is_hold_active,
     set_last_opportunity_state,
     update_auto_hedge_state,
@@ -207,6 +208,9 @@ class AutoHedgeDaemon:
                 trade_data.get("spread_bps", candidate_data.get("spread_bps"))
             ),
             "result": result,
+            "status": str(trade_data.get("status") or result),
+            "simulated": bool(trade_data.get("simulated")),
+            "dry_run_mode": bool(trade_data.get("dry_run_mode")),
             "initiator": INITIATOR,
         }
 
@@ -323,6 +327,7 @@ class AutoHedgeDaemon:
             set_last_opportunity_state(candidate, "blocked_by_risk")
             return
 
+        simulated = bool(trade_result.get("simulated"))
         position = create_position(
             symbol=symbol,
             long_venue=str(trade_result.get("cheap_exchange") or candidate.get("long_venue") or ""),
@@ -332,6 +337,8 @@ class AutoHedgeDaemon:
             leverage=leverage,
             entry_long_price=_maybe_float(trade_result.get("long_order", {}).get("price")),
             entry_short_price=_maybe_float(trade_result.get("short_order", {}).get("price")),
+            status="simulated" if simulated else None,
+            simulated=simulated,
         )
         trade_result["position"] = position
         ts = _ts()
@@ -349,21 +356,28 @@ class AutoHedgeDaemon:
         )
         set_last_opportunity_state(None, "blocked_by_risk")
         logger.info(
-            "auto hedge executed %s/%s notional=%s spread_bps=%s",
+            "auto hedge %s %s/%s notional=%s spread_bps=%s",
+            "simulated" if simulated else "executed",
             trade_result.get("cheap_exchange"),
             trade_result.get("expensive_exchange"),
             notional,
             trade_result.get("spread_bps"),
         )
-        _emit_ops_alert(
-            "auto_hedge_executed",
-            f"Auto hedge executed for {symbol}",
-            {
-                "symbol": symbol,
-                "notional_usdt": notional,
-                "spread_bps": trade_result.get("spread_bps"),
-            },
+        alert_payload = {
+            "symbol": symbol,
+            "notional_usdt": notional,
+            "spread_bps": trade_result.get("spread_bps"),
+            "simulated": simulated,
+            "dry_run_mode": bool(trade_result.get("dry_run_mode")),
+        }
+        if leverage is not None:
+            alert_payload["leverage"] = leverage
+        alert_text = (
+            f"Auto hedge simulated for {symbol} (DRY_RUN_MODE)"
+            if simulated or is_dry_run_mode()
+            else f"Auto hedge executed for {symbol}"
         )
+        _emit_ops_alert("auto_hedge_executed", alert_text, alert_payload)
 
 
 _daemon = AutoHedgeDaemon()

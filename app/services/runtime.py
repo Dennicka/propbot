@@ -136,6 +136,7 @@ class ControlState:
     reduce_only: bool = False
     environment: str = "paper"
     dry_run: bool = True
+    dry_run_mode: bool = False
     order_notional_usdt: float = 50.0
     max_slippage_bps: int = 2
     taker_fee_bps_binance: int = 2
@@ -156,6 +157,7 @@ class ControlState:
             "REDUCE_ONLY": self.reduce_only,
             "ENV": self.environment,
             "DRY_RUN": self.dry_run,
+            "DRY_RUN_MODE": self.dry_run_mode,
             "ORDER_NOTIONAL_USDT": self.order_notional_usdt,
             "MAX_SLIPPAGE_BPS": self.max_slippage_bps,
             "TAKER_FEE_BPS_BINANCE": self.taker_fee_bps_binance,
@@ -520,6 +522,7 @@ def _bootstrap_runtime() -> RuntimeState:
     fee_okx = _env_int("TAKER_FEE_BPS_OKX", 2)
     poll_interval = _env_int("POLL_INTERVAL_SEC", 5)
     min_spread_bps = _env_float("MIN_SPREAD_BPS", 0.0)
+    dry_run_mode = _env_flag("DRY_RUN_MODE", False)
     profile = (
         os.environ.get("PROFILE")
         or os.environ.get("EXCHANGE_PROFILE")
@@ -542,6 +545,7 @@ def _bootstrap_runtime() -> RuntimeState:
         reduce_only=_env_flag("REDUCE_ONLY", control_cfg.reduce_only if control_cfg else False),
         environment=environment,
         dry_run=dry_run_only,
+        dry_run_mode=dry_run_mode,
         order_notional_usdt=order_notional,
         max_slippage_bps=slippage_bps,
         taker_fee_bps_binance=fee_binance,
@@ -651,6 +655,12 @@ def get_safety_status() -> Dict[str, object]:
 def is_hold_active() -> bool:
     with _STATE_LOCK:
         return bool(_STATE.safety.hold_active)
+
+
+def is_dry_run_mode() -> bool:
+    with _STATE_LOCK:
+        control = _STATE.control
+        return bool(getattr(control, "dry_run_mode", False))
 
 
 def set_loop_config(*, pair: str | None, venues: List[str], notional_usdt: float) -> LoopState:
@@ -921,6 +931,7 @@ def reset_for_tests() -> None:
         _sync_loop_from_control(_STATE)
         _STATE.control.safe_mode = True
         _STATE.control.dry_run = False
+        _STATE.control.dry_run_mode = _env_flag("DRY_RUN_MODE", False)
         _STATE.hedge_positions = []
         _STATE.last_opportunity = OpportunityState()
         limits = _STATE.safety.limits
