@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  propbot-app:
+    image: ghcr.io/${REPO:?err}/propbot:${TAG:-main}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: propbot_app_prod
+    env_file:
+      - .env.prod
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/ui/status/overview"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped

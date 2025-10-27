@@ -6,40 +6,40 @@
 ## Старт в продакшене
 
 1. Подготовьте постоянный каталог `/opt/propbot/data` (или другой путь),
-   примонтированный в контейнер как `/app/data`. В нём лежат
-   `runtime_state.json`, `hedge_positions.json`, `hedge_log.json`,
-   `ops_alerts.json`, SQLite-леджер и выгрузки — всё это должно переживать
-   рестарт сервера.
-2. Скопируйте `deploy/env.example.prod` в `.env` и заполните ключевые
-   переменные:
-   - Биржевые API-ключи (`BINANCE_*`, `OKX_*`) по выбранному `PROFILE`.
-     Для кросс-биржевого хеджа дополнительно нужны `BINANCE_API_KEY`/
-     `BINANCE_API_SECRET` и `OKX_API_KEY`/`OKX_API_SECRET`/`OKX_API_PASSPHRASE`
-     — используйте отдельные субаккаунты и запускайте live только после
-     успешной симуляции.
-   - `SAFE_MODE=true`, `MODE=HOLD` на первом запуске, `DRY_RUN_ONLY=true` для
-     тестовой среды.
-   - `DRY_RUN_MODE=true` если нужно прогнать хедж в симуляции: реальные ордера
-     не уйдут на биржи, но все лимиты и HOLD остаются активными.
-   - `APPROVE_TOKEN` (секрет второго оператора), `API_TOKEN` (для защищённых
-     ручек и CLI), `AUTH_ENABLED=true`.
-   - `RUNTIME_STATE_PATH=./data/runtime_state.json`, `POSITIONS_STORE_PATH` и
-     прочие пути оставляйте в `data/`.
-   - Лимиты риска и runaway guard (`MAX_POSITION_USDT`, `MAX_DAILY_LOSS_USDT`,
-     `MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`).
-   - Telegram (`TELEGRAM_ENABLE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
-     `TELEGRAM_PUSH_MINUTES`).
-   - Авто-хедж: `AUTO_HEDGE_ENABLED=true` только при заданных лимитах и стратегии
-     — демон уважает HOLD и runaway guard, но не снимает их.
-   > ⚠️ Перед живым запуском отработайте весь цикл в `DRY_RUN_MODE=true`: после
-   > успешной симуляции проверьте `/api/ui/status/overview`, убедитесь, что бот
-   > остаётся в HOLD и все guard'ы зелёные, затем пройдите двухшаговый
-   > `resume-request`/`resume-confirm` и только после этого отключайте
-   > `DRY_RUN_MODE`.
-3. Запустите сервис: `docker compose -f deploy/docker-compose.prod.yml --env-file
-   .env up -d`. Проверите `GET /api/ui/status/overview` — бот должен находиться в
-   SAFE_MODE/HOLD.
-4. Не снимайте лимиты по плечу/ноционалу: runaway guard и риск-блокировки
+   примонтированный в контейнер как `/app/data`. В `data/` находятся
+   `runtime_state.json`, `runtime_state_store.json` (если используется override),
+   `hedge_positions.json`, `hedge_log.json`, `alerts.json`, `ops_alerts.json` и
+   другие журналы. Потеря каталога = потеря истории, поэтому храните его на
+   надёжном диске и включите бэкап.
+2. Создайте файл окружения из шаблона: `cp .env.prod.example .env.prod`. Затем
+   заполните секреты и лимиты:
+   - Биржевые ключи `BINANCE_*`, `OKX_*` (используйте отдельные субаккаунты и
+     IP white-list).
+   - `API_TOKEN`, `APPROVE_TOKEN`, `AUTH_ENABLED=true`.
+   - Лимиты риска `MAX_POSITION_USDT`, `MAX_DAILY_LOSS_USDT`, runaway guard
+     (`MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`), настройки Telegram.
+   - `SAFE_MODE=true`, `DRY_RUN_ONLY=true`, `DRY_RUN_MODE=true` и режим HOLD на
+     старте оставляйте включёнными до прохождения двухшагового
+     `resume-request`/`resume-confirm`.
+   - Пути хранения (`RUNTIME_STATE_PATH`, `POSITIONS_STORE_PATH`,
+     `HEDGE_LOG_PATH`, `OPS_ALERTS_FILE`) указывайте внутри `./data/`.
+3. Запускайте контейнеры: `docker compose -f docker-compose.prod.yml --env-file
+   .env.prod up -d`. Проверяйте healthcheck через
+   `docker inspect --format '{{json .State.Health}}' propbot_app_prod | jq` —
+   статус `healthy` означает, что `/api/ui/status/overview` отдаёт 200.
+4. После старта убедитесь, что защита включена:
+   ```bash
+   curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+     http://<host>:8000/api/ui/status/overview | jq '.flags'
+   ```
+   Значения `safe_mode`, `hold_active` и `dry_run_mode` должны быть `true`.
+   Любое отклонение рассматривайте как инцидент и не отключайте SAFE_MODE, пока
+   оба оператора не пройдут двухшаговый флоу.
+5. Перед переходом в live пройдите процедуру:
+   `resume-request` → `resume-confirm` (со вторым оператором и `APPROVE_TOKEN`) →
+   `resume`. Только после этого вручную выключайте `SAFE_MODE`/`DRY_RUN_MODE` и
+   переводите режим в `RUN`.
+6. Не снимайте лимиты по плечу/ноционалу — runaway guard и риск-блокировки
    используют их для защиты.
 
 ## Ежедневный мониторинг
