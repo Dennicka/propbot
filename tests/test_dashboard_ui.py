@@ -110,6 +110,19 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
         reason="okx:free balance below hedge size",
         auto_hold=False,
     )
+    runtime.update_reconciliation_status(
+        desync_detected=True,
+        issues=[
+            {
+                "kind": "position_missing_on_exchange",
+                "venue": "okx-perp",
+                "symbol": "ETHUSDT",
+                "side": "short",
+                "description": "leg missing",
+            }
+        ],
+        last_checked="2024-01-01T00:00:00+00:00",
+    )
 
     response = client.get(
         "/ui/dashboard",
@@ -154,6 +167,9 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "TRADING HALTED FOR SAFETY" in html
     assert "okx" in html
     assert "free balance below hedge size" in html
+    assert "Reconciliation status" in html
+    assert "STATE DESYNC — manual intervention required" in html
+    assert "Outstanding mismatches:" in html
 
 
 def test_dashboard_recent_ops_status_badges(monkeypatch, client) -> None:

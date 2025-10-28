@@ -26,6 +26,11 @@ def _stub_safety(monkeypatch, *, hold: bool = False, reason: str = "") -> None:
         "get_safety_status",
         lambda: {"hold_active": hold, "hold_reason": reason},
     )
+    monkeypatch.setattr(
+        edge_guard.runtime,
+        "get_reconciliation_status",
+        lambda: {"desync_detected": False, "issues": [], "issue_count": 0},
+    )
 
 
 def test_edge_guard_blocks_on_partial_hedge(monkeypatch):
@@ -50,6 +55,27 @@ def test_edge_guard_blocks_on_slippage(monkeypatch):
 
     assert allowed is False
     assert reason == "slippage_degraded"
+
+
+def test_edge_guard_blocks_on_desync(monkeypatch):
+    _stub_safety(monkeypatch)
+    monkeypatch.setattr(
+        edge_guard.runtime,
+        "get_reconciliation_status",
+        lambda: {
+            "desync_detected": True,
+            "issues": [{"kind": "position_missing_on_exchange"}],
+            "issue_count": 1,
+        },
+    )
+    monkeypatch.setattr(edge_guard, "_current_positions", lambda: [])
+    monkeypatch.setattr(edge_guard, "_avg_slippage", lambda symbol: (None, None))
+    monkeypatch.setattr(edge_guard, "_pnl_downtrend_with_exposure", lambda: (False, 0.0))
+
+    allowed, reason = edge_guard.allowed_to_trade("BTCUSDT")
+
+    assert allowed is False
+    assert reason == "desync"
 
 
 def test_edge_guard_allows_in_normal_conditions(monkeypatch):

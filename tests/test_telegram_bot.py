@@ -159,3 +159,40 @@ async def test_liquidity_command_returns_snapshot(monkeypatch: pytest.MonkeyPatc
     assert "okx" in message
     assert "liquidity_blocked=True" in message
     assert "trading halted for safety" in message
+
+
+@pytest.mark.asyncio
+async def test_reconcile_command_reports_desync(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TelegramBotConfig(token="token", chat_id="1", enabled=True, push_minutes=5)
+    bot = TelegramBot(config)
+
+    monkeypatch.setattr("app.telebot.telegram_bot.reconciler.reconcile", lambda: [
+        {"kind": "position_missing_on_exchange"}
+    ])
+    monkeypatch.setattr(
+        "app.telebot.telegram_bot.get_reconciliation_status",
+        lambda: {
+            "desync_detected": True,
+            "issue_count": 2,
+            "issues": [
+                {
+                    "kind": "position_missing_on_exchange",
+                    "venue": "okx-perp",
+                    "symbol": "ETHUSDT",
+                    "side": "short",
+                    "description": "leg missing",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.telebot.telegram_bot.get_safety_status",
+        lambda: {"hold_active": True, "hold_reason": "manual_hold"},
+    )
+
+    message = await bot._handle_reconcile()
+
+    assert "STATE DESYNC detected." in message
+    assert "Outstanding mismatches: 2." in message
+    assert "okx-perp/ETHUSDT" in message
+    assert "Current HOLD reason" in message

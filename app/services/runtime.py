@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..runtime_state_store import (
@@ -421,6 +421,8 @@ class SafetyState:
     liquidity_blocked: bool = False
     liquidity_reason: str | None = None
     liquidity_snapshot: Dict[str, object] = field(default_factory=dict)
+    desync_detected: bool = False
+    reconciliation_snapshot: Dict[str, object] = field(default_factory=dict)
 
     def engage_hold(self, reason: str, *, source: str) -> bool:
         changed = not self.hold_active
@@ -455,6 +457,14 @@ class SafetyState:
         payload["liquidity_blocked"] = self.liquidity_blocked
         payload["liquidity_reason"] = self.liquidity_reason
         payload["liquidity_snapshot"] = dict(self.liquidity_snapshot)
+        payload["desync_detected"] = bool(self.desync_detected)
+        payload["reconciliation"] = {
+            "desync_detected": bool(self.desync_detected),
+            **{str(k): v for k, v in self.reconciliation_snapshot.items()},
+        } if self.reconciliation_snapshot else {
+            "desync_detected": bool(self.desync_detected),
+            "issues": [],
+        }
         return payload
 
     def status_payload(self) -> Dict[str, object | None]:
@@ -1086,6 +1096,52 @@ def get_liquidity_status() -> Dict[str, object]:
         }
 
 
+def update_reconciliation_status(
+    *,
+    desync_detected: bool,
+    issues: Sequence[Mapping[str, Any]],
+    last_checked: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> Dict[str, object]:
+    timestamp = last_checked or _ts()
+    issue_list = [dict(issue) for issue in issues]
+    snapshot: Dict[str, Any] = {
+        "desync_detected": bool(desync_detected),
+        "last_checked": timestamp,
+        "issues": issue_list,
+        "issue_count": len(issue_list),
+    }
+    if metadata:
+        snapshot.update({str(key): value for key, value in metadata.items()})
+    persist_snapshot: Dict[str, Any] | None = None
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        previous_snapshot = dict(safety.reconciliation_snapshot)
+        previous_flag = bool(safety.desync_detected)
+        safety.desync_detected = bool(desync_detected)
+        safety.reconciliation_snapshot = snapshot
+        if previous_flag != bool(desync_detected) or previous_snapshot != snapshot:
+            persist_snapshot = safety.as_dict()
+    if persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
+    return dict(snapshot)
+
+
+def get_reconciliation_status() -> Dict[str, object]:
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        snapshot = dict(safety.reconciliation_snapshot)
+        if not snapshot:
+            snapshot = {
+                "desync_detected": bool(safety.desync_detected),
+                "issues": [],
+                "issue_count": 0,
+            }
+        snapshot.setdefault("desync_detected", bool(safety.desync_detected))
+        snapshot.setdefault("issue_count", len(snapshot.get("issues", [])))
+        return snapshot
+
+
 def get_open_orders() -> List[Dict[str, object]]:
     return list(_STATE.open_orders)
 
@@ -1631,6 +1687,26 @@ def _load_persisted_state(state: RuntimeState) -> None:
         else:
             safety.clock_skew_s = None
         safety.clock_skew_checked_ts = safety_payload.get("clock_skew_checked_ts") or None
+        safety.desync_detected = bool(safety_payload.get("desync_detected"))
+        reconciliation_payload = safety_payload.get("reconciliation")
+        if isinstance(reconciliation_payload, Mapping):
+            snapshot: Dict[str, Any] = {str(key): value for key, value in reconciliation_payload.items()}
+            issues_payload = snapshot.get("issues")
+            if isinstance(issues_payload, list):
+                snapshot["issues"] = [
+                    dict(issue) for issue in issues_payload if isinstance(issue, Mapping)
+                ]
+            else:
+                snapshot["issues"] = []
+            snapshot.setdefault("desync_detected", safety.desync_detected)
+            snapshot.setdefault("issue_count", len(snapshot.get("issues", [])))
+            safety.reconciliation_snapshot = snapshot
+        else:
+            safety.reconciliation_snapshot = {
+                "desync_detected": safety.desync_detected,
+                "issues": [],
+                "issue_count": 0,
+            }
         resume_payload = safety_payload.get("resume_request")
         if isinstance(resume_payload, Mapping):
             reason = resume_payload.get("reason")

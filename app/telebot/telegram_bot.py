@@ -24,12 +24,13 @@ from ..services.runtime import (
     engage_safety_hold,
     get_safety_status,
     get_state,
+    get_reconciliation_status,
     record_resume_request,
     request_exit_dry_run,
     request_risk_limit_change,
     set_open_orders,
 )
-from services import balances_monitor
+from services import balances_monitor, reconciler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -348,6 +349,8 @@ class TelegramBot:
                 response = await self._handle_daily()
             elif command == "/liquidity":
                 response = await self._handle_liquidity()
+            elif command == "/reconcile":
+                response = await self._handle_reconcile()
             elif command == "/raise_limit":
                 response = await self._handle_raise_limit(actor_label, args)
             elif command == "/exit_dry_run":
@@ -358,7 +361,7 @@ class TelegramBot:
                 response = await self._handle_close_all()
             else:
                 response = (
-                    "Unknown command. Available: /status, /daily, /liquidity, /hold, /resume, "
+                    "Unknown command. Available: /status, /daily, /liquidity, /reconcile, /hold, /resume, "
                     "/raise_limit, /exit_dry_run, /approve, /close"
                 )
         except Exception as exc:  # pragma: no cover - ensure failure is reported
@@ -491,6 +494,42 @@ class TelegramBot:
         lines.append(f"liquidity_blocked={blocked} reason={reason_summary}")
         if blocked:
             lines.append("trading halted for safety")
+        return "\n".join(lines)
+
+    async def _handle_reconcile(self) -> str:
+        try:
+            await asyncio.to_thread(reconciler.reconcile)
+        except Exception as exc:  # pragma: no cover - defensive best effort
+            return f"Reconciliation failed: {exc}"[:400]
+        recon = get_reconciliation_status()
+        issue_count = recon.get("issue_count")
+        try:
+            issue_total = int(issue_count)
+        except (TypeError, ValueError):
+            issues_payload = recon.get("issues", [])
+            issue_total = len(issues_payload) if isinstance(issues_payload, list) else 0
+        if issue_total <= 0:
+            return "Reconciliation: in sync. No mismatches detected."
+        lines = [
+            "STATE DESYNC detected.",
+            f"Outstanding mismatches: {issue_total}.",
+            "Resolve manually before resume.",
+        ]
+        issues = recon.get("issues", [])
+        if isinstance(issues, list):
+            for issue in issues[:5]:
+                if not isinstance(issue, Mapping):
+                    continue
+                kind = str(issue.get("kind") or "issue")
+                venue = str(issue.get("venue") or "?")
+                symbol = str(issue.get("symbol") or "?")
+                side = str(issue.get("side") or "")
+                detail = str(issue.get("description") or "")
+                lines.append(f"- {kind}: {venue}/{symbol} {side} — {detail}")
+        safety = get_safety_status()
+        if isinstance(safety, Mapping) and safety.get("hold_active"):
+            hold_reason = str(safety.get("hold_reason") or "manual_hold")
+            lines.append(f"Current HOLD reason: {hold_reason}")
         return "\n".join(lines)
 
     async def _handle_raise_limit(self, actor: str, args: list[str]) -> str:
