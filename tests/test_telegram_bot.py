@@ -123,3 +123,39 @@ async def test_daily_command_handles_missing_report(monkeypatch: pytest.MonkeyPa
     message = await bot._handle_daily()
 
     assert "No daily report" in message
+
+
+@pytest.mark.asyncio
+async def test_liquidity_command_returns_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TelegramBotConfig(token="token", chat_id="1", enabled=True, push_minutes=5)
+    bot = TelegramBot(config)
+
+    monkeypatch.setattr(
+        "services.balances_monitor.evaluate_balances",
+        lambda: {
+            "per_venue": {
+                "binance": {
+                    "free_usdt": 500.0,
+                    "used_usdt": 100.0,
+                    "risk_ok": True,
+                    "reason": "ok",
+                },
+                "okx": {
+                    "free_usdt": 5.0,
+                    "used_usdt": 995.0,
+                    "risk_ok": False,
+                    "reason": "free balance fraction low",
+                },
+            },
+            "liquidity_blocked": True,
+            "reason": "okx:free balance fraction low",
+        },
+    )
+
+    message = await bot._handle_liquidity()
+
+    assert "Liquidity snapshot:" in message
+    assert "binance" in message
+    assert "okx" in message
+    assert "liquidity_blocked=True" in message
+    assert "trading halted for safety" in message

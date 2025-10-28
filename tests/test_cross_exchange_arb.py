@@ -6,7 +6,7 @@ import pytest
 
 from app.services import runtime
 
-from services import cross_exchange_arb
+from services import cross_exchange_arb, edge_guard
 from services.cross_exchange_arb import _ExchangeClients
 from services.risk_manager import can_open_new_position, reset_positions
 
@@ -47,6 +47,15 @@ class StubClient:
 
     def get_account_limits(self) -> Dict[str, Any]:  # pragma: no cover - unused
         return {"exchange": self.name, "available_balance": 0.0}
+
+
+@pytest.fixture(autouse=True)
+def _stub_liquidity(monkeypatch):
+    monkeypatch.setattr(
+        edge_guard.balances_monitor,
+        "evaluate_balances",
+        lambda: {"per_venue": {}, "liquidity_blocked": False, "reason": "ok"},
+    )
 
 
 @pytest.fixture(autouse=True)

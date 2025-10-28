@@ -91,6 +91,26 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
         parameters={"reason": "go-live"},
     )
 
+    runtime.update_liquidity_snapshot(
+        {
+            "binance": {
+                "free_usdt": 1250.0,
+                "used_usdt": 250.0,
+                "risk_ok": True,
+                "reason": "ok",
+            },
+            "okx": {
+                "free_usdt": 20.0,
+                "used_usdt": 980.0,
+                "risk_ok": False,
+                "reason": "free balance below hedge size",
+            },
+        },
+        blocked=True,
+        reason="okx:free balance below hedge size",
+        auto_hold=False,
+    )
+
     response = client.get(
         "/ui/dashboard",
         headers={"Authorization": "Bearer dashboard-token"},
@@ -129,6 +149,11 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "Total Exposure (USD)" in html
     assert "Open positions:" in html
     assert "Recent Ops / Incidents" in html
+
+    assert "Balances / Liquidity" in html
+    assert "TRADING HALTED FOR SAFETY" in html
+    assert "okx" in html
+    assert "free balance below hedge size" in html
 
 
 def test_dashboard_recent_ops_status_badges(monkeypatch, client) -> None:

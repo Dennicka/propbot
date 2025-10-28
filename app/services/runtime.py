@@ -418,6 +418,9 @@ class SafetyState:
     clock_skew_s: float | None = None
     clock_skew_checked_ts: str | None = None
     risk_snapshot: Dict[str, object] = field(default_factory=dict)
+    liquidity_blocked: bool = False
+    liquidity_reason: str | None = None
+    liquidity_snapshot: Dict[str, object] = field(default_factory=dict)
 
     def engage_hold(self, reason: str, *, source: str) -> bool:
         changed = not self.hold_active
@@ -449,6 +452,9 @@ class SafetyState:
         payload["clock_skew_s"] = self.clock_skew_s
         payload["clock_skew_checked_ts"] = self.clock_skew_checked_ts
         payload["risk_snapshot"] = dict(self.risk_snapshot)
+        payload["liquidity_blocked"] = self.liquidity_blocked
+        payload["liquidity_reason"] = self.liquidity_reason
+        payload["liquidity_snapshot"] = dict(self.liquidity_snapshot)
         return payload
 
     def status_payload(self) -> Dict[str, object | None]:
@@ -1028,6 +1034,58 @@ def update_risk_snapshot(snapshot: Mapping[str, object]) -> None:
         _persist_safety_snapshot(persist_snapshot)
 
 
+def update_liquidity_snapshot(
+    snapshot: Mapping[str, object],
+    *,
+    blocked: bool,
+    reason: str | None = None,
+    source: str = "balances_monitor",
+    auto_hold: bool = True,
+) -> None:
+    persist_snapshot: Dict[str, object] | None = None
+    alert_needed = False
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        previous_blocked = bool(safety.liquidity_blocked)
+        clean_snapshot: Dict[str, object] = {}
+        for venue, payload in snapshot.items():
+            key = str(venue)
+            if isinstance(payload, Mapping):
+                clean_snapshot[key] = {str(k): v for k, v in payload.items()}
+            else:
+                clean_snapshot[key] = payload
+        safety.liquidity_snapshot = clean_snapshot
+        safety.liquidity_blocked = bool(blocked)
+        safety.liquidity_reason = reason or ("liquidity_blocked" if blocked else "ok")
+        persist_snapshot = safety.as_dict()
+        alert_needed = bool(blocked and not previous_blocked)
+    if persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
+    if blocked and auto_hold:
+        engage_safety_hold(reason or "liquidity_blocked", source=source)
+    if alert_needed:
+        _emit_ops_alert(
+            "liquidity_blocked",
+            reason or "Liquidity blocked — insufficient balance",
+            {"source": source, "reason": reason or "liquidity_blocked"},
+        )
+
+
+def get_liquidity_status() -> Dict[str, object]:
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        snapshot = {
+            str(venue): {str(k): v for k, v in payload.items()} if isinstance(payload, Mapping) else payload
+            for venue, payload in safety.liquidity_snapshot.items()
+        }
+        reason = safety.liquidity_reason or ("liquidity_blocked" if safety.liquidity_blocked else "ok")
+        return {
+            "liquidity_blocked": bool(safety.liquidity_blocked),
+            "reason": reason,
+            "per_venue": snapshot,
+        }
+
+
 def get_open_orders() -> List[Dict[str, object]]:
     return list(_STATE.open_orders)
 
@@ -1531,6 +1589,16 @@ def _load_persisted_state(state: RuntimeState) -> None:
             safety.risk_snapshot = dict(risk_snapshot_payload)
         else:
             safety.risk_snapshot = {}
+        safety.liquidity_blocked = bool(safety_payload.get("liquidity_blocked", False))
+        safety.liquidity_reason = safety_payload.get("liquidity_reason") or None
+        liquidity_snapshot_payload = safety_payload.get("liquidity_snapshot")
+        if isinstance(liquidity_snapshot_payload, Mapping):
+            safety.liquidity_snapshot = {
+                str(venue): dict(payload) if isinstance(payload, Mapping) else payload
+                for venue, payload in liquidity_snapshot_payload.items()
+            }
+        else:
+            safety.liquidity_snapshot = {}
         limits_payload = safety_payload.get("limits")
         if isinstance(limits_payload, Mapping):
             max_orders_value = limits_payload.get("max_orders_per_min")

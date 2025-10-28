@@ -8,6 +8,7 @@ from statistics import mean
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from app.services import risk_guard, runtime
+from services import balances_monitor
 from pnl_history_store import list_recent as list_recent_pnl_snapshots
 from positions import list_open_positions
 from .execution_stats_store import list_recent as list_recent_execution_stats
@@ -34,6 +35,8 @@ class EdgeGuardContext:
     failure_rate: float | None
     pnl_trend_negative: bool
     exposure_total: float
+    liquidity_blocked: bool
+    liquidity_reason: str
 
 
 def _normalise_symbol(symbol: str | None) -> str:
@@ -138,6 +141,8 @@ def _build_context(
     failure_rate: float | None,
     pnl_trend_negative: bool,
     exposure_total: float,
+    liquidity_blocked: bool,
+    liquidity_reason: str,
 ) -> EdgeGuardContext:
     return EdgeGuardContext(
         hold_active=hold_active,
@@ -147,6 +152,8 @@ def _build_context(
         failure_rate=failure_rate,
         pnl_trend_negative=pnl_trend_negative,
         exposure_total=exposure_total,
+        liquidity_blocked=liquidity_blocked,
+        liquidity_reason=liquidity_reason,
     )
 
 
@@ -160,6 +167,11 @@ def allowed_to_trade(symbol_pair: str | None = None) -> Tuple[bool, str]:
         if hold_reason.upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX):
             return False, "risk_throttle_active"
         return False, "hold_active"
+
+    liquidity_status = balances_monitor.evaluate_balances()
+    if bool(liquidity_status.get("liquidity_blocked")):
+        reason = str(liquidity_status.get("reason") or "liquidity_blocked")
+        return False, reason
 
     positions = _current_positions()
     partial_count = _partial_hedges_open(positions)
@@ -189,6 +201,9 @@ def current_context(symbol_pair: str | None = None) -> EdgeGuardContext:
     partial_count = _partial_hedges_open(positions)
     avg_slippage, failure_rate = _avg_slippage(symbol_pair)
     pnl_downtrend, exposure_total = _pnl_downtrend_with_exposure()
+    liquidity_status = runtime.get_liquidity_status()
+    liquidity_blocked = bool(liquidity_status.get("liquidity_blocked"))
+    liquidity_reason = str(liquidity_status.get("reason") or "ok")
     return _build_context(
         hold_active=hold_active,
         hold_reason=hold_reason,
@@ -197,6 +212,8 @@ def current_context(symbol_pair: str | None = None) -> EdgeGuardContext:
         failure_rate=failure_rate,
         pnl_trend_negative=pnl_downtrend,
         exposure_total=exposure_total,
+        liquidity_blocked=liquidity_blocked,
+        liquidity_reason=liquidity_reason,
     )
 
 
