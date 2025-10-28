@@ -409,6 +409,7 @@ class SafetyState:
     counters: RunawayCounterState = field(default_factory=RunawayCounterState)
     clock_skew_s: float | None = None
     clock_skew_checked_ts: str | None = None
+    risk_snapshot: Dict[str, object] = field(default_factory=dict)
 
     def engage_hold(self, reason: str, *, source: str) -> bool:
         changed = not self.hold_active
@@ -439,6 +440,7 @@ class SafetyState:
             payload["resume_request"] = self.resume_request.as_dict()
         payload["clock_skew_s"] = self.clock_skew_s
         payload["clock_skew_checked_ts"] = self.clock_skew_checked_ts
+        payload["risk_snapshot"] = dict(self.risk_snapshot)
         return payload
 
     def status_payload(self) -> Dict[str, object | None]:
@@ -775,21 +777,26 @@ def register_cancel_attempt(delta: int = 1, *, reason: str, source: str) -> None
 
 def update_clock_skew(skew_seconds: float | None, *, source: str = "clock_skew_checker") -> None:
     persist_snapshot: Dict[str, object] | None = None
-    hold_required = False
     with _STATE_LOCK:
         safety = _STATE.safety
         if skew_seconds is None:
             safety.clock_skew_s = None
         else:
             safety.clock_skew_s = float(skew_seconds)
-            hold_required = abs(safety.clock_skew_s) > 0.2
         safety.clock_skew_checked_ts = _ts()
         persist_snapshot = safety.as_dict()
-    if hold_required:
-        engage_safety_hold("clock_skew_exceeded", source=source)
-    else:
-        if persist_snapshot is not None:
-            _persist_safety_snapshot(persist_snapshot)
+    if persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
+
+
+def update_risk_snapshot(snapshot: Mapping[str, object]) -> None:
+    persist_snapshot: Dict[str, object] | None = None
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        safety.risk_snapshot = dict(snapshot)
+        persist_snapshot = safety.as_dict()
+    if persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
 
 
 def get_open_orders() -> List[Dict[str, object]]:
@@ -1289,6 +1296,11 @@ def _load_persisted_state(state: RuntimeState) -> None:
         safety.hold_source = safety_payload.get("hold_source") or None
         safety.hold_since = safety_payload.get("hold_since") or None
         safety.last_released_ts = safety_payload.get("last_released_ts") or None
+        risk_snapshot_payload = safety_payload.get("risk_snapshot")
+        if isinstance(risk_snapshot_payload, Mapping):
+            safety.risk_snapshot = dict(risk_snapshot_payload)
+        else:
+            safety.risk_snapshot = {}
         limits_payload = safety_payload.get("limits")
         if isinstance(limits_payload, Mapping):
             max_orders_value = limits_payload.get("max_orders_per_min")

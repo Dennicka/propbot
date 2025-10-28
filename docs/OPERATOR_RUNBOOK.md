@@ -103,6 +103,24 @@
 время последней успешной хедж-операции (`auto_hedge.last_success_ts`).
 Используйте этот файл (или соответствующий endpoint UI) для аудита и расследований.
 
+## Risk governor / auto-HOLD
+
+- Risk governor срабатывает перед каждой петлёй и перед реальными ордерами:
+  берёт snapshot портфеля, обновляет `safety.risk_snapshot` и сверяет метрики с
+  лимитами из `.env`.
+- HOLD включается автоматически при:
+  - дневном убытке ниже `-MAX_DAILY_LOSS_USD`;
+  - суммарной экспозиции выше `MAX_TOTAL_NOTIONAL_USD`
+    (поддерживается и `MAX_TOTAL_NOTIONAL_USDT`);
+  - нереализованном убытке глубже `MAX_UNREALIZED_LOSS_USD`;
+  - clock skew > `CLOCK_SKEW_HOLD_THRESHOLD_MS`;
+  - сообщении биржи о maintenance/read-only.
+- В `DRY_RUN_MODE` симулированные сделки не попадают в риск-лимиты, но clock skew
+  и maintenance всё равно ставят HOLD.
+- Причина фиксируется в `runtime_state.json` и `/api/ui/status/overview`
+  (`safety.hold_reason`, `safety.risk_snapshot`). Не снимайте HOLD, пока не
+  устранена причина; затем используйте `resume-request` → `resume-confirm`.
+
 ## Ежедневный мониторинг
 
 - `GET /healthz` — проверка живости.

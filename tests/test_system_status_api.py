@@ -34,6 +34,7 @@ def test_status_overview_contract(client):
     assert isinstance(safety_block, dict)
     assert safety_block.get("counters") is not None
     assert safety_block.get("limits") is not None
+    assert "risk_snapshot" in safety_block
 
     assert payload["overall"] in {"OK", "WARN", "ERROR", "HOLD"}
 

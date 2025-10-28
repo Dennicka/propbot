@@ -157,7 +157,32 @@ below:
   - `LOOP_PAIR` / `LOOP_VENUES` — optional overrides for the live loop symbol
     and venue list (uppercase symbol, comma-separated venues). When unset the
     loop follows strategy defaults.
-  - `ENABLE_PLACE_TEST_ORDERS` — allow real order placement on testnet.
+- `ENABLE_PLACE_TEST_ORDERS` — allow real order placement on testnet.
+
+## Risk governor / auto-HOLD
+
+The runtime now includes a dedicated risk governor that continuously samples the
+portfolio snapshot and trading runtime before every loop cycle and prior to
+submitting live orders. The governor will automatically engage HOLD/SAFE_MODE,
+persist the reason, and surface it in `/api/ui/status/overview` when any of the
+following conditions trip:
+
+- Daily realised PnL breaches `MAX_DAILY_LOSS_USD`.
+- Aggregate open exposure exceeds `MAX_TOTAL_NOTIONAL_USD` (or the legacy
+  `MAX_TOTAL_NOTIONAL_USDT`).
+- Unrealised losses are deeper than `MAX_UNREALIZED_LOSS_USD`.
+- Reported exchange server time drifts past `CLOCK_SKEW_HOLD_THRESHOLD_MS`.
+- A connected derivatives venue reports `maintenance`/`read-only` mode.
+
+The latest exposure snapshot (per venue and symbol), realised/unrealised PnL,
+clock-skew sample, and any maintenance flags are stored in the runtime state and
+returned as `safety.risk_snapshot` so operators can understand why HOLD was
+activated. All limits read from the environment are optional—set a value of `0`
+to disable a particular guard. Even in `DRY_RUN_MODE` the governor continues to
+monitor clock skew and maintenance signals, but simulated fills do not contribute
+to real risk limits. Never resume trading until the root cause is investigated
+and addressed, then follow the existing two-step `resume-request`/`resume-confirm`
+flow to clear HOLD.
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional
     caps.
