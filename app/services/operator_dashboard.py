@@ -12,6 +12,7 @@ from ..opsbot import notifier
 from ..runtime_state_store import load_runtime_payload
 from ..version import APP_VERSION
 from .approvals_store import list_requests as list_pending_requests
+from .audit_log import list_recent_events
 from . import risk_alerts, risk_guard
 from .runtime import (
     get_auto_hedge_state,
@@ -232,6 +233,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     control_flags = state.control.flags
     active_alerts = risk_alerts.evaluate_alerts()
     recent_audit = notifier.get_recent_alerts(limit=5)
+    recent_ops_incidents = list_recent_events(limit=10)
 
     hold_reason = str(safety_payload.get("hold_reason") or "")
     risk_throttled = bool(
@@ -283,6 +285,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "persisted_snapshot": persisted,
         "active_alerts": active_alerts,
         "recent_audit": recent_audit,
+        "recent_ops_incidents": recent_ops_incidents,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
         "pnl_history": pnl_history,
@@ -324,6 +327,32 @@ def _extra_block(extra: object) -> str:
     except (TypeError, ValueError):
         text = str(payload)
     return f"<div style=\"font-size:0.8rem;color:#4b5563;margin-top:0.25rem;\">{escape(text)}</div>"
+
+
+def _ops_status_badge(status: object, action: object) -> str:
+    status_text = str(status or "").strip().lower()
+    action_text = str(action or "").strip().lower()
+    if "auto" in action_text and "hold" in action_text:
+        return (
+            '<span style="background:#fee2e2;color:#991b1b;padding:0.25rem 0.75rem;'
+            'border-radius:999px;font-weight:700;">AUTO-HOLD</span>'
+        )
+    if status_text == "pending":
+        return (
+            '<span style="background:#fef3c7;color:#92400e;padding:0.25rem 0.75rem;'
+            'border-radius:999px;font-weight:700;">PENDING</span>'
+        )
+    if status_text in {"approved", "applied"}:
+        label = "APPROVED" if status_text == "approved" else "APPLIED"
+        return (
+            f'<span style="background:#dcfce7;color:#166534;padding:0.25rem 0.75rem;'
+            f'border-radius:999px;font-weight:700;">{label}</span>'
+        )
+    label = status_text.upper() or "UNKNOWN"
+    return (
+        f'<span style="background:#e5e7eb;color:#111827;padding:0.25rem 0.75rem;'
+        f'border-radius:999px;font-weight:700;">{escape(label)}</span>'
+    )
 
 
 def _near_limit_tag(current: object, limit: object) -> str:
@@ -374,6 +403,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     active_alerts = context.get("active_alerts", []) or []
     recent_audit = context.get("recent_audit", []) or []
     trend = context.get("pnl_trend", {}) or {}
+
+    recent_ops_incidents = context.get("recent_ops_incidents", []) or []
 
     risk_advice = context.get("risk_advice", {}) or {}
 
@@ -444,6 +475,26 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                     kind=_fmt(entry.get("kind")),
                     text=text_html,
                     extra=extra_html,
+                )
+            )
+    parts.append("</tbody></table>")
+
+    parts.append("<h2>Recent Ops / Incidents</h2>")
+    parts.append(
+        "<table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Status</th><th>Reason</th></tr></thead><tbody>"
+    )
+    if not recent_ops_incidents:
+        parts.append("<tr><td colspan=\"5\">No operational events logged</td></tr>")
+    else:
+        for entry in recent_ops_incidents:
+            status_badge = _ops_status_badge(entry.get("status"), entry.get("action"))
+            parts.append(
+                "<tr><td>{ts}</td><td>{actor}</td><td>{action}</td><td>{status}</td><td>{reason}</td></tr>".format(
+                    ts=_fmt(entry.get("timestamp")),
+                    actor=_fmt(entry.get("actor")),
+                    action=_fmt(entry.get("action")),
+                    status=status_badge,
+                    reason=_fmt(entry.get("reason")),
                 )
             )
     parts.append("</tbody></table>")

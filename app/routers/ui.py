@@ -37,6 +37,7 @@ from ..services.runtime import (
     set_open_orders,
 )
 from ..services import portfolio, risk, risk_guard
+from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
 from ..security import require_token
 from positions import list_positions
@@ -194,6 +195,15 @@ async def pnl_history(request: Request, limit: int = Query(50, ge=1, le=500)) ->
     require_token(request)
     snapshots = list_recent_snapshots(limit=limit)
     return {"snapshots": snapshots, "count": len(snapshots)}
+
+
+@router.get("/audit_log")
+async def audit_log(request: Request, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+    """Return the recent incident timeline for operator export."""
+
+    require_token(request)
+    events = list_audit_log_events(limit=limit)
+    return {"events": events, "count": len(events)}
 
 
 @router.get("/risk_advice")
