@@ -8,7 +8,8 @@
 - **Аудит трейдов и операций**: Хедж-журнал `hedge_log`, истории PnL и оповещений, а также runtime snapshot (`runtime_state_store`) сохраняют подробные записи для расследований. 【F:app/services/hedge_log.py†L1-L64】【F:services/daily_reporter.py†L1-L80】【F:app/runtime_state_store.py†L1-L60】
 - **Персистентность partial hedges и reconciler**: Позиции и ноги хеджа пишутся в стораже, а reconciler фиксирует расхождения и блокирует новые сделки до ручного вмешательства. 【F:positions/__init__.py†L1-L120】【F:services/reconciler.py†L1-L140】
 - **Runtime state store с безопасным рестартом**: Снапшоты runtime читаются/пишутся в `data/runtime_state.json`, что позволяет возобновить работу после рестарта без потери статуса. 【F:app/runtime_state_store.py†L1-L60】【F:app/services/runtime.py†L215-L364】
-- **Операторская панель `/ui/dashboard` и API**: HTML-дэшборд и JSON endpoints дают доступ к статусу, формам HOLD/RESUME/kill и метрикам. 【F:app/routers/dashboard.py†L1-L98】【F:app/services/operator_dashboard.py†L760-L1094】
+- **Операторская панель `/ui/dashboard` и API**: HTML-дэшборд и JSON endpoints дают доступ к статусу, формам HOLD/RESUME/kill и метрикам. 【F:app/routers/dashboard.py†L1-L120】【F:app/services/operator_dashboard.py†L520-L735】
+- **RBAC для операторов**: токены в `SecretsStore` содержат роль (viewer/operator), критические действия (HOLD / RESUME / KILL / raise-limits) доступны только оператору и логируются в `audit_log`, а HTML-дэшборд показывает имя и роль и скрывает опасные элементы от viewer. Это закрывает часть секьюрити-требований spec_archive по операционной сегрегации ролей. 【F:app/routers/dashboard.py†L1-L140】【F:app/services/operator_dashboard.py†L520-L735】
 - **Healthz и build metadata**: `/healthz` возвращает `{"ok": true}`, а статус и UI показывают `build_version`, что подтверждает готовность сервисов. 【F:app/main.py†L86-L128】【F:app/services/status.py†L83-L182】
 
 ## [missing] Нереализованные требования из spec_archive
