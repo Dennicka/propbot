@@ -13,6 +13,7 @@ from ..runtime_state_store import (
     load_runtime_payload as _store_load_runtime_payload,
     write_runtime_payload as _store_write_runtime_payload,
 )
+from . import approvals_store
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
 from .marketdata import MarketDataAggregator
 
@@ -112,6 +113,11 @@ def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+CRITICAL_ACTION_RESUME = "resume"
+CRITICAL_ACTION_RAISE_LIMIT = "raise_limit"
+CRITICAL_ACTION_EXIT_DRY_RUN = "exit_dry_run"
 
 
 @dataclass
@@ -348,6 +354,7 @@ class ResumeRequestState:
     reason: str
     requested_by: str | None = None
     requested_ts: str = field(default_factory=_ts)
+    request_id: str | None = None
     approved_ts: str | None = None
     approved_by: str | None = None
 
@@ -357,6 +364,7 @@ class ResumeRequestState:
 
     def as_dict(self) -> Dict[str, object | None]:
         return {
+            "id": self.request_id,
             "reason": self.reason,
             "requested_at": self.requested_ts,
             "requested_by": self.requested_by,
@@ -690,34 +698,255 @@ def get_loop_config() -> LoopConfigState:
 
 
 def record_resume_request(reason: str, *, requested_by: str | None = None) -> Dict[str, object]:
+    cleaned_reason = str(reason)
+    with _STATE_LOCK:
+        existing = _STATE.safety.resume_request
+        if existing and existing.approved_ts is None:
+            return existing.as_dict()
+    record = approvals_store.create_request(
+        CRITICAL_ACTION_RESUME,
+        requested_by=requested_by,
+        parameters={"reason": cleaned_reason},
+    )
     with _STATE_LOCK:
         safety = _STATE.safety
-        safety.resume_request = ResumeRequestState(reason=str(reason), requested_by=requested_by)
+        resume_state = ResumeRequestState(reason=cleaned_reason, requested_by=requested_by)
+        resume_state.request_id = str(record.get("id"))
+        requested_ts = record.get("requested_ts")
+        if requested_ts:
+            resume_state.requested_ts = str(requested_ts)
+        safety.resume_request = resume_state
         snapshot = safety.as_dict()
     _persist_safety_snapshot(snapshot)
     resume_snapshot = snapshot.get("resume_request")
     _emit_ops_alert(
         "resume_requested",
-        f"Resume requested: {reason}",
-        {"requested_by": requested_by or "system"},
+        "Resume request pending approval",
+        {
+            "requested_by": requested_by or "system",
+            "reason": cleaned_reason,
+            "request_id": record.get("id"),
+        },
     )
     return dict(resume_snapshot) if isinstance(resume_snapshot, Mapping) else {}
 
 
-def approve_resume(actor: str | None = None) -> Dict[str, object]:
+def approve_resume(
+    request_id: str | None = None,
+    *,
+    actor: str | None = None,
+) -> Dict[str, object]:
     with _STATE_LOCK:
         safety = _STATE.safety
-        if safety.resume_request:
-            safety.resume_request.approve(actor=actor)
+        resume_state = safety.resume_request
+        if resume_state is None:
+            raise ValueError("resume_request_missing")
+        state_request_id = resume_state.request_id
+        if request_id and state_request_id and state_request_id != request_id:
+            raise ValueError("resume_request_mismatch")
+        target_request_id = request_id or state_request_id
+        reason = resume_state.reason
+    if not target_request_id:
+        raise ValueError("resume_request_id_missing")
+    try:
+        record = approvals_store.approve_request(target_request_id, actor=actor)
+    except KeyError as exc:  # pragma: no cover - defensive propagation
+        raise ValueError("resume_request_missing") from exc
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        resume_state = safety.resume_request
+        if resume_state:
+            resume_state.approve(actor=actor)
         cleared = safety.clear_hold()
         safety_snapshot = safety.as_dict()
     _persist_safety_snapshot(safety_snapshot)
     _emit_ops_alert(
         "resume_confirmed",
         "Resume approval processed",
-        {"actor": actor or "system", "hold_cleared": cleared},
+        {
+            "actor": actor or "system",
+            "hold_cleared": cleared,
+            "request_id": record.get("id"),
+            "reason": reason,
+        },
     )
-    return {"hold_cleared": cleared, "safety": safety_snapshot}
+    return {"hold_cleared": cleared, "safety": safety_snapshot, "request": record}
+
+
+def _normalise_risk_request(
+    limit: str,
+    scope: str | None,
+    value: object,
+) -> Tuple[str, str | None, float | int]:
+    limit_key = str(limit or "").strip().lower()
+    if not limit_key:
+        raise ValueError("risk_limit_required")
+    if value is None:
+        raise ValueError("risk_limit_value_required")
+    if limit_key == "max_position_usdt":
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("risk_limit_invalid_value") from exc
+        if numeric_value <= 0:
+            raise ValueError("risk_limit_invalid_value")
+        normalised_scope = str(scope or "__default__").strip().upper() or "__DEFAULT__"
+        return limit_key, normalised_scope, numeric_value
+    if limit_key == "max_open_orders":
+        try:
+            numeric_value = int(round(float(value)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("risk_limit_invalid_value") from exc
+        if numeric_value <= 0:
+            raise ValueError("risk_limit_invalid_value")
+        normalised_scope = str(scope or "__default__").strip().lower() or "__default__"
+        return limit_key, normalised_scope, numeric_value
+    if limit_key == "max_daily_loss_usdt":
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("risk_limit_invalid_value") from exc
+        if numeric_value <= 0:
+            raise ValueError("risk_limit_invalid_value")
+        return limit_key, None, numeric_value
+    raise ValueError("risk_limit_unsupported")
+
+
+def _apply_risk_limit_change(limit: str, scope: str | None, value: object) -> Dict[str, object]:
+    limit_key, normalised_scope, numeric_value = _normalise_risk_request(limit, scope, value)
+    with _STATE_LOCK:
+        risk_limits = _STATE.risk.limits
+        if limit_key == "max_position_usdt":
+            existing = risk_limits.max_position_usdt.get(normalised_scope)
+            if existing is not None and numeric_value < existing:
+                raise ValueError("risk_limit_must_increase")
+            risk_limits.max_position_usdt[normalised_scope] = float(numeric_value)
+        elif limit_key == "max_open_orders":
+            existing = risk_limits.max_open_orders.get(normalised_scope)
+            if existing is not None and numeric_value < existing:
+                raise ValueError("risk_limit_must_increase")
+            risk_limits.max_open_orders[normalised_scope] = int(numeric_value)
+        else:
+            existing = risk_limits.max_daily_loss_usdt
+            if existing is not None and numeric_value < existing:
+                raise ValueError("risk_limit_must_increase")
+            risk_limits.max_daily_loss_usdt = float(numeric_value)
+        snapshot = risk_limits.as_dict()
+    _persist_runtime_payload({"risk_limits": snapshot})
+    return {
+        "limit": limit_key,
+        "scope": normalised_scope,
+        "value": numeric_value,
+        "risk_limits": snapshot,
+    }
+
+
+def request_risk_limit_change(
+    limit: str,
+    scope: str | None,
+    new_value: object,
+    *,
+    reason: str,
+    requested_by: str | None = None,
+) -> Dict[str, object]:
+    cleaned_reason = str(reason or "").strip()
+    if not cleaned_reason:
+        raise ValueError("risk_limit_reason_required")
+    limit_key, normalised_scope, numeric_value = _normalise_risk_request(limit, scope, new_value)
+    record = approvals_store.create_request(
+        CRITICAL_ACTION_RAISE_LIMIT,
+        requested_by=requested_by,
+        parameters={
+            "limit": limit_key,
+            "scope": normalised_scope,
+            "value": numeric_value,
+            "reason": cleaned_reason,
+        },
+    )
+    _emit_ops_alert(
+        "risk_limit_requested",
+        "Risk limit raise pending approval",
+        {
+            "limit": limit_key,
+            "scope": normalised_scope,
+            "value": numeric_value,
+            "requested_by": requested_by or "system",
+            "reason": cleaned_reason,
+            "request_id": record.get("id"),
+        },
+    )
+    return record
+
+
+def approve_risk_limit_change(request_id: str, *, actor: str | None = None) -> Dict[str, object]:
+    record = approvals_store.approve_request(request_id, actor=actor)
+    parameters = record.get("parameters") if isinstance(record, Mapping) else None
+    if not isinstance(parameters, Mapping):
+        raise ValueError("risk_limit_parameters_missing")
+    limit = parameters.get("limit")
+    scope = parameters.get("scope")
+    value = parameters.get("value")
+    result = _apply_risk_limit_change(limit, scope, value)
+    _emit_ops_alert(
+        "risk_limit_approved",
+        "Risk limit change approved",
+        {
+            "actor": actor or "system",
+            "limit": result["limit"],
+            "scope": result.get("scope"),
+            "value": result["value"],
+            "request_id": record.get("id"),
+            "reason": parameters.get("reason"),
+        },
+    )
+    return {"request": record, "result": result}
+
+
+def _set_dry_run_flags(*, dry_run: bool, dry_run_mode: bool) -> Dict[str, object]:
+    with _STATE_LOCK:
+        control = _STATE.control
+        control.dry_run = bool(dry_run)
+        control.dry_run_mode = bool(dry_run_mode)
+        snapshot = asdict(control)
+    _persist_control_snapshot(snapshot)
+    return snapshot
+
+
+def request_exit_dry_run(reason: str, *, requested_by: str | None = None) -> Dict[str, object]:
+    cleaned_reason = str(reason or "").strip()
+    if not cleaned_reason:
+        raise ValueError("exit_dry_run_reason_required")
+    record = approvals_store.create_request(
+        CRITICAL_ACTION_EXIT_DRY_RUN,
+        requested_by=requested_by,
+        parameters={"reason": cleaned_reason},
+    )
+    _emit_ops_alert(
+        "exit_dry_run_requested",
+        "Exit DRY_RUN_MODE pending approval",
+        {
+            "requested_by": requested_by or "system",
+            "reason": cleaned_reason,
+            "request_id": record.get("id"),
+        },
+    )
+    return record
+
+
+def approve_exit_dry_run(request_id: str, *, actor: str | None = None) -> Dict[str, object]:
+    record = approvals_store.approve_request(request_id, actor=actor)
+    snapshot = _set_dry_run_flags(dry_run=False, dry_run_mode=False)
+    parameters = record.get("parameters") if isinstance(record, Mapping) else {}
+    _emit_ops_alert(
+        "exit_dry_run_approved",
+        "DRY_RUN_MODE disabled after approval",
+        {
+            "actor": actor or "system",
+            "request_id": record.get("id"),
+            "reason": parameters.get("reason"),
+        },
+    )
+    return {"control": snapshot, "request": record}
 
 
 def _register_action_counter(
@@ -961,6 +1190,7 @@ def reset_for_tests() -> None:
         last_success_ts=None,
         consecutive_failures=0,
     )
+    approvals_store.reset_for_tests()
 
 
 def control_as_dict() -> Dict[str, object]:
@@ -1289,8 +1519,8 @@ def _load_persisted_state(state: RuntimeState) -> None:
         except (TypeError, ValueError):
             auto_state.consecutive_failures = 0
     safety_payload = payload.get("safety")
+    safety = state.safety
     if isinstance(safety_payload, Mapping):
-        safety = state.safety
         safety.hold_active = bool(safety_payload.get("hold_active", False))
         safety.hold_reason = safety_payload.get("hold_reason") or None
         safety.hold_source = safety_payload.get("hold_source") or None
@@ -1341,6 +1571,9 @@ def _load_persisted_state(state: RuntimeState) -> None:
                 requested_at = resume_payload.get("requested_at") or resume_payload.get("requested_ts")
                 if requested_at:
                     request.requested_ts = str(requested_at)
+                request_id = resume_payload.get("id") or resume_payload.get("request_id")
+                if request_id:
+                    request.request_id = str(request_id)
                 approved_at = resume_payload.get("approved_at")
                 if approved_at:
                     request.approved_ts = str(approved_at)
@@ -1348,10 +1581,40 @@ def _load_persisted_state(state: RuntimeState) -> None:
                 if approved_by:
                     request.approved_by = str(approved_by)
                 safety.resume_request = request
-            else:
-                safety.resume_request = None
         else:
             safety.resume_request = None
+    else:
+        safety.resume_request = None
+
+    risk_limits_payload = payload.get("risk_limits")
+    if isinstance(risk_limits_payload, Mapping):
+        limits = state.risk.limits
+        positions_payload = risk_limits_payload.get("max_position_usdt")
+        if isinstance(positions_payload, Mapping):
+            updated_positions: Dict[str, float] = {}
+            for symbol, value in positions_payload.items():
+                try:
+                    updated_positions[str(symbol).upper()] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            if updated_positions:
+                limits.max_position_usdt = updated_positions
+        open_orders_payload = risk_limits_payload.get("max_open_orders")
+        if isinstance(open_orders_payload, Mapping):
+            updated_orders: Dict[str, int] = {}
+            for venue, value in open_orders_payload.items():
+                try:
+                    updated_orders[str(venue).lower()] = int(round(float(value)))
+                except (TypeError, ValueError):
+                    continue
+            if updated_orders:
+                limits.max_open_orders = updated_orders
+        daily_loss_value = risk_limits_payload.get("max_daily_loss_usdt")
+        if daily_loss_value is not None:
+            try:
+                limits.max_daily_loss_usdt = float(daily_loss_value)
+            except (TypeError, ValueError):
+                pass
 
 
 def _enforce_safe_start(state: RuntimeState) -> None:

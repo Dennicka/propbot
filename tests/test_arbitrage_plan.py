@@ -8,6 +8,7 @@ def test_build_plan_uses_market_aggregator():
     state.control.min_spread_bps = 0.5
     state.control.taker_fee_bps_binance = 0
     state.control.taker_fee_bps_okx = 0
+    state.risk.limits.max_position_usdt["BTCUSDT"] = 1_000.0
     aggregator = get_market_data()
     aggregator.update_from_ws(venue="binance-um", symbol="BTCUSDT", bid=20_000.0, ask=20_001.0)
     aggregator.update_from_ws(venue="okx-perp", symbol="BTCUSDT", bid=20_040.0, ask=20_041.0)

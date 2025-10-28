@@ -1,8 +1,10 @@
 import json
 
+import json
+
 import pytest
 
-from app.services import runtime
+from app.services import runtime, approvals_store
 from app.services.runtime import (
     HoldActiveError,
     is_hold_active,
@@ -48,17 +50,57 @@ def test_resume_request_and_confirm_flow(monkeypatch):
     runtime.engage_safety_hold("unit_test_hold", source="pytest")
 
     request = runtime.record_resume_request("ready_to_resume", requested_by="alice")
+    assert request["id"]
     assert request["reason"] == "ready_to_resume"
     assert request["requested_by"] == "alice"
     assert request["pending"] is True
+    pending = approvals_store.get_request(request["id"])
+    assert pending is not None
+    assert pending["status"] == "pending"
 
-    result = runtime.approve_resume(actor="bob")
+    result = runtime.approve_resume(request_id=request["id"], actor="bob")
     assert result["hold_cleared"] is True
     safety = result["safety"]
     assert safety["hold_active"] is False
     resume_info = safety["resume_request"]
     assert resume_info["pending"] is False
     assert resume_info["approved_by"] == "bob"
+    approved = approvals_store.get_request(request["id"])
+    assert approved is not None
+    assert approved["status"] == "approved"
+
+
+def test_risk_limit_raise_request_and_approval():
+    record = runtime.request_risk_limit_change(
+        "max_position_usdt",
+        "BTCUSDT",
+        250.0,
+        reason="increase coverage",
+        requested_by="pytest",
+    )
+    assert record["status"] == "pending"
+    result = runtime.approve_risk_limit_change(record["id"], actor="reviewer")
+    limits = runtime.get_state().risk.limits.max_position_usdt
+    assert pytest.approx(limits["BTCUSDT"]) == 250.0
+    approved = approvals_store.get_request(record["id"])
+    assert approved is not None
+    assert approved["status"] == "approved"
+    assert result["result"]["limit"] == "max_position_usdt"
+
+
+def test_exit_dry_run_flow():
+    control = runtime.get_state().control
+    control.dry_run = True
+    control.dry_run_mode = True
+    record = runtime.request_exit_dry_run("go_live", requested_by="pytest")
+    assert record["status"] == "pending"
+    runtime.approve_exit_dry_run(record["id"], actor="reviewer")
+    control_state = runtime.get_state().control
+    assert control_state.dry_run is False
+    assert control_state.dry_run_mode is False
+    approved = approvals_store.get_request(record["id"])
+    assert approved is not None
+    assert approved["status"] == "approved"
 
 
 def test_order_counter_triggers_hold(monkeypatch):
