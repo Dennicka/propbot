@@ -120,6 +120,27 @@ def test_runaway_breaker_triggers_hold(client, monkeypatch):
     monkeypatch.setattr("services.cross_exchange_arb.check_spread", fake_spread)
     monkeypatch.setattr("services.cross_exchange_arb.is_dry_run_mode", lambda: True)
 
+    def fake_choose_venue(side: str, symbol: str, size: float) -> dict:
+        if side.lower() in {"long", "buy"}:
+            price = 100.0
+            venue = "binance"
+        else:
+            price = 102.5
+            venue = "okx"
+        return {
+            "venue": venue,
+            "expected_fill_px": price,
+            "fee_bps": 2,
+            "liquidity_ok": True,
+            "size": size,
+            "expected_notional": size * price,
+        }
+
+    monkeypatch.setattr("services.cross_exchange_arb.choose_venue", fake_choose_venue)
+    monkeypatch.setattr(
+        "services.cross_exchange_arb._record_execution_stat", lambda **_: None
+    )
+
     payload = {
         "symbol": "ETHUSDT",
         "min_spread": 1.0,

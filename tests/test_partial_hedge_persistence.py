@@ -56,6 +56,25 @@ def test_partial_position_persisted_after_hold(monkeypatch, tmp_path):
     monkeypatch.setattr(cross_mod, "is_dry_run_mode", lambda: False)
     monkeypatch.setattr(cross_mod, "append_entry", lambda entry: entry)
 
+    def _fake_choose_venue(side: str, symbol: str, size: float) -> dict:
+        if side.lower() in {"long", "buy"}:
+            price = 100.0
+            venue = "binance"
+        else:
+            price = 105.0
+            venue = "okx"
+        return {
+            "venue": venue,
+            "expected_fill_px": price,
+            "fee_bps": 2,
+            "liquidity_ok": True,
+            "size": size,
+            "expected_notional": size * price,
+        }
+
+    monkeypatch.setattr(cross_mod, "choose_venue", _fake_choose_venue)
+    monkeypatch.setattr(cross_mod, "_record_execution_stat", lambda **_: None)
+
     def _fake_register_order_attempt(*_, source: str, **__):
         if source == "cross_exchange_short":
             raise runtime_mod.HoldActiveError("hold_active")

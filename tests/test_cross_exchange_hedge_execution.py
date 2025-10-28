@@ -46,6 +46,25 @@ class StubClient:
 def _reset_runtime(monkeypatch):
     monkeypatch.setattr(module, "register_order_attempt", lambda **_: None)
     monkeypatch.setattr(module, "append_entry", lambda entry: entry)
+    monkeypatch.setattr(module, "_record_execution_stat", lambda **kwargs: None)
+
+    def fake_choose_venue(side: str, symbol: str, size: float) -> dict:
+        if side.lower() in {"long", "buy"}:
+            price = 100.0
+            venue = "binance"
+        else:
+            price = 105.0
+            venue = "okx"
+        return {
+            "venue": venue,
+            "expected_fill_px": price,
+            "fee_bps": 2,
+            "liquidity_ok": True,
+            "size": size,
+            "expected_notional": size * price,
+        }
+
+    monkeypatch.setattr(module, "choose_venue", fake_choose_venue)
 
 
 def test_execute_hedge_success(monkeypatch):

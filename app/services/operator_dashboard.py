@@ -23,6 +23,9 @@ from .positions_view import build_positions_snapshot
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
+from services.execution_stats_store import (
+    list_recent as list_recent_execution_stats,
+)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -94,6 +97,37 @@ def _trend_summary(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
         "open_positions": _coerce_int(latest.get("open_positions")),
         "partial_positions": _coerce_int(latest.get("partial_positions")),
         "simulated_positions": _coerce_int(simulated_payload.get("positions")),
+    }
+
+
+def _execution_quality_summary(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not history:
+        return {"history": [], "success_rate": None, "per_venue": {}}
+
+    records = [dict(entry) for entry in history if isinstance(entry, Mapping)]
+    total = len(records)
+    successes = sum(1 for entry in records if bool(entry.get("success")))
+    success_rate = successes / total if total else None
+
+    per_venue: Dict[str, Dict[str, float]] = {}
+    for entry in records:
+        venue = str(entry.get("venue") or "unknown").lower()
+        stats = per_venue.setdefault(venue, {"total": 0, "failures": 0})
+        stats["total"] += 1
+        if not bool(entry.get("success")):
+            stats["failures"] += 1
+    for venue, stats in per_venue.items():
+        total_count = stats.get("total", 0) or 0
+        failures = stats.get("failures", 0) or 0
+        if total_count:
+            stats["failure_rate"] = failures / total_count
+        else:
+            stats["failure_rate"] = None
+
+    return {
+        "history": records[::-1],  # newest first for rendering
+        "success_rate": success_rate,
+        "per_venue": per_venue,
     }
 
 
@@ -243,6 +277,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     pnl_history = list_recent_snapshots(limit=5)
     pnl_trend = _trend_summary(pnl_history)
+    execution_history = list_recent_execution_stats(limit=15)
+    execution_quality = _execution_quality_summary(execution_history)
 
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
@@ -291,6 +327,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
         "risk_advice": risk_advice,
+        "execution_quality": execution_quality,
     }
 
 
@@ -409,6 +446,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     risk_advice = context.get("risk_advice", {}) or {}
 
     pnl_history = context.get("pnl_history", []) or []
+    execution_quality = context.get("execution_quality", {}) or {}
+    execution_history = execution_quality.get("history") or []
+    success_rate = execution_quality.get("success_rate")
+    per_venue_quality = execution_quality.get("per_venue") or {}
 
     parts: list[str] = []
     parts.append(
@@ -666,6 +707,71 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         f"<tr><th>Consecutive Failures</th><td>{_fmt(auto.get('consecutive_failures'))}</td></tr>"
     )
     parts.append("</tbody></table>")
+
+    parts.append("<h2>Execution Quality</h2>")
+    if not execution_history:
+        parts.append("<p>No hedge execution attempts recorded yet.</p>")
+    else:
+        sample_size = len(execution_history)
+        if success_rate is None:
+            rate_text = "n/a"
+        else:
+            rate_text = f"{success_rate * 100:.1f}%"
+        parts.append(
+            f"<p>Success rate (last {sample_size} legs): <strong>{rate_text}</strong></p>"
+        )
+        parts.append(
+            "<table><thead><tr><th>Timestamp</th><th>Venue</th><th>Side</th>"
+            "<th>Planned Px</th><th>Fill Px</th><th>Slippage (bps)</th><th>Status</th>"
+            "</tr></thead><tbody>"
+        )
+        for entry in execution_history:
+            success = bool(entry.get("success"))
+            row_style = ' style="background:#fee2e2;"' if not success else ""
+            slippage = entry.get("slippage_bps")
+            if isinstance(slippage, (int, float)):
+                slippage_text = f"{slippage:+.2f}"
+            else:
+                slippage_text = "n/a"
+            parts.append(
+                "<tr{row_style}><td>{ts}</td><td>{venue}</td><td>{side}</td>"
+                "<td>{planned}</td><td>{filled}</td><td>{slippage}</td><td>{status}</td></tr>".format(
+                    row_style=row_style,
+                    ts=_fmt(entry.get("timestamp")),
+                    venue=_fmt(entry.get("venue")),
+                    side=_fmt(entry.get("side")),
+                    planned=_fmt(entry.get("planned_px")),
+                    filled=_fmt(entry.get("real_fill_px")),
+                    slippage=_fmt(slippage_text),
+                    status=_status_span(success),
+                )
+            )
+        parts.append("</tbody></table>")
+        parts.append("<h3>Venue Breakdown</h3>")
+        parts.append(
+            "<table><thead><tr><th>Venue</th><th>Total</th><th>Failures</th><th>Failure Rate</th></tr></thead><tbody>"
+        )
+        if per_venue_quality:
+            for venue, stats in sorted(per_venue_quality.items()):
+                failure_rate = stats.get("failure_rate")
+                highlight = bool(failure_rate is not None and failure_rate >= 0.3)
+                row_style = ' style="background:#fee2e2;"' if highlight else ""
+                if failure_rate is None:
+                    failure_text = "n/a"
+                else:
+                    failure_text = f"{failure_rate * 100:.1f}%"
+                parts.append(
+                    "<tr{row_style}><td>{venue}</td><td>{total}</td><td>{failures}</td><td>{rate}</td></tr>".format(
+                        row_style=row_style,
+                        venue=_fmt(venue),
+                        total=_fmt(stats.get("total")),
+                        failures=_fmt(stats.get("failures")),
+                        rate=_fmt(failure_text),
+                    )
+                )
+        else:
+            parts.append("<tr><td colspan=\"4\">No venues recorded.</td></tr>")
+        parts.append("</tbody></table>")
 
     parts.append("<h2>Risk Limits</h2><table><thead><tr><th>Limit</th><th>Configured Value</th></tr></thead><tbody>")
     for name, value in sorted(risk_limits_env.items()):

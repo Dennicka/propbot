@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Mapping, Tuple
+from typing import Any, Dict, Mapping, Tuple
 
 from app.services.hedge_log import append_entry
 from app.services.runtime import (
@@ -15,6 +15,8 @@ from app.services.runtime import (
 )
 from positions import create_position
 from exchanges import BinanceFuturesClient, OKXFuturesClient
+from .execution_router import choose_venue
+from .execution_stats_store import append_entry as store_execution_stat
 
 
 def _ts() -> str:
@@ -147,6 +149,89 @@ def _normalise_order(
         simulated=False,
         raw=payload,
     )
+
+
+def _leg_successful(leg: Dict[str, Any] | None) -> bool:
+    if not leg:
+        return False
+    status = str(leg.get("status") or "").lower()
+    return status in {"filled", "executed", "success", "simulated"}
+
+
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_leg_price(leg: Dict[str, Any] | None) -> float:
+    if not leg:
+        return 0.0
+    for key in ("avg_price", "price", "entry_price"):
+        if key in leg:
+            value = leg.get(key)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+    return 0.0
+
+
+def _record_execution_stat(
+    *,
+    symbol: str,
+    side: str,
+    plan: Mapping[str, Any] | None,
+    leg: Dict[str, Any] | None,
+    success: bool,
+    dry_run: bool,
+    failure_reason: str | None = None,
+) -> None:
+    if not isinstance(plan, Mapping):
+        return
+    try:
+        planned_px = _coerce_float(plan.get("expected_fill_px"))
+        planned_size = _coerce_float(plan.get("size"))
+        expected_notional = _coerce_float(plan.get("expected_notional"))
+        if planned_size <= 0.0 and planned_px > 0.0 and expected_notional > 0.0:
+            planned_size = expected_notional / planned_px
+    except Exception:  # pragma: no cover - defensive
+        planned_px = 0.0
+        planned_size = 0.0
+        expected_notional = 0.0
+    executed_px = _extract_leg_price(leg)
+    actual_size = planned_size
+    if leg:
+        filled_qty = _coerce_float(leg.get("filled_qty"))
+        base_size = _coerce_float(leg.get("base_size"))
+        actual_size = filled_qty or base_size or actual_size
+    slippage_bps = None
+    if planned_px > 0.0 and executed_px > 0.0:
+        side_lower = str(side or "").lower()
+        if side_lower in {"buy", "long"}:
+            delta = executed_px - planned_px
+        else:
+            delta = planned_px - executed_px
+        slippage_bps = (delta / planned_px) * 10_000.0
+    record = {
+        "timestamp": _ts(),
+        "symbol": str(symbol).upper(),
+        "venue": str(plan.get("venue") or ""),
+        "side": str(side or "").lower(),
+        "planned_px": planned_px or None,
+        "real_fill_px": executed_px or None,
+        "size": actual_size or 0.0,
+        "success": bool(success),
+        "dry_run": bool(dry_run),
+        "slippage_bps": slippage_bps,
+        "failure_reason": failure_reason,
+    }
+    try:
+        store_execution_stat(record)
+    except Exception:  # pragma: no cover - store must not break hedge flow
+        pass
 
 
 def check_spread(symbol: str) -> dict:
@@ -351,18 +436,74 @@ def execute_hedged_trade(
             "details": spread_info,
         }
 
-    cheap_exchange = spread_info["cheap"]
-    expensive_exchange = spread_info["expensive"]
+    notional = float(notion_usdt)
+    leverage_value = float(leverage)
+    cheap_price = _coerce_float(spread_info.get("cheap_mark"))
+    expensive_price = _coerce_float(spread_info.get("expensive_mark"))
+    long_size = notional / cheap_price if cheap_price > 0 else 0.0
+    short_size = notional / expensive_price if expensive_price > 0 else 0.0
+
+    long_plan = dict(choose_venue("long", spread_info["symbol"], long_size) or {})
+    short_plan = dict(choose_venue("short", spread_info["symbol"], short_size) or {})
+
+    dry_run_mode = is_dry_run_mode()
+
+    def _record_and_return(reason: str) -> dict:
+        _record_execution_stat(
+            symbol=spread_info["symbol"],
+            side="long",
+            plan=long_plan,
+            leg=None,
+            success=False,
+            dry_run=dry_run_mode,
+            failure_reason=reason,
+        )
+        _record_execution_stat(
+            symbol=spread_info["symbol"],
+            side="short",
+            plan=short_plan,
+            leg=None,
+            success=False,
+            dry_run=dry_run_mode,
+            failure_reason=reason,
+        )
+        return {
+            "symbol": spread_info["symbol"],
+            "min_spread": float(min_spread),
+            "spread": spread_value,
+            "success": False,
+            "reason": reason,
+            "details": spread_info,
+            "long_plan": long_plan,
+            "short_plan": short_plan,
+        }
+
+    if not long_plan or not short_plan:
+        return _record_and_return("routing_unavailable")
+
+    if _coerce_float(long_plan.get("expected_fill_px")) <= 0.0 or _coerce_float(
+        short_plan.get("expected_fill_px")
+    ) <= 0.0:
+        return _record_and_return("quote_unavailable")
+
+    if not bool(long_plan.get("liquidity_ok", True)) or not bool(
+        short_plan.get("liquidity_ok", True)
+    ):
+        return _record_and_return("insufficient_liquidity")
+
+    cheap_exchange = str(long_plan.get("venue") or spread_info["cheap"])
+    expensive_exchange = str(short_plan.get("venue") or spread_info["expensive"])
 
     long_client = _client_for(cheap_exchange)
     short_client = _client_for(expensive_exchange)
 
-    dry_run_mode = is_dry_run_mode()
-    notional = float(notion_usdt)
-    leverage_value = float(leverage)
+    long_price_hint = _coerce_float(long_plan.get("expected_fill_px")) or cheap_price
+    short_price_hint = _coerce_float(short_plan.get("expected_fill_px")) or expensive_price
 
     long_leg = None
     short_leg = None
+    error_reason: str | None = None
+    result: Dict[str, Any] | None = None
 
     try:
         register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
@@ -373,7 +514,7 @@ def execute_hedged_trade(
                 side="long",
                 notional_usdt=notional,
                 leverage=leverage_value,
-                price=float(spread_info["cheap_mark"]),
+                price=long_price_hint,
             )
         else:
             long_order = long_client.place_order(
@@ -389,7 +530,7 @@ def execute_hedged_trade(
                 side="long",
                 notional_usdt=notional,
                 leverage=leverage_value,
-                fallback_price=float(spread_info["cheap_mark"]),
+                fallback_price=long_price_hint,
             )
 
         register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
@@ -400,7 +541,7 @@ def execute_hedged_trade(
                 side="short",
                 notional_usdt=notional,
                 leverage=leverage_value,
-                price=float(spread_info["expensive_mark"]),
+                price=short_price_hint,
             )
         else:
             short_order = short_client.place_order(
@@ -416,9 +557,29 @@ def execute_hedged_trade(
                 side="short",
                 notional_usdt=notional,
                 leverage=leverage_value,
-                fallback_price=float(spread_info["expensive_mark"]),
+                fallback_price=short_price_hint,
             )
+        legs = [leg for leg in (long_leg, short_leg) if leg]
+        result = {
+            "symbol": spread_info["symbol"],
+            "min_spread": float(min_spread),
+            "spread": spread_value,
+            "spread_bps": float(spread_info.get("spread_bps", 0.0)),
+            "cheap_exchange": cheap_exchange,
+            "expensive_exchange": expensive_exchange,
+            "legs": legs,
+            "long_order": long_leg,
+            "short_order": short_leg,
+            "long_plan": long_plan,
+            "short_plan": short_plan,
+            "success": True,
+            "status": "simulated" if dry_run_mode else "executed",
+            "dry_run_mode": dry_run_mode,
+            "simulated": dry_run_mode,
+            "details": spread_info,
+        }
     except HoldActiveError as exc:
+        error_reason = exc.reason
         partial_record = None
         if not dry_run_mode and ((long_leg and not short_leg) or (short_leg and not long_leg)):
             partial_record = _persist_partial_position(
@@ -431,7 +592,7 @@ def execute_hedged_trade(
                 long_leg=long_leg,
                 short_leg=short_leg,
             )
-        return {
+        result = {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
             "spread": spread_value,
@@ -440,9 +601,12 @@ def execute_hedged_trade(
             "details": spread_info,
             "hold_active": True,
             "partial_position": partial_record,
+            "long_plan": long_plan,
+            "short_plan": short_plan,
         }
     except Exception as exc:
         reason = str(exc)
+        error_reason = reason
         partial = bool(long_leg and not short_leg and not dry_run_mode)
         if partial:
             _log_partial_failure(
@@ -466,7 +630,7 @@ def execute_hedged_trade(
                 long_leg=long_leg,
                 short_leg=short_leg,
             )
-        return {
+        result = {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
             "spread": spread_value,
@@ -477,23 +641,38 @@ def execute_hedged_trade(
             "short_leg": short_leg,
             "error": reason,
             "hold_engaged": partial,
+            "long_plan": long_plan,
+            "short_plan": short_plan,
         }
+    finally:
+        long_success = _leg_successful(long_leg)
+        short_success = _leg_successful(short_leg)
+        _record_execution_stat(
+            symbol=spread_info["symbol"],
+            side="long",
+            plan=long_plan,
+            leg=long_leg,
+            success=long_success,
+            dry_run=dry_run_mode,
+            failure_reason=None if long_success else error_reason,
+        )
+        _record_execution_stat(
+            symbol=spread_info["symbol"],
+            side="short",
+            plan=short_plan,
+            leg=short_leg,
+            success=short_success,
+            dry_run=dry_run_mode,
+            failure_reason=None if short_success else error_reason,
+        )
 
-    legs = [leg for leg in (long_leg, short_leg) if leg]
-    result = {
+    return result or {
         "symbol": spread_info["symbol"],
         "min_spread": float(min_spread),
         "spread": spread_value,
-        "spread_bps": float(spread_info.get("spread_bps", 0.0)),
-        "cheap_exchange": cheap_exchange,
-        "expensive_exchange": expensive_exchange,
-        "legs": legs,
-        "long_order": long_leg,
-        "short_order": short_leg,
-        "success": True,
-        "status": "simulated" if dry_run_mode else "executed",
-        "dry_run_mode": dry_run_mode,
-        "simulated": dry_run_mode,
+        "success": False,
+        "reason": error_reason or "execution_failed",
         "details": spread_info,
+        "long_plan": long_plan,
+        "short_plan": short_plan,
     }
-    return result

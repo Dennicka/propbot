@@ -226,6 +226,50 @@ def test_dashboard_proxy_routes(monkeypatch, client) -> None:
     assert is_hold_active()
 
 
+def test_dashboard_renders_execution_quality(monkeypatch, client) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("API_TOKEN", "quality-token")
+
+    sample_entries = [
+        {
+            "timestamp": "2024-05-01T00:00:00+00:00",
+            "venue": "binance",
+            "side": "long",
+            "planned_px": 100.0,
+            "real_fill_px": 100.3,
+            "slippage_bps": 3.0,
+            "success": False,
+        },
+        {
+            "timestamp": "2024-05-01T00:01:00+00:00",
+            "venue": "okx",
+            "side": "short",
+            "planned_px": 101.0,
+            "real_fill_px": 101.2,
+            "slippage_bps": -2.0,
+            "success": True,
+        },
+    ]
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.list_recent_execution_stats",
+        lambda limit=15: sample_entries,
+    )
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer quality-token"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Execution Quality" in html
+    assert "Success rate" in html
+    assert "Slippage (bps)" in html
+    assert "binance" in html.lower()
+    assert "okx" in html.lower()
+
+
 def test_dashboard_footer_contains_build_and_warning(monkeypatch, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "footer-token")
