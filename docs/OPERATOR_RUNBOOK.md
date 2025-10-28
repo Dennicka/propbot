@@ -16,6 +16,19 @@
   торговли без постоянного присутствия оператора ориентируйтесь на раздел
   `[missing]` GAP-отчёта как на чек-лист незакрытых задач. 【F:docs/GAP_REPORT.md†L27-L126】
 
+## Roles & dashboard
+
+- **viewer**: имеет доступ к `/ui/dashboard` после успешной аутентификации и
+  видит всю телеметрию — статус демонов (`healthz`), открытую и частичную
+  экспозицию, runtime flags (SAFE_MODE/HOLD/DRY_RUN/autopilot и причину HOLD),
+  pending approvals, build_version, последние алерты. Управляющие формы HOLD /
+  RESUME-request / KILL / raise-limits недоступны: элементы отображаются как
+  read-only и действия инициировать нельзя.
+- **operator**: помимо чтения статуса может инициировать HOLD,
+  RESUME-request, KILL, запрос повышения лимитов и подтверждать второй шаг
+  (approve) в двухоператорном флоу. Каждое такое действие попадает в
+  `audit_log` и отображается в блоках Recent Ops / Audit.
+
 ## Старт в продакшене
 
 ### Production bring-up checklist

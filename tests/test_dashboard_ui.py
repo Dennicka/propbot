@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from positions import create_position
-
 import asyncio
+import json
+
+from positions import create_position
 
 from app.services import approvals_store, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
@@ -18,9 +19,45 @@ def test_dashboard_requires_token(monkeypatch, client) -> None:
     assert response.status_code in {401, 403}
 
 
-def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
+def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:
+    secrets_payload = {
+        "operator_tokens": {
+            "alice": {"token": "AAA", "role": "operator"},
+            "bob": {"token": "BBB", "role": "viewer"},
+        },
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer BBB"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "READ ONLY: you cannot change HOLD/RESUME/KILL." in html
+    assert "role-badge role-viewer" in html
+    assert html.count("button type=\"submit\"") >= 3
+    assert "button type=\"submit\" disabled" in html
+
+
+def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "dashboard-token")
+
+    secrets_payload = {
+        "operator_tokens": {"alice": {"token": "dashboard-token", "role": "operator"}},
+        "approve_token": "approver",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
 
     runtime.engage_safety_hold("pytest", source="test")
     runtime.update_auto_hedge_state(
@@ -132,6 +169,10 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     html = response.text
     assert "Operator Dashboard" in html
     assert "Build Version" in html
+    assert "Operator:" in html
+    assert "Role:" in html
+    assert "role-badge role-operator" in html
+    assert "READ ONLY" not in html
     assert "HOLD Active" in html
     assert "Auto-Hedge" in html
     assert "ETHUSDT" in html
@@ -156,6 +197,7 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "form method=\"post\" action=\"/ui/dashboard/hold\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/resume\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/kill\"" in html
+    assert "button type=\"submit\" disabled" not in html
 
     assert "Risk &amp; PnL trend" in html
     assert "Unrealised PnL" in html

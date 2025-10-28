@@ -502,6 +502,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_attempt = autopilot.get("last_attempt_ts") or ""
     autopilot_armed = bool(autopilot.get("armed"))
 
+    operator_info = context.get("operator", {}) or {}
+    operator_name = operator_info.get("name") or "unknown"
+    operator_role_raw = str(operator_info.get("role") or "viewer").strip().lower()
+    operator_role = "operator" if operator_role_raw == "operator" else "viewer"
+    operator_role_label = operator_role.upper()
+    is_operator = operator_role == "operator"
+
     parts: list[str] = []
     parts.append(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
@@ -519,11 +526,31 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".flash{background:#fff3cd;border:1px solid #f1c232;color:#533f03;padding:0.75rem 1rem;margin-bottom:1.5rem;border-radius:4px;}"
         "footer{margin-top:3rem;font-size:0.8rem;color:#4b5563;text-align:center;}"
         ".footer-warning{color:#9a3412;font-weight:600;}"
+        ".operator-meta{background:#fff;padding:1rem 1.5rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;gap:2rem;align-items:center;flex-wrap:wrap;}"
+        ".operator-meta .label{color:#4b5563;font-weight:600;margin-right:0.5rem;}"
+        ".role-badge{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;text-transform:uppercase;}"
+        ".role-operator{background:#dcfce7;color:#166534;}"
+        ".role-viewer{background:#fee2e2;color:#991b1b;}"
+        ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        "button:disabled{background:#9ca3af;cursor:not-allowed;}"
+        "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
         "</style></head><body>"
     )
     parts.append(
         f"<h1>Operator Dashboard</h1><p>Build Version: <strong>{_fmt(context.get('build_version'))}</strong></p>"
     )
+
+    parts.append(
+        "<div class=\"operator-meta\">"
+        f"<div><span class=\"label\">Operator:</span> <strong>{_fmt(operator_name)}</strong></div>"
+        f"<div><span class=\"label\">Role:</span> <span class=\"role-badge role-{operator_role}\">{_fmt(operator_role_label)}</span></div>"
+        "</div>"
+    )
+
+    if not is_operator:
+        parts.append(
+            "<div class=\"read-only-banner\">READ ONLY: you cannot change HOLD/RESUME/KILL.</div>"
+        )
 
     for message in flash_messages:
         parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
@@ -1101,24 +1128,36 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         parts.append("<p>No pending approvals.</p>")
 
-    parts.append(
-        "<div class=\"controls\"><h2>Controls</h2>"
+    controls_disabled = not is_operator
+    disabled_attr = " disabled" if controls_disabled else ""
+    controls_parts = ["<div class=\"controls\"><h2>Controls</h2>"]
+    if controls_disabled:
+        controls_parts.append(
+            "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">Controls require operator role. Requests cannot be initiated from viewer accounts.</p>"
+        )
+    controls_parts.append(
         "<form method=\"post\" action=\"/ui/dashboard/hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
-        "<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\" />"
+        f"<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\"{disabled_attr} />"
         "<label for=\"hold-operator\">Operator (optional)</label>"
-        "<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\" />"
-        "<button type=\"submit\">Enable HOLD</button></form>"
-        "<form method=\"post\" action=\"/ui/dashboard/resume\"><label for=\"resume-reason\">Request RESUME</label>"
-        "<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required />"
-        "<label for=\"resume-operator\">Operator (optional)</label>"
-        "<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\" />"
-        "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
-        "<button type=\"submit\">Request RESUME</button></form>"
-        "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
-        "<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\" />"
-        "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
-        "<button type=\"submit\">Emergency CANCEL ALL</button></form></div>"
+        f"<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
+        f"<button type=\"submit\"{disabled_attr}>Enable HOLD</button></form>"
     )
+    controls_parts.append(
+        "<form method=\"post\" action=\"/ui/dashboard/resume\"><label for=\"resume-reason\">Request RESUME</label>"
+        f"<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required{disabled_attr} />"
+        "<label for=\"resume-operator\">Operator (optional)</label>"
+        f"<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
+        "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
+        f"<button type=\"submit\"{disabled_attr}>Request RESUME</button></form>"
+    )
+    controls_parts.append(
+        "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
+        f"<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\"{disabled_attr} />"
+        "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
+        f"<button type=\"submit\"{disabled_attr}>Emergency CANCEL ALL</button></form>"
+    )
+    controls_parts.append("</div>")
+    parts.append("".join(controls_parts))
 
     build_value = _fmt(context.get("build_version")) or "n/a"
     last_snapshot_ts = ""
