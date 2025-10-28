@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.runtime import (
     approve_resume,
     engage_safety_hold,
@@ -9,6 +11,16 @@ from app.services.runtime import (
     reset_for_tests,
 )
 from positions import list_positions, reset_positions
+from services import edge_guard
+
+
+@pytest.fixture(autouse=True)
+def _stub_liquidity(monkeypatch):
+    monkeypatch.setattr(
+        edge_guard.balances_monitor,
+        "evaluate_balances",
+        lambda: {"per_venue": {}, "liquidity_blocked": False, "reason": "ok"},
+    )
 
 
 def test_cross_preview_endpoint(client, monkeypatch):

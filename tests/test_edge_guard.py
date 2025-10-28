@@ -5,6 +5,15 @@ from services import edge_guard
 
 
 @pytest.fixture(autouse=True)
+def _stub_balances(monkeypatch):
+    monkeypatch.setattr(
+        edge_guard.balances_monitor,
+        "evaluate_balances",
+        lambda: {"per_venue": {}, "liquidity_blocked": False, "reason": "ok"},
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_runtime():
     runtime.reset_for_tests()
     yield
@@ -53,3 +62,28 @@ def test_edge_guard_allows_in_normal_conditions(monkeypatch):
 
     assert allowed is True
     assert reason == "ok"
+
+
+def test_edge_guard_blocks_on_liquidity(monkeypatch):
+    _stub_safety(monkeypatch)
+    monkeypatch.setattr(
+        edge_guard.balances_monitor,
+        "evaluate_balances",
+        lambda: {
+            "per_venue": {
+                "binance": {
+                    "free_usdt": 25.0,
+                    "used_usdt": 75.0,
+                    "risk_ok": False,
+                    "reason": "free balance below hedge size",
+                }
+            },
+            "liquidity_blocked": True,
+            "reason": "binance:free balance below hedge size",
+        },
+    )
+
+    allowed, reason = edge_guard.allowed_to_trade("BTCUSDT")
+
+    assert allowed is False
+    assert reason == "binance:free balance below hedge size"

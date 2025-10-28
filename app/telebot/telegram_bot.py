@@ -29,6 +29,7 @@ from ..services.runtime import (
     request_risk_limit_change,
     set_open_orders,
 )
+from services import balances_monitor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -345,6 +346,8 @@ class TelegramBot:
                 response = await self._handle_status()
             elif command == "/daily":
                 response = await self._handle_daily()
+            elif command == "/liquidity":
+                response = await self._handle_liquidity()
             elif command == "/raise_limit":
                 response = await self._handle_raise_limit(actor_label, args)
             elif command == "/exit_dry_run":
@@ -355,7 +358,7 @@ class TelegramBot:
                 response = await self._handle_close_all()
             else:
                 response = (
-                    "Unknown command. Available: /status, /daily, /hold, /resume, "
+                    "Unknown command. Available: /status, /daily, /liquidity, /hold, /resume, "
                     "/raise_limit, /exit_dry_run, /approve, /close"
                 )
         except Exception as exc:  # pragma: no cover - ensure failure is reported
@@ -451,6 +454,43 @@ class TelegramBot:
             f"HOLD_events={total_holds} (auto={auto_holds}, throttle={throttles})",
             f"Samples: pnl={pnl_samples}, exposure={exposure_samples}, slippage={slippage_samples}",
         ]
+        return "\n".join(lines)
+
+    async def _handle_liquidity(self) -> str:
+        result = await asyncio.to_thread(balances_monitor.evaluate_balances)
+        per_venue = result.get("per_venue") if isinstance(result, Mapping) else None
+        if not isinstance(per_venue, Mapping):
+            per_venue = {}
+        lines = ["Liquidity snapshot:"]
+        for venue, payload in sorted(per_venue.items()):
+            if isinstance(payload, Mapping):
+                free_value = payload.get("free_usdt")
+                used_value = payload.get("used_usdt")
+                risk_ok = bool(payload.get("risk_ok"))
+                reason = payload.get("reason")
+            else:
+                free_value = None
+                used_value = None
+                risk_ok = False
+                reason = payload
+            try:
+                free_text = f"{float(free_value):.2f}" if free_value is not None else "n/a"
+            except (TypeError, ValueError):
+                free_text = str(free_value)
+            try:
+                used_text = f"{float(used_value):.2f}" if used_value is not None else "n/a"
+            except (TypeError, ValueError):
+                used_text = str(used_value)
+            status = "OK" if risk_ok else "BLOCKED"
+            reason_text = str(reason or ("ok" if risk_ok else "unknown"))
+            lines.append(
+                f"{venue}: free={free_text} used={used_text} status={status} (reason={reason_text})"
+            )
+        blocked = bool(result.get("liquidity_blocked")) if isinstance(result, Mapping) else False
+        reason_summary = result.get("reason") if isinstance(result, Mapping) else "unknown"
+        lines.append(f"liquidity_blocked={blocked} reason={reason_summary}")
+        if blocked:
+            lines.append("trading halted for safety")
         return "\n".join(lines)
 
     async def _handle_raise_limit(self, actor: str, args: list[str]) -> str:

@@ -17,6 +17,7 @@ from . import risk_alerts, risk_guard
 from .runtime import (
     get_auto_hedge_state,
     get_last_opportunity_state,
+    get_liquidity_status,
     get_state,
 )
 from .positions_view import build_positions_snapshot
@@ -291,6 +292,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     guard_allowed, guard_reason = edge_guard_allowed()
     guard_context = edge_guard_current_context()
+    liquidity_status = get_liquidity_status()
 
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
@@ -334,6 +336,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "active_alerts": active_alerts,
         "recent_audit": recent_audit,
         "recent_ops_incidents": recent_ops_incidents,
+        "liquidity": liquidity_status,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
         "edge_guard": {
@@ -459,6 +462,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     active_alerts = context.get("active_alerts", []) or []
     recent_audit = context.get("recent_audit", []) or []
     trend = context.get("pnl_trend", {}) or {}
+    liquidity = context.get("liquidity", {}) or {}
+    liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
+    liquidity_reason = liquidity.get("reason") or ""
+    liquidity_snapshot = liquidity.get("per_venue") or {}
 
     recent_ops_incidents = context.get("recent_ops_incidents", []) or []
 
@@ -511,6 +518,48 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             f"{reason_clause}"
             "</div>"
         )
+
+    parts.append("<h2>Balances / Liquidity</h2>")
+    if liquidity_blocked:
+        reason_text = liquidity_reason if liquidity_reason and liquidity_reason != "ok" else "insufficient free balance"
+        parts.append(
+            "<p><strong style=\"color:#b91c1c;\">TRADING HALTED FOR SAFETY — trading halted for safety.</strong></p>"
+        )
+        parts.append(f"<p class=\"note\">Reason: {_fmt(reason_text)}</p>")
+    elif liquidity_reason and liquidity_reason not in {"", "ok"}:
+        parts.append(f"<p class=\"note\">Status: {_fmt(liquidity_reason)}</p>")
+    if liquidity_snapshot:
+        parts.append(
+            "<table><thead><tr><th>Venue</th><th>Free USDT</th><th>Used USDT</th><th>Risk OK</th><th>Reason</th></tr></thead><tbody>"
+        )
+        for venue, payload in sorted(liquidity_snapshot.items()):
+            if isinstance(payload, Mapping):
+                free_value = payload.get("free_usdt")
+                used_value = payload.get("used_usdt")
+                risk_flag = bool(payload.get("risk_ok"))
+                reason_value = payload.get("reason")
+            else:
+                free_value = None
+                used_value = None
+                risk_flag = False
+                reason_value = payload
+            risk_cell = (
+                '<span style="color:#1b7f3b;font-weight:600;">OK</span>'
+                if risk_flag
+                else '<span style="color:#b91c1c;font-weight:700;">BLOCKED</span>'
+            )
+            parts.append(
+                "<tr><td>{venue}</td><td>{free}</td><td>{used}</td><td>{risk}</td><td>{reason}</td></tr>".format(
+                    venue=_fmt(venue),
+                    free=_fmt(free_value),
+                    used=_fmt(used_value),
+                    risk=risk_cell,
+                    reason=_fmt(reason_value),
+                )
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p>No balance snapshot available.</p>")
 
     parts.append("<h2>Active Alerts / Recent Audit</h2>")
     parts.append("<table><thead><tr><th>Alert</th><th>Detail</th><th>Active Since</th></tr></thead><tbody>")
