@@ -1,16 +1,25 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
+
+from ..security import require_token
+from ..services.operator_dashboard import build_dashboard_context, render_dashboard_html
+
 
 router = APIRouter()
 
-_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "status.html"
-_STATUS_HTML = _TEMPLATE_PATH.read_text(encoding="utf-8")
+async def _require_token(request: Request) -> None:
+    require_token(request)
 
 
-@router.get("/", response_class=HTMLResponse)
-async def status_page() -> HTMLResponse:
-    return HTMLResponse(content=_STATUS_HTML)
+@router.get("/ui/dashboard", response_class=HTMLResponse)
+async def operator_dashboard(
+    request: Request, _auth: None = Depends(_require_token)
+) -> HTMLResponse:
+    context: dict[str, Any] = await build_dashboard_context(request)
+    html = render_dashboard_html(context)
+    return HTMLResponse(content=html)
+

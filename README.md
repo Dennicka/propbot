@@ -381,6 +381,31 @@ profiles and keep `.env` outside version control.
   of the UI API (`Authorization: Bearer <API_TOKEN>`). This feed is intended for
   internal desks only; do not expose it publicly.
 
+### Operator Dashboard (`/ui/dashboard`)
+
+- Token-protected HTML dashboard for on-call operators. Access requires the
+  same bearer token as other `api/ui` endpoints and works only when
+  `AUTH_ENABLED=true`.
+- Aggregates runtime state from `runtime_state.json`, the in-memory safety
+  controller, hedge positions store, and approvals queue.
+- Shows build version, current HOLD status with reason/since timestamp,
+  SAFE_MODE and DRY_RUN flags, runaway guard counters/limits, and the latest
+  auto-hedge status (`enabled`, last success timestamp, consecutive failures,
+  and last execution result).
+- Displays live hedge exposure per venue, unrealised PnL totals, and detailed
+  open/partial positions (venue, side, entry/mark prices, status). Closed or
+  purely simulated DRY_RUN hedges are suppressed.
+- Lists configured risk limits (e.g. `MAX_OPEN_POSITIONS`,
+  `MAX_TOTAL_NOTIONAL_USDT`, per-venue order caps) together with the runtime
+  snapshot of limits maintained by the risk engine.
+- Highlights background daemon health (auto-hedge loop, opportunity scanner)
+  using the same checks as `/healthz`, marking dead/inactive tasks in red.
+- Renders pending approvals from the two-man workflow so the desk can see who
+  requested HOLD release, dry-run exit, or limit changes.
+- Includes simple `<form>` controls that post to existing guarded endpoints:
+  manual HOLD trigger, RESUME request (with reminder that approval requires a
+  second operator/`APPROVE_TOKEN`), and the emergency cancel-all/kill switch.
+
 ### Hedge positions persistence & monitoring
 
 - All cross-exchange hedge positions (including both legs, entry prices,

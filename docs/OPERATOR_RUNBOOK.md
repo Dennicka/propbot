@@ -131,11 +131,44 @@
 - `GET /api/ui/alerts` — журнал HOLD, kill switch, runaway guard, auto-hedge,
   подтверждений RESUME.
 - `GET /api/ui/positions` — активные ноги хеджа, экспозиция и unrealized PnL.
+- HTML-панель `/ui/dashboard` (через bearer-токен) — сводка build версии,
+  HOLD/SAFE_MODE/DRY_RUN, runaway guard, авто-хедж, живой риск, pending approvals
+  и формы HOLD/RESUME/kill.
 - Telegram-бот дублирует критичные события (HOLD, runaway guard, kill switch,
   auto-hedge, двухшаговый RESUME).
 
 Следите за ростом `consecutive_failures`, runaway-счётчиков и повторными HOLD —
 это сигналы к расследованию.
+
+## Operator Dashboard (`/ui/dashboard`)
+
+- Доступен только по bearer-токену оператора (`AUTH_ENABLED=true`,
+  `Authorization: Bearer $API_TOKEN`). Внешний интернет доступ запрещён.
+- Сводит в одном месте build версию, `hold_active` и причину HOLD, SAFE_MODE и
+  `dry_run_mode`, runaway guard (лимиты и текущие счётчики), а также состояние
+  авто-хеджа (включён ли демон, последний результат, таймштамп успеха,
+  `consecutive_failures`).
+- Выводит только живые хеджи (`open`/`partial`), исключая закрытые и чисто
+  симуляционные DRY_RUN записи. Для каждой позиции отображаются обе ноги с
+  venue/side, entry/mark ценой и текущим PnL. Внизу показан агрегированный риск
+  по биржам и суммарный unrealised PnL.
+- Показывает фактические риск-лимиты (`MAX_OPEN_POSITIONS`,
+  `MAX_TOTAL_NOTIONAL_USDT`, per-venue caps) и снимок лимитов из runtime.
+- Раздел здоровья повторяет ключевые проверки `/healthz` (auto-hedge daemon,
+  opportunity scanner). Если таск остановлен или вернул ошибку, строка подсвечена
+  красным «DEAD».
+- Блок Pending approvals подгружается из `ops_approvals.json`: видны запросы на
+  снятие HOLD/выход из DRY_RUN/поднятие лимитов, кто и когда их инициировал, и
+  текущий статус.
+- Блок Controls содержит обычные HTML-формы для уже существующих
+  `/api/ui/hold`, `/api/ui/resume-request` и `/api/ui/kill`. RESUME по-прежнему
+  требует второго оператора и `APPROVE_TOKEN` — панель напоминает об этом
+  текстом, никакого обхода двухшаговой защиты нет.
+
+Панель подходит для ручных health-check'ов во время дежурства: прокрутите её и
+убедитесь, что HOLD/SAFE_MODE в ожидаемом состоянии, runaway guard не уткнулся в
+лимиты, авто-хедж не накопил ошибки, живой риск не превышает лимиты, а pending
+approvals не зависли без внимания.
 
 ## Crash / Restart recovery
 
