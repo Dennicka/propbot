@@ -126,6 +126,53 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "Unrealised PnL" in html
     assert "Total Exposure (USD)" in html
     assert "Open positions:" in html
+    assert "Recent Ops / Incidents" in html
+
+
+def test_dashboard_recent_ops_status_badges(monkeypatch, client) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("API_TOKEN", "ops-ui")
+
+    def fake_recent_events(limit: int = 10) -> list[dict[str, str]]:
+        return [
+            {
+                "timestamp": "2024-05-01T00:00:00+00:00",
+                "actor": "alice",
+                "action": "Resume requested",
+                "status": "pending",
+                "reason": "Need to restart",
+            },
+            {
+                "timestamp": "2024-05-01T00:01:00+00:00",
+                "actor": "risk_guard",
+                "action": "Auto-throttle HOLD",
+                "status": "applied",
+                "reason": "Risk breach",
+            },
+            {
+                "timestamp": "2024-05-01T00:02:00+00:00",
+                "actor": "bob",
+                "action": "Resume approved",
+                "status": "approved",
+                "reason": "Cleared",
+            },
+        ][:limit]
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.list_recent_events", fake_recent_events
+    )
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer ops-ui"},
+    )
+    assert response.status_code == 200
+    html = response.text
+    assert "Recent Ops / Incidents" in html
+    assert "AUTO-HOLD" in html
+    assert "PENDING" in html
+    assert "APPROVED" in html or "APPLIED" in html
+    assert "Need to restart" in html
 
 
 def test_dashboard_shows_risk_throttle_banner(monkeypatch, client) -> None:

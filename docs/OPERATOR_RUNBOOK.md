@@ -168,6 +168,19 @@
   `GET /api/ui/audit/export` (требуется bearer-токен оператора). Сохраните JSON
   на защищённом хранилище и добавьте его к расследованию инцидента.
 
+### Incident timeline & audit export
+
+- На панели `/ui/dashboard` появился блок **Recent Ops / Incidents**. В нём
+  отображаются последние заявки на HOLD/RESUME, авто-throttle, kill switch и
+  изменения лимитов. Жёлтые бейджи = pending approvals, красные — автоматический
+  HOLD (auto-throttle), зелёные — подтверждённые/применённые действия.
+- Для полной выгрузки используйте `GET /api/ui/audit_log` (нужен bearer-токен).
+  Эндпоинт возвращает хронологический JSON (последние записи сверху) из
+  персистентных журналов `ops_alerts.json`, `ops_approvals.json` и
+  `runtime_state.json`.
+- Этот JSON — ваша сырая лента инцидента. При эскалации отправляйте его
+  менеджменту, инвесторам и службе безопасности вместе с выводами расследования.
+
 ## Operator Dashboard (`/ui/dashboard`)
 
 - Доступен только по bearer-токену оператора (`AUTH_ENABLED=true`,
