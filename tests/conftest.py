@@ -9,6 +9,12 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("APPROVE_TOKEN", "pytest-approve")
 os.environ.setdefault("AUTH_ENABLED", "false")
+os.environ.setdefault("RUNTIME_STATE_PATH", "/tmp/propbot-tests-runtime.json")
+os.environ.setdefault("POSITIONS_STORE_PATH", "/tmp/propbot-tests-positions.json")
+os.environ.setdefault("HEDGE_LOG_PATH", "/tmp/propbot-tests-hedge-log.json")
+os.environ.setdefault("OPS_ALERTS_FILE", "/tmp/propbot-tests-ops-alerts.json")
+os.environ.setdefault("PNL_HISTORY_PATH", "/tmp/propbot-tests-pnl.json")
+os.environ.setdefault("OPS_APPROVALS_FILE", "/tmp/propbot-tests-approvals.json")
 
 from app import ledger
 from app.main import app
@@ -55,7 +61,6 @@ def reset_auth_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_ENABLE", "false")
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
-    monkeypatch.delenv("OPS_ALERTS_FILE", raising=False)
     monkeypatch.delenv("OPS_ALERTS_DIR", raising=False)
 
 
@@ -78,6 +83,17 @@ def override_positions_store(monkeypatch, tmp_path: Path):
     reset_positions()
     yield
     reset_positions()
+
+
+@pytest.fixture(autouse=True)
+def override_runtime_and_logs(monkeypatch, tmp_path: Path):
+    runtime_path = tmp_path / "runtime_state.json"
+    hedge_log = tmp_path / "hedge_log.json"
+    alerts_path = tmp_path / "ops_alerts.json"
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
+    monkeypatch.setenv("HEDGE_LOG_PATH", str(hedge_log))
+    monkeypatch.setenv("OPS_ALERTS_FILE", str(alerts_path))
+    yield
 
 
 @pytest.fixture(autouse=True)

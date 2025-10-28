@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import ledger
+from .version import APP_VERSION
 from .routers import arb, health, risk, ui
 from .routers import ui_status
 from .routers.dashboard import router as dashboard_router
@@ -22,9 +26,18 @@ def _should_guard(request: Request) -> bool:
     return path.startswith("/api/ui") or path.startswith("/api/arb")
 
 
+logger = logging.getLogger("propbot.startup")
+
+
 def create_app() -> FastAPI:
     ledger.init_db()
     validate_startup()
+    build_version = os.getenv("BUILD_VERSION") or APP_VERSION
+    logger.info(
+        "PropBot starting with build_version=%s (app_version=%s)",
+        build_version,
+        APP_VERSION,
+    )
     app = FastAPI(title="PropBot API")
     app.add_middleware(
         CORSMiddleware,

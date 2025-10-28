@@ -7,6 +7,7 @@ import asyncio
 from app.services import approvals_store, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
+from app.version import APP_VERSION
 
 
 def test_dashboard_requires_token(monkeypatch, client) -> None:
@@ -217,10 +218,38 @@ def test_dashboard_proxy_routes(monkeypatch, client) -> None:
     )
     assert resume_response.status_code == 202
     assert "Resume request logged" in resume_response.text
-
     approvals = approvals_store.list_requests()
     pending = [entry for entry in approvals if entry.get("status") == "pending"]
     assert pending
     assert pending[0]["action"] == "resume"
     assert pending[0]["parameters"].get("reason") == "ready"
     assert is_hold_active()
+
+
+def test_dashboard_footer_contains_build_and_warning(monkeypatch, client) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("API_TOKEN", "footer-token")
+
+    timestamp = "2024-05-24T12:00:00+00:00"
+
+    class DummySnapshot:
+        pnl_totals = {"unrealized": 0.0}
+
+    async def fake_snapshot(*_args, **_kwargs):
+        return DummySnapshot()
+
+    monkeypatch.setattr("app.services.pnl_history._ts", lambda: timestamp)
+    monkeypatch.setattr("app.services.pnl_history.portfolio.snapshot", fake_snapshot)
+
+    asyncio.run(record_snapshot(reason="footer-test"))
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer footer-token"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert f"Build version: <strong>{APP_VERSION}</strong>" in html
+    assert timestamp in html
+    assert "All trading actions require dual approval. Manual overrides are audited." in html

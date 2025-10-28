@@ -408,6 +408,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     risk_advice = context.get("risk_advice", {}) or {}
 
+    pnl_history = context.get("pnl_history", []) or []
+
     parts: list[str] = []
     parts.append(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
@@ -423,6 +425,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "button:hover{background:#0d2440;}"
         ".note{font-size:0.9rem;color:#555;margin-top:-0.5rem;margin-bottom:0.75rem;}"
         ".flash{background:#fff3cd;border:1px solid #f1c232;color:#533f03;padding:0.75rem 1rem;margin-bottom:1.5rem;border-radius:4px;}"
+        "footer{margin-top:3rem;font-size:0.8rem;color:#4b5563;text-align:center;}"
+        ".footer-warning{color:#9a3412;font-weight:600;}"
         "</style></head><body>"
     )
     parts.append(
@@ -793,6 +797,25 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\" />"
         "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
         "<button type=\"submit\">Emergency CANCEL ALL</button></form></div>"
+    )
+
+    build_value = _fmt(context.get("build_version")) or "n/a"
+    last_snapshot_ts = ""
+    if pnl_history:
+        try:
+            last_snapshot_ts = _fmt(pnl_history[0].get("timestamp"))
+        except (TypeError, AttributeError, IndexError):
+            last_snapshot_ts = ""
+    if not last_snapshot_ts:
+        last_snapshot_ts = "n/a"
+    warning_text = "All trading actions require dual approval. Manual overrides are audited."
+    parts.append(
+        "<footer>Build version: <strong>{build}</strong> • Last PnL snapshot: {snapshot} • "
+        "<span class=\"footer-warning\">{warning}</span></footer>".format(
+            build=build_value,
+            snapshot=last_snapshot_ts,
+            warning=_fmt(warning_text),
+        )
     )
 
     parts.append("</body></html>")
