@@ -4,10 +4,10 @@ from __future__ import annotations
 from typing import Literal
 
 Role = Literal["viewer", "operator"]
-Action = Literal["HOLD", "RESUME", "KILL", "RAISE_LIMITS"]
+Action = Literal["HOLD", "RESUME", "KILL", "RAISE_LIMITS", "CANCEL_ALL"]
 
 
-_CRITICAL_ACTIONS = {"HOLD", "RESUME", "KILL", "RAISE_LIMITS"}
+_CRITICAL_ACTIONS = {"HOLD", "RESUME", "KILL", "RAISE_LIMITS", "CANCEL_ALL"}
 
 
 def can_execute_action(role: Role, action: Action) -> bool:

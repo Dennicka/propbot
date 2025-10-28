@@ -65,7 +65,7 @@ async def dashboard_hold(
     reason = form_data.get("reason", "")
     operator = form_data.get("operator", "")
     payload = HoldPayload(reason=reason or None, requested_by=operator or "dashboard_ui")
-    result = await hold_action(payload)
+    result = await hold_action(request, payload)
     hold_reason = result.get("safety", {}).get("hold_reason") or payload.reason or "manual_hold"
     message = f"HOLD engaged — reason: {hold_reason}"
     return await _render_dashboard_response(request, message=message)
@@ -80,7 +80,7 @@ async def dashboard_resume_request(
     reason = form_data.get("reason", "")
     operator = form_data.get("operator", "")
     payload = ResumeRequestPayload(reason=reason, requested_by=operator or "dashboard_ui")
-    result = await resume_request_action(payload)
+    result = await resume_request_action(request, payload)
     request_id = result.get("resume_request", {}).get("id")
     message = "Resume request logged"
     if request_id:
@@ -99,7 +99,7 @@ async def dashboard_kill(
 ) -> HTMLResponse:
     form_data = _parse_form_payload(await request.body())
     operator = form_data.get("operator", "")
-    await kill_action()
+    await kill_action(request)
     operator_label = operator or "dashboard_ui"
     message = f"Kill switch engaged by {operator_label}"
     return await _render_dashboard_response(request, message=message)
