@@ -555,6 +555,36 @@ resume request, and the current reason so operators can coordinate responses.
 
 This two-step confirmation is **required** before any real-money deployment.
 
+## Autopilot mode
+
+PropBot still defaults to manual resumes protected by the two-man rule. The
+`AUTOPILOT_ENABLE` environment flag controls whether the runtime may clear HOLD
+on its own after a restart.
+
+* `AUTOPILOT_ENABLE=false` (default) — the service always boots into HOLD with
+  SAFE_MODE engaged. Operators must file `/api/ui/resume-request`, obtain the
+  second approval via `/api/ui/resume-confirm`, and manually call
+  `/api/ui/resume` (or the CLI/Telegram equivalents) before trading resumes.
+* `AUTOPILOT_ENABLE=true` — after a restart the bot inspects the existing safety
+  guards (runaway breaker counters, auto-hedge health, exchange connectivity,
+  preflight status, risk breaches). When everything is green it restores the
+  prior SAFE_MODE setting, clears HOLD, and calls `resume_loop()` automatically.
+  The action is written to the persistent audit log with initiator `autopilot`,
+  broadcast to the ops Telegram channel as
+  `AUTOPILOT: resumed trading after restart (reason=…)`, and highlighted on the
+  `/ui/dashboard` banner as “autopilot armed”.
+* If autopilot is enabled but any blocker is present (runaway limits exceeded,
+  auto-hedge errors, venues unreachable, config invalid, etc.) the bot stays in
+  HOLD, logs `autopilot_resume_refused`, and emits
+  `AUTOPILOT refused to arm (reason=…)` so the desk can investigate.
+* Only enable the flag on trusted hosts. Autopilot bypasses the manual resume
+  gate on restarts, but it still honours all existing guardrails and manual
+  HOLDs.
+
+The status API and `/ui/dashboard` expose `autopilot_status`,
+`last_autopilot_action`, and `last_autopilot_reason` so operators can verify how
+the runtime left HOLD.
+
 ## Runaway order breakers & status surface
 
 To reduce catastrophic runaway behaviour, the runtime tracks how many orders and

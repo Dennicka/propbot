@@ -596,6 +596,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
             "counters": dict(safety_snapshot.get("counters", {})),
         },
     }
+    snapshot["autopilot"] = state.autopilot.as_dict()
     auto_payload = state.auto_hedge.as_dict()
     snapshot["auto_hedge"] = {
         "auto_enabled": bool(auto_payload.get("enabled", False)),
@@ -628,6 +629,7 @@ def get_status_components() -> Dict[str, object]:
         "two_man_resume_required": snapshot.get("two_man_resume_required"),
         "resume_pending": snapshot.get("resume_pending"),
         "runaway_guard": snapshot.get("runaway_guard"),
+        "autopilot": snapshot.get("autopilot"),
         "auto_hedge": snapshot.get("auto_hedge"),
     }
 
@@ -647,6 +649,7 @@ def get_status_slo() -> Dict[str, object]:
         "two_man_resume_required": snapshot.get("two_man_resume_required"),
         "resume_pending": snapshot.get("resume_pending"),
         "runaway_guard": snapshot.get("runaway_guard"),
+        "autopilot": snapshot.get("autopilot"),
         "auto_hedge": snapshot.get("auto_hedge"),
     }
 

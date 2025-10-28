@@ -119,6 +119,31 @@
    HOLD через подтверждённый `resume-confirm`, затем вручную переводите
    `DRY_RUN_MODE` и SAFE_MODE в боевой режим.
 
+## Autopilot mode
+
+- `AUTOPILOT_ENABLE=false` (по умолчанию) — после рестарта бот всегда остаётся в
+  HOLD/SAFE_MODE и требует стандартного двухшагового флоу
+  `/api/ui/resume-request` → `/api/ui/resume-confirm` с `APPROVE_TOKEN`, а затем
+  ручного `/api/ui/resume` или команды из Telegram/CLI.
+- `AUTOPILOT_ENABLE=true` — при старте бот проверяет существующие гардрейлы
+  (runaway счётчики, состояние auto-hedge, доступность бирж, успешный preflight,
+  отсутствие risk breaches). Если всё зелёное, он автоматически восстанавливает
+  прежний SAFE_MODE, снимает HOLD и запускает цикл `resume_loop()`.
+  Решение фиксируется в audit-журнале с инициатором `autopilot`, в Telegram
+  прилетает сообщение `AUTOPILOT: resumed trading after restart (reason=...)`, а
+  на `/ui/dashboard` появляется жёлтый блок «autopilot armed» с причиной.
+- Если автопилот видит блокеры (runaway сработал, auto-hedge в ошибке, биржа не
+  отвечает, конфиг невалиден), он остаётся в HOLD, пишет событие
+  `autopilot_resume_refused` и шлёт тревогу `AUTOPILOT refused to arm` с
+  расшифровкой причины.
+- Включайте `AUTOPILOT_ENABLE` только на доверенных хостах — он обходится без
+  живых операторов при рестартах, но все остальные гардрейлы и ручные HOLD остаются
+  в силе.
+
+Статус API и `/ui/dashboard` показывают `autopilot_status`,
+`last_autopilot_action` и `last_autopilot_reason`, что позволяет быстро понять,
+как именно бот вышел из HOLD.
+
 Журнал `data/runtime_state.json` сохраняет причину HOLD и таймштамп
 (`safety.hold_reason`, `safety.hold_since`, `safety.last_released_ts`), а также
 время последней успешной хедж-операции (`auto_hedge.last_success_ts`).
