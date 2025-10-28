@@ -12,7 +12,7 @@ os.environ.setdefault("AUTH_ENABLED", "false")
 
 from app import ledger
 from app.main import app
-from app.services import runtime
+from app.services import runtime, approvals_store
 from app.services.loop import hold_loop
 from app.services.runtime import reset_for_tests
 from positions import reset_positions
@@ -77,3 +77,12 @@ def override_positions_store(monkeypatch, tmp_path: Path):
     reset_positions()
     yield
     reset_positions()
+
+
+@pytest.fixture(autouse=True)
+def override_approvals_store(monkeypatch, tmp_path: Path):
+    path = tmp_path / "ops_approvals.json"
+    monkeypatch.setenv("OPS_APPROVALS_FILE", str(path))
+    approvals_store.reset_for_tests()
+    yield
+    approvals_store.reset_for_tests()

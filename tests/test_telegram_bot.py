@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.telebot.telegram_bot import (
@@ -41,16 +43,31 @@ def test_status_formatter_contains_expected_fields() -> None:
         pnl_totals={"realized": 10.5, "unrealized": -2.25, "total": 8.25},
         positions=[SimpleNamespace(symbol="BTCUSDT", qty=0.75)],
     )
-    state = SimpleNamespace(control=SimpleNamespace(safe_mode=True, environment="paper", mode="HOLD"))
+    state = SimpleNamespace(
+        control=SimpleNamespace(
+            safe_mode=True,
+            environment="paper",
+            mode="HOLD",
+            dry_run_mode=True,
+            dry_run=True,
+        )
+    )
     risk_state = SimpleNamespace(breaches=["risk-1"])
+    safety = {"hold_active": True, "hold_reason": "unit_test"}
+    auto_state = SimpleNamespace(enabled=True, last_execution_ts="2024-01-01T00:00:00Z", consecutive_failures=2)
+    pending = [{"action": "resume", "id": "abc12345"}]
 
-    message = format_status_message(snapshot, state, risk_state)
+    message = format_status_message(snapshot, state, risk_state, safety, auto_state, pending)
 
     assert "PnL=realized:10.50" in message
     assert "Positions=BTCUSDT:0.75" in message
     assert "SAFE_MODE=True" in message
     assert "PROFILE=paper" in message
     assert "RISK_BREACHES=1" in message
+    assert "HOLD_ACTIVE=True" in message
+    assert "DRY_RUN_MODE=True" in message
+    assert "AUTO_HEDGE=on" in message
+    assert "Pending approvals=resume:abc12345" in message
 
 
 @pytest.mark.asyncio

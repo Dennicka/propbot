@@ -3,16 +3,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import httpx
 from fastapi import FastAPI
 
 from .. import ledger
-from ..services import portfolio, risk
-from ..services.loop import cancel_all_orders, hold_loop, resume_loop
-from ..services.runtime import get_state, set_mode, set_open_orders
+from ..services import portfolio, risk, approvals_store
+from ..services.loop import cancel_all_orders, hold_loop
+from ..services.runtime import (
+    CRITICAL_ACTION_EXIT_DRY_RUN,
+    CRITICAL_ACTION_RAISE_LIMIT,
+    CRITICAL_ACTION_RESUME,
+    approve_exit_dry_run,
+    approve_resume,
+    approve_risk_limit_change,
+    engage_safety_hold,
+    get_safety_status,
+    get_state,
+    record_resume_request,
+    request_exit_dry_run,
+    request_risk_limit_change,
+    set_open_orders,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -91,7 +106,14 @@ def _summarise_positions(positions: Iterable[Any]) -> str:
     return ", ".join(entries)
 
 
-def format_status_message(snapshot: Any, state: Any, risk_state: Any | None) -> str:
+def format_status_message(
+    snapshot: Any,
+    state: Any,
+    risk_state: Any | None,
+    safety: Mapping[str, Any] | None,
+    auto_state: Any | None,
+    pending_requests: Iterable[Mapping[str, Any]],
+) -> str:
     pnl_totals = getattr(snapshot, "pnl_totals", {}) or {}
     realized = float(pnl_totals.get("realized", 0.0))
     unrealized = float(pnl_totals.get("unrealized", 0.0))
@@ -102,10 +124,41 @@ def format_status_message(snapshot: Any, state: Any, risk_state: Any | None) -> 
     safe_mode = bool(getattr(control, "safe_mode", False))
     profile = str(getattr(control, "environment", "paper") or "paper").lower()
     mode = str(getattr(control, "mode", "HOLD")).upper()
+    dry_run_mode = bool(getattr(control, "dry_run_mode", False))
+    dry_run_only = bool(getattr(control, "dry_run", False))
     breaches = []
     if risk_state is not None:
         breaches = list(getattr(risk_state, "breaches", []) or [])
     breaches_summary = f"RISK_BREACHES={len(breaches)}"
+    hold_active = False
+    hold_reason = "n/a"
+    if safety:
+        hold_active = bool(safety.get("hold_active", False))
+        hold_reason = str(safety.get("hold_reason") or "n/a")
+    auto_enabled = bool(getattr(auto_state, "enabled", False))
+    last_hedge_ts = getattr(auto_state, "last_execution_ts", None) if auto_state else None
+    if not last_hedge_ts and auto_state:
+        last_hedge_ts = getattr(auto_state, "last_success_ts", None)
+    last_hedge = str(last_hedge_ts or "never")
+    consecutive_failures = 0
+    if auto_state and hasattr(auto_state, "consecutive_failures"):
+        try:
+            consecutive_failures = int(getattr(auto_state, "consecutive_failures"))
+        except (TypeError, ValueError):
+            consecutive_failures = 0
+    pending_items = list(pending_requests)
+    pending_list: list[str] = []
+    for entry in pending_items:
+        action = str(entry.get("action", "unknown"))
+        req_id = str(entry.get("id", ""))
+        short_id = req_id[:8] if req_id else "-"
+        pending_list.append(f"{action}:{short_id}")
+        if len(pending_list) >= 3:
+            break
+    pending_count = len(pending_items)
+    if pending_count > len(pending_list):
+        pending_list.append(f"+{pending_count - len(pending_list)} more")
+    pending_summary = ", ".join(pending_list) if pending_list else "none"
     lines = [
         "Status:",
         f"PnL=realized:{realized:.2f}, unrealized:{unrealized:.2f}, total:{total:.2f}",
@@ -114,6 +167,10 @@ def format_status_message(snapshot: Any, state: Any, risk_state: Any | None) -> 
         f"MODE={mode}",
         f"PROFILE={profile}",
         breaches_summary,
+        f"HOLD_ACTIVE={hold_active} (reason={hold_reason})",
+        f"DRY_RUN_MODE={dry_run_mode} DRY_RUN_ONLY={dry_run_only}",
+        f"AUTO_HEDGE={'on' if auto_enabled else 'off'} (last={last_hedge}, fails={consecutive_failures})",
+        f"Pending approvals={pending_summary}",
     ]
     return "\n".join(lines)
 
@@ -123,8 +180,11 @@ async def build_status_message() -> str:
     open_orders = await asyncio.to_thread(ledger.fetch_open_orders)
     set_open_orders(open_orders)
     state = get_state()
+    safety = get_safety_status()
     risk_state = risk.refresh_runtime_state(snapshot=snapshot, open_orders=open_orders)
-    return format_status_message(snapshot, state, risk_state)
+    pending = approvals_store.list_requests(status="pending")
+    auto_state = getattr(state, "auto_hedge", None)
+    return format_status_message(snapshot, state, risk_state, safety, auto_state, pending)
 
 
 class TelegramBot:
@@ -272,41 +332,201 @@ class TelegramBot:
             command = command.split("@", 1)[0]
         if not command:
             return
+        args = text.split()[1:]
+        actor = self._extract_actor(message)
+        actor_label = actor or "telegram"
         try:
-            if command == "/pause":
-                response = await self._handle_pause()
+            if command in {"/pause", "/hold"}:
+                response = await self._handle_hold(actor_label, args)
             elif command == "/resume":
-                response = await self._handle_resume()
+                response = await self._handle_resume_request(actor_label, args)
             elif command == "/status":
                 response = await self._handle_status()
+            elif command == "/raise_limit":
+                response = await self._handle_raise_limit(actor_label, args)
+            elif command == "/exit_dry_run":
+                response = await self._handle_exit_dry_run(actor_label, args)
+            elif command == "/approve":
+                response = await self._handle_approve(actor_label, args)
             elif command in {"/close_all", "/closeall", "/close"}:
                 response = await self._handle_close_all()
             else:
-                response = "Unknown command. Available: /pause, /resume, /status, /close"
+                response = (
+                    "Unknown command. Available: /status, /hold, /resume, "
+                    "/raise_limit, /exit_dry_run, /approve, /close"
+                )
         except Exception as exc:  # pragma: no cover - ensure failure is reported
             self.logger.exception("Telegram command failed", extra={"command": command})
             response = f"Command failed: {exc}"[:400]
         await self.send_message(response)
 
-    async def _handle_pause(self) -> str:
-        state = get_state()
-        state.control.safe_mode = True
-        await hold_loop()
-        set_mode("HOLD")
-        ledger.record_event(level="INFO", code="mode_change", payload={"mode": "HOLD", "source": "telegram"})
-        return "Trading paused. SAFE_MODE=True."
+    def _extract_actor(self, message: Mapping[str, Any]) -> str | None:
+        user = message.get("from") if isinstance(message, Mapping) else None
+        if isinstance(user, Mapping):
+            username = user.get("username")
+            if username:
+                return f"telegram:{username}"
+            first = user.get("first_name")
+            last = user.get("last_name")
+            parts = [part for part in [first, last] if part]
+            if parts:
+                return f"telegram:{' '.join(parts)}"
+        return "telegram"
 
-    async def _handle_resume(self) -> str:
-        state = get_state()
-        state.control.safe_mode = False
-        await resume_loop()
-        set_mode("RUN")
-        ledger.record_event(level="INFO", code="mode_change", payload={"mode": "RUN", "source": "telegram"})
-        return "Trading resumed. SAFE_MODE=False."
+    async def _handle_hold(self, actor: str, args: list[str]) -> str:
+        reason = " ".join(args).strip() or "manual_hold"
+        await hold_loop()
+        engage_safety_hold(reason, source="telegram")
+        ledger.record_event(
+            level="INFO",
+            code="mode_change",
+            payload={"mode": "HOLD", "reason": reason, "requested_by": actor},
+        )
+        return f"HOLD engaged. SAFE_MODE remains active. Reason: {reason}"
+
+    async def _handle_resume_request(self, actor: str, args: list[str]) -> str:
+        safety = get_safety_status()
+        if not safety.get("hold_active", False):
+            return "HOLD is not active; nothing to resume."
+        if not args:
+            return "Usage: /resume <reason>"
+        reason = " ".join(args).strip()
+        if not reason:
+            return "Reason required to request resume."
+        snapshot = record_resume_request(reason, requested_by=actor)
+        request_id = snapshot.get("id") or "-"
+        pending = snapshot.get("pending", True)
+        ledger.record_event(
+            level="INFO",
+            code="resume_requested",
+            payload={"reason": reason, "requested_by": actor, "request_id": request_id},
+        )
+        if pending:
+            return f"Resume request recorded (id={request_id}). Awaiting approval."
+        return f"Resume already approved (id={request_id})."
 
     async def _handle_status(self) -> str:
         message = await build_status_message()
         return message
+
+    async def _handle_raise_limit(self, actor: str, args: list[str]) -> str:
+        if len(args) < 4:
+            return "Usage: /raise_limit <limit> <scope or -> <value> <reason>"
+        limit = args[0]
+        scope_arg = args[1]
+        scope = None if scope_arg in {"-", "none", "default"} else scope_arg
+        value_arg = args[2]
+        reason = " ".join(args[3:]).strip()
+        if not reason:
+            return "Reason required to raise limit."
+        try:
+            value = float(value_arg)
+        except ValueError:
+            return "Value must be numeric."
+        try:
+            record = request_risk_limit_change(limit, scope, value, reason=reason, requested_by=actor)
+        except ValueError as exc:
+            return f"Risk limit request failed: {exc}"
+        parameters = record.get("parameters", {}) if isinstance(record, Mapping) else {}
+        ledger.record_event(
+            level="INFO",
+            code="risk_limit_raise_requested",
+            payload={
+                "limit": parameters.get("limit", limit),
+                "scope": parameters.get("scope", scope),
+                "value": parameters.get("value", value),
+                "reason": reason,
+                "requested_by": actor,
+                "request_id": record.get("id"),
+            },
+        )
+        return (
+            f"Risk limit request recorded (id={record.get('id')}). Awaiting approval."
+        )
+
+    async def _handle_exit_dry_run(self, actor: str, args: list[str]) -> str:
+        if not args:
+            return "Usage: /exit_dry_run <reason>"
+        reason = " ".join(args).strip()
+        if not reason:
+            return "Reason required to exit DRY_RUN_MODE."
+        try:
+            record = request_exit_dry_run(reason, requested_by=actor)
+        except ValueError as exc:
+            return f"Exit DRY_RUN request failed: {exc}"
+        ledger.record_event(
+            level="INFO",
+            code="exit_dry_run_requested",
+            payload={"reason": reason, "requested_by": actor, "request_id": record.get("id")},
+        )
+        return f"Exit DRY_RUN request recorded (id={record.get('id')}). Awaiting approval."
+
+    async def _handle_approve(self, actor: str, args: list[str]) -> str:
+        if len(args) < 2:
+            return "Usage: /approve <request_id> <token>"
+        request_id = args[0]
+        token = args[1]
+        expected = os.environ.get("APPROVE_TOKEN")
+        if not expected:
+            return "Approve token not configured."
+        if not secrets.compare_digest(token, expected):
+            return "Invalid approval token."
+        request_snapshot = approvals_store.get_request(request_id)
+        if not request_snapshot:
+            return "Request not found."
+        if str(request_snapshot.get("status")) != "pending":
+            return "Request already processed."
+        action = str(request_snapshot.get("action") or "")
+        try:
+            if action == CRITICAL_ACTION_RESUME:
+                result = approve_resume(request_id=request_id, actor=actor)
+                hold_cleared = result.get("hold_cleared", False)
+                parameters = request_snapshot.get("parameters", {}) if isinstance(request_snapshot, Mapping) else {}
+                ledger.record_event(
+                    level="INFO",
+                    code="resume_confirmed",
+                    payload={
+                        "actor": actor,
+                        "hold_cleared": hold_cleared,
+                        "reason": parameters.get("reason"),
+                        "request_id": request_id,
+                    },
+                )
+                return "Resume approved. HOLD cleared." if hold_cleared else "Resume approval recorded. HOLD remains active."
+            if action == CRITICAL_ACTION_RAISE_LIMIT:
+                result = approve_risk_limit_change(request_id, actor=actor)
+                record = result.get("request", request_snapshot)
+                params = record.get("parameters", {}) if isinstance(record, Mapping) else {}
+                ledger.record_event(
+                    level="INFO",
+                    code="risk_limit_raise_approved",
+                    payload={
+                        "actor": actor,
+                        "limit": params.get("limit"),
+                        "scope": params.get("scope"),
+                        "value": params.get("value"),
+                        "reason": params.get("reason"),
+                        "request_id": request_id,
+                    },
+                )
+                return "Risk limit updated after approval."
+            if action == CRITICAL_ACTION_EXIT_DRY_RUN:
+                result = approve_exit_dry_run(request_id, actor=actor)
+                record = result.get("request", request_snapshot)
+                params = record.get("parameters", {}) if isinstance(record, Mapping) else {}
+                ledger.record_event(
+                    level="INFO",
+                    code="exit_dry_run_approved",
+                    payload={
+                        "actor": actor,
+                        "reason": params.get("reason"),
+                        "request_id": request_id,
+                    },
+                )
+                return "DRY_RUN_MODE disabled after approval."
+        except ValueError as exc:
+            return f"Approval failed: {exc}"
+        return f"Unsupported action '{action}'."
 
     async def _handle_close_all(self) -> str:
         state = get_state()

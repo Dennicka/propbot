@@ -711,12 +711,11 @@ async def resume_request(payload: ResumeRequestPayload) -> dict:
     ledger.record_event(
         level="INFO",
         code="resume_requested",
-        payload={"reason": reason, "requested_by": payload.requested_by or "ui"},
-    )
-    _emit_ops_alert(
-        "resume_requested",
-        f"Resume requested: {reason}",
-        {"requested_by": payload.requested_by or "ui"},
+        payload={
+            "reason": reason,
+            "requested_by": payload.requested_by or "ui",
+            "request_id": request_snapshot.get("id"),
+        },
     )
     return {
         "resume_request": request_snapshot,
@@ -738,7 +737,8 @@ async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
     if not secrets.compare_digest(payload.token, expected_token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
-    result = approve_resume(actor=payload.actor)
+    request_id = resume_info.get("id") or resume_info.get("request_id")
+    result = approve_resume(request_id=request_id, actor=payload.actor)
     safety = get_safety_status()
     ledger.record_event(
         level="INFO",
@@ -747,15 +747,7 @@ async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
             "actor": payload.actor or "ui",
             "hold_cleared": result.get("hold_cleared", False),
             "reason": resume_info.get("reason"),
-        },
-    )
-    _emit_ops_alert(
-        "resume_confirmed",
-        "Resume confirmation recorded",
-        {
-            "actor": payload.actor or "ui",
-            "hold_cleared": result.get("hold_cleared", False),
-            "reason": resume_info.get("reason"),
+            "request_id": request_id,
         },
     )
     return {
