@@ -55,6 +55,7 @@ def test_partial_position_persisted_after_hold(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(cross_mod, "is_dry_run_mode", lambda: False)
     monkeypatch.setattr(cross_mod, "append_entry", lambda entry: entry)
+    monkeypatch.setattr(cross_mod, "guard_allowed_to_trade", lambda symbol: (True, "ok"))
 
     def _fake_choose_venue(side: str, symbol: str, size: float) -> dict:
         if side.lower() in {"long", "buy"}:

@@ -11,12 +11,14 @@ from app.services.runtime import (
     HoldActiveError,
     engage_safety_hold,
     is_dry_run_mode,
+    record_incident,
     register_order_attempt,
 )
 from positions import create_position
 from exchanges import BinanceFuturesClient, OKXFuturesClient
 from .execution_router import choose_venue
 from .execution_stats_store import append_entry as store_execution_stat
+from .edge_guard import allowed_to_trade as guard_allowed_to_trade
 
 
 def _ts() -> str:
@@ -231,6 +233,49 @@ def _record_execution_stat(
     try:
         store_execution_stat(record)
     except Exception:  # pragma: no cover - store must not break hedge flow
+        pass
+
+
+def _log_edge_guard_block(
+    *,
+    symbol: str,
+    reason: str,
+    spread_info: Mapping[str, Any],
+    long_plan: Mapping[str, Any] | None,
+    short_plan: Mapping[str, Any] | None,
+) -> None:
+    dry_run = is_dry_run_mode()
+    timestamp = _ts()
+    entry = {
+        "timestamp": timestamp,
+        "symbol": symbol,
+        "result": "edge_guard_blocked",
+        "status": "rejected",
+        "reason": reason,
+        "simulated": dry_run,
+        "dry_run_mode": dry_run,
+        "initiator": "cross_exchange_execute",
+        "details": {
+            "spread": float(spread_info.get("spread", 0.0)),
+            "spread_bps": float(spread_info.get("spread_bps", 0.0)),
+            "long_plan": dict(long_plan or {}),
+            "short_plan": dict(short_plan or {}),
+        },
+    }
+    try:
+        append_entry(entry)
+    except Exception:  # pragma: no cover - logging best effort
+        pass
+    try:
+        record_incident(
+            "edge_guard_blocked",
+            {
+                "symbol": symbol,
+                "reason": reason,
+                "spread_bps": float(spread_info.get("spread_bps", 0.0)),
+            },
+        )
+    except Exception:  # pragma: no cover - incident log best effort
         pass
 
 
@@ -493,6 +538,46 @@ def execute_hedged_trade(
 
     cheap_exchange = str(long_plan.get("venue") or spread_info["cheap"])
     expensive_exchange = str(short_plan.get("venue") or spread_info["expensive"])
+
+    guard_allowed, guard_reason = guard_allowed_to_trade(spread_info["symbol"])
+    if not guard_allowed:
+        guard_code = f"edge_guard:{guard_reason or 'blocked'}"
+        _record_execution_stat(
+            symbol=spread_info["symbol"],
+            side="long",
+            plan=long_plan,
+            leg=None,
+            success=False,
+            dry_run=dry_run_mode,
+            failure_reason=guard_code,
+        )
+        _record_execution_stat(
+            symbol=spread_info["symbol"],
+            side="short",
+            plan=short_plan,
+            leg=None,
+            success=False,
+            dry_run=dry_run_mode,
+            failure_reason=guard_code,
+        )
+        _log_edge_guard_block(
+            symbol=spread_info["symbol"],
+            reason=guard_reason,
+            spread_info=spread_info,
+            long_plan=long_plan,
+            short_plan=short_plan,
+        )
+        return {
+            "symbol": spread_info["symbol"],
+            "min_spread": float(min_spread),
+            "spread": spread_value,
+            "success": False,
+            "reason": guard_code,
+            "details": spread_info,
+            "long_plan": long_plan,
+            "short_plan": short_plan,
+            "edge_guard_reason": guard_reason,
+        }
 
     long_client = _client_for(cheap_exchange)
     short_client = _client_for(expensive_exchange)
