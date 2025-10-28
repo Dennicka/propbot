@@ -45,6 +45,7 @@ from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
+from services.daily_reporter import load_latest_report
 
 
 def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
@@ -195,6 +196,19 @@ async def pnl_history(request: Request, limit: int = Query(50, ge=1, le=500)) ->
     require_token(request)
     snapshots = list_recent_snapshots(limit=limit)
     return {"snapshots": snapshots, "count": len(snapshots)}
+
+
+@router.get("/daily_report")
+async def daily_report(request: Request) -> dict[str, Any]:
+    """Return the latest persisted daily report snapshot."""
+
+    require_token(request)
+    report = load_latest_report()
+    if not report:
+        return {"available": False}
+    payload = dict(report)
+    payload.setdefault("available", True)
+    return payload
 
 
 @router.get("/audit_log")

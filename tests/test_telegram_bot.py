@@ -83,3 +83,43 @@ async def test_status_command_returns_snapshot(monkeypatch: pytest.MonkeyPatch) 
     message = await bot._handle_status()
 
     assert message == "Status: ok"
+
+
+@pytest.mark.asyncio
+async def test_daily_command_formats_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TelegramBotConfig(token="token", chat_id="1", enabled=True, push_minutes=5)
+    bot = TelegramBot(config)
+
+    sample_report = {
+        "timestamp": "2024-05-01T00:00:00+00:00",
+        "window_hours": 24,
+        "pnl_realized_total": 12.5,
+        "pnl_unrealized_avg": 4.2,
+        "exposure_avg": 500.0,
+        "slippage_avg_bps": 0.75,
+        "hold_events": 3,
+        "hold_breakdown": {"safety_hold": 2, "risk_throttle": 1},
+        "pnl_unrealized_samples": 4,
+        "exposure_samples": 4,
+        "slippage_samples": 2,
+    }
+
+    monkeypatch.setattr("app.telebot.telegram_bot.load_latest_report", lambda: sample_report)
+
+    message = await bot._handle_daily()
+
+    assert "Daily report:" in message
+    assert "PnL_realized=12.50" in message
+    assert "HOLD_events=3" in message
+
+
+@pytest.mark.asyncio
+async def test_daily_command_handles_missing_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TelegramBotConfig(token="token", chat_id="1", enabled=True, push_minutes=5)
+    bot = TelegramBot(config)
+
+    monkeypatch.setattr("app.telebot.telegram_bot.load_latest_report", lambda: None)
+
+    message = await bot._handle_daily()
+
+    assert "No daily report" in message
