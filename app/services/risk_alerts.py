@@ -12,6 +12,7 @@ from typing import Dict, Iterable, List, Mapping, MutableMapping
 from positions_store import list_records as list_position_records
 
 from ..opsbot import notifier
+from . import risk_guard
 from .runtime import get_auto_hedge_state, get_state
 
 LOGGER = logging.getLogger(__name__)
@@ -305,6 +306,8 @@ def evaluate_alerts(*, now: datetime | None = None) -> List[Dict[str, object]]:
             alert_id, kind, text, extra = alert
             _activate_alert(alert_id=alert_id, kind=kind, text=text, extra=extra, now=evaluation_ts)
             triggered[alert_id] = True
+
+        risk_guard.evaluate(now=evaluation_ts)
 
     to_resolve = [alert_id for alert_id in _ACTIVE_ALERTS.keys() if alert_id not in triggered]
     for alert_id in to_resolve:
