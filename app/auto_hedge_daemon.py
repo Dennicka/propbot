@@ -19,6 +19,7 @@ from services.risk_manager import can_open_new_position
 
 from .services import risk_guard
 from .services.hedge_log import append_entry
+from .services.pnl_history import record_snapshot
 from .services.runtime import (
     get_state,
     is_dry_run_mode,
@@ -397,6 +398,10 @@ class AutoHedgeDaemon:
             else f"Auto hedge executed for {symbol}"
         )
         _emit_ops_alert("auto_hedge_executed", alert_text, alert_payload)
+        try:
+            await record_snapshot(reason="auto_hedge_cycle")
+        except Exception:  # pragma: no cover - snapshot failures should not break cycle
+            logger.debug("failed to record pnl history snapshot", exc_info=True)
 
 
 _daemon = AutoHedgeDaemon()

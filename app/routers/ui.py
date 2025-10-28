@@ -42,6 +42,7 @@ from ..security import require_token
 from positions import list_positions
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
+from pnl_history_store import list_recent as list_recent_snapshots
 
 
 def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
@@ -183,6 +184,15 @@ async def hedge_positions(request: Request) -> dict:
     if not positions:
         return {"positions": [], "exposure": {}, "totals": {"unrealized_pnl_usdt": 0.0}}
     return await build_positions_snapshot(state, positions)
+
+
+@router.get("/pnl_history")
+async def pnl_history(request: Request, limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+    """Return the most recent PnL / exposure snapshots."""
+
+    require_token(request)
+    snapshots = list_recent_snapshots(limit=limit)
+    return {"snapshots": snapshots, "count": len(snapshots)}
 
 
 def _secret_payload(state) -> dict:

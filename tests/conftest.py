@@ -16,6 +16,7 @@ from app.services import runtime, approvals_store
 from app.services.loop import hold_loop
 from app.services.runtime import reset_for_tests
 from positions import reset_positions
+from pnl_history_store import reset_store as reset_pnl_history_store
 
 
 @pytest.fixture
@@ -77,6 +78,15 @@ def override_positions_store(monkeypatch, tmp_path: Path):
     reset_positions()
     yield
     reset_positions()
+
+
+@pytest.fixture(autouse=True)
+def override_pnl_history_store(monkeypatch, tmp_path: Path):
+    path = tmp_path / "pnl_history.json"
+    monkeypatch.setenv("PNL_HISTORY_PATH", str(path))
+    reset_pnl_history_store()
+    yield
+    reset_pnl_history_store()
 
 
 @pytest.fixture(autouse=True)
