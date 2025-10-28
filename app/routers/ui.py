@@ -46,6 +46,7 @@ from ..utils import redact_sensitive_data
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
 from services.daily_reporter import load_latest_report
+from services.snapshotter import create_snapshot
 
 
 def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
@@ -209,6 +210,15 @@ async def daily_report(request: Request) -> dict[str, Any]:
     payload = dict(report)
     payload.setdefault("available", True)
     return payload
+
+
+@router.post("/snapshot")
+async def generate_snapshot(request: Request) -> dict[str, Any]:
+    """Persist and return a forensic snapshot for operator audits."""
+
+    require_token(request)
+    snapshot, _ = await asyncio.to_thread(create_snapshot)
+    return snapshot
 
 
 @router.get("/audit_log")
