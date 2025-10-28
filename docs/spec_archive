@@ -1,0 +1,1057 @@
+PropBot - Full Functional Specification
+Date Generated: 2025-10-28T17:03:21.513605
+
+
+PropBot - Full Functional Specification (Home/VPS Prop Desk)
+
+================================================================
+1. PURPOSE
+================================================================
+
+PropBot is not a "simple trading bot". PropBot is a self-contained
+mini prop-desk infrastructure that can safely run on a home machine
+or VPS and behave like a disciplined proprietary trading operation.
+
+Goals:
+- Execute neutral / low-risk strategies (cross-exchange arbitrage,
+  basis trades, funding capture, maker rebate farming).
+- Defend capital automatically (risk throttles, hedging, exposure caps,
+  panic cancel, SAFE_MODE).
+- Monitor itself (latency, liquidity, connectivity, balance).
+- Produce full audit trails (so you always know why something
+  happened, who approved, and where money went).
+- Allow manual control of global aggression (RPI/DRPC) while forcing
+  safe gating, health checks, and logging.
+
+This spec defines required behavior, not just "features". Each block
+below must behave in production, not just exist as a stub.
+
+================================================================
+2. HIGH-LEVEL ARCHITECTURE
+================================================================
+
+The system is made of logical layers:
+
+2.1 Execution Layer
+- Order routing, order state machine, hedging logic, panic cancel,
+  latency deadlines, partial hedge fallback.
+
+2.2 Risk & Capital Layer
+- Global risk limits, VaR, per-strategy loss limits, exposure caps,
+  inventory guard, adaptive throttle, final hard stop.
+
+2.3 Strategy Layer
+- Multiple strategies co-existing as plugins with explicit interfaces.
+- Capital allocator that decides who gets capital.
+- Automatic downgrade/retirement of bad strategies.
+- Sandbox/canary rollout for new strategies.
+
+2.4 Market Intelligence Layer
+- Multi-venue order book aggregation.
+- Liquidity profile and slippage expectation.
+- Exchange quality scoring.
+- Volatility/turbulence detection.
+- Market Stability Rating (MSR).
+
+2.5 Monitoring & Health Layer
+- Heartbeats, SLO/SLA budgets, alerting channels.
+- Incident system with structured reasons and timelines.
+- Self-check loops, canary session, maintenance mode.
+
+2.6 Governance / Audit / Compliance Layer
+- RBAC roles, two-man rule, signed configs.
+- Withdrawal policy with whitelist.
+- Investor-safe reporting and capital partitions.
+- Legal freeze of logs for provability.
+
+2.7 Capital / Investor Layer
+- Segmented capital pools (your funds, investor funds, test funds).
+- PnL attribution and revenue share accounting.
+- External trader sandbox.
+
+2.8 Security & Reliability Layer
+- Secrets isolation.
+- Fencing (only one active trading instance).
+- Snapshot/rollback builds.
+- Brute-force lockout.
+- Key rotation and emergency revocation.
+
+2.9 Operator UX Layer
+- Daily digest, incident digest.
+- Trade replay / strategy replay.
+- Drawdown timeline.
+- Capital health score.
+- Mobile read-only status.
+
+2.10 DRPC / RPI Layer
+- Manual Risk Profile Index (0–100) that can override system posture,
+  WITH health gating, MSR warning, audit trail, and rate-of-change
+  protections.
+
+2.11 Human Control Layer / Autopilot Modes
+- Dedicated interface layer that exposes safe high-level modes
+  (Autopilot / Assisted / Manual), enforces capital/risk ceilings,
+  and provides human-language explanations of every control.
+
+================================================================
+3. NON-NEGOTIABLE GUARANTEES
+================================================================
+
+3.1 Exactly-once Order Execution (Feature #[1])
+- Every order is tracked in a persistent outbox table with states:
+  NEW -> SENT -> ACK -> PARTIAL_FILL -> FILLED or CANCELLED.
+- Each order has a deterministic unique clientOrderId.
+- After restart, the bot reconciles every order with the exchange.
+- The bot MUST NOT resend an already-sent order accidentally.
+- Missing ACK after a strict deadline triggers an incident and
+  blocks further trading for that strategy until resolved.
+
+3.2 Inventory Guard (#[2], #[29], #[37])
+- Tracks cross-exchange exposure imbalance.
+- If exposure drift (unhedged leg) exceeds configured safe bound:
+  * STOP opening new positions,
+  * attempt emergency hedge,
+  * force SAFE_MODE if hedge cannot complete.
+- Inventory Guard has authority to override strategies.
+
+3.3 Fencing / Single Active Trader Process (#[3], #[98])
+- Only one process is allowed to actually send orders.
+- A backup ("passive") instance can monitor but cannot send orders
+  until it formally becomes leader.
+- Prevents "double trader brain" chaos.
+
+3.4 Panic Cancel (#[26])
+- One global kill switch (and automatic trigger conditions):
+  * Cancel ALL open orders on ALL venues instantly.
+  * Block new order placement.
+  * Switch to SAFE_MODE / HOLD.
+- This fires automatically on catastrophic conditions OR manually
+  by operator.
+
+3.5 Safety Modes (#[18], #[106], #[120])
+- HOLD: system not trading, just alive.
+- MONITOR: no new risk, only hedging/flattening/position holding.
+- REDUCED: trading allowed but with throttled size/frequency, only
+  safer strategies.
+- FULL: unrestricted normal trading state (still within global limits).
+- Modes can be entered automatically based on health/risk.
+
+3.6 Final Hard Stop (#[175])
+- If total loss, VaR breach, or hedge failure hits catastrophic
+  threshold:
+  * Close/hedge risk,
+  * Cancel orders,
+  * Revoke keys if supported,
+  * Enter HOLD and refuse to exit until manual human review +
+    two-man approval.
+- This is the "save the apartment" rule.
+
+================================================================
+4. EXECUTION LAYER (#[1], #[4], #[26], #[27], #[28], #[29], #[31], #[79], #[105], #[109])
+================================================================
+
+4.1 Order State Machine / Outbox (#[1])
+- Persistent DB table for all orders.
+- State transitions are atomic and idempotent.
+- Reconciliation after restart:
+  - Query exchange open orders / fills.
+  - Sync local state.
+  - Detect zombie orders (orders that exist on exchange but not
+    locally, or vice versa) and dispatch DeadOrderHunter logic.
+- Each order tracks timestamps for:
+  - send_time
+  - ack_time
+  - full_fill_time
+  - hedge_complete_time
+
+4.2 Smart Order Router (SOR) (#[4], #[27], #[31])
+- Chooses venue(s) dynamically based on:
+  - available liquidity,
+  - expected slippage,
+  - fee/rebate structure,
+  - latency and quality score of each venue.
+- Can split a single logical trade into chunks across multiple
+  venues to minimize impact.
+- Supports post-only routing so we act as maker and earn rebates,
+  not pay taker fees (#[27]).
+
+4.3 Adaptive Order Sizing (#[28])
+- Position size scales with:
+  - recent volatility of the instrument,
+  - current liquidity depth,
+  - current net unhedged exposure.
+- High volatility or stressed liquidity automatically shrinks size.
+- System enforces upper bounds per-instrument and per-strategy.
+
+4.4 Partial Hedge Fallback (#[29], #[71], #[72], #[73])
+- If ideal hedge venue fails:
+  - Attempt correlated hedge (e.g. PERP instead of SPOT, or hedge
+    via a correlated asset using beta weights).
+- Attempt fallback FAST (sub-200ms if possible).
+- If fallback hedge also fails -> SAFE_MODE + incident.
+
+4.5 Strict Hedge Deadline / Execution Deadline (#[7], #[28])
+- Each "paired" trade has a total allowed time budget:
+  ex: 120ms from signal to both legs filled.
+- If deadline exceeded:
+  * trade is declared STALE,
+  * bot attempts flatten/hedge and stops opening new trades in that
+    strategy until health is green again.
+
+4.6 Trade Frequency Limiter (#[108], #[109])
+- Global and per-strategy limiter on number of trades per minute.
+- If a strategy hits runaway loop (spam signals / code bug):
+  - Strategy is automatically disabled.
+  - Incident raised with reason POSSIBLE_LOGIC_LOOP.
+
+4.7 Latency Edge / Latency Arbitration (#[105])
+- Track which venue leads price discovery.
+- Use fast venue's movement to act on slower venue where price
+  hasn't updated yet.
+- This is "soft HFT style" latency arb within VPS/Internet
+  constraints.
+
+4.8 Dead Order Hunter (#[38], #[79])
+- Periodically polls exchanges via REST.
+- Finds zombie orders:
+  * exchange shows it open but local state thinks it's gone,
+    or vice versa.
+- If zombie found:
+  - alert,
+  - attempt resolve / cancel / hedge,
+  - can trigger SAFE_MODE.
+
+================================================================
+5. RISK & CAPITAL LAYER
+(#[2], #[11], #[12], #[20], #[21], #[30], #[31], #[34], #[36], #[37], #[40], #[64], #[71], #[72], #[78], #[80], #[81],
+ #[82], #[89], #[90], #[94], #[95], #[115], #[123], #[124], #[137], #[138], #[174], #[175])
+================================================================
+
+5.1 Adaptive Risk Throttle (#[12])
+- Monitors realized PnL in rolling windows.
+- If drawdown hits X% of daily loss limit:
+  * reduce order sizes,
+  * reduce allowed frequency,
+  * switch some strategies off,
+  * enforce REDUCED mode.
+- If drawdown worsens beyond limit:
+  * Hard-stop offending strategy or entire desk.
+
+5.2 Per-Strategy Daily Loss Stop (#[30])
+- Each strategy has its own daily max loss.
+- Once breached:
+  - That strategy is disabled for the remainder of the period.
+  - Others may continue running.
+
+5.3 Global Daily Loss Stop / Drawdown Stop (#[11], #[90], #[175])
+- Desk-wide daily stop-loss.
+- If breached:
+  * Panic cancel,
+  * Hedge/flatten,
+  * Enter HOLD and lock until manual override.
+
+5.4 VaR (Value at Risk) Calculation + Limit (#[89], #[90])
+- Approximate portfolio VaR over 1h / 1d horizons.
+- Maintain a VaR ceiling (e.g. "do not exceed risk of losing N USD").
+- If VaR > limit:
+  * Stop increasing exposure,
+  * Potentially force desk to REDUCED/MONITOR or HOLD.
+
+5.5 Stress Tests (#[71], #[72])
+- Liquidity Stress Test:
+  "If we had to instantly liquidate ALL positions now,
+   how long would it take, and how much slippage cost?"
+- Margin Shock Test:
+  "If market moves -5% / -10% quickly, do we get margin called
+   anywhere?"
+- If results exceed tolerance -> incident + throttle.
+
+5.6 Exposure Caps per Asset (#[64], #[81], #[115])
+- Cap max net exposure (unhedged or directional) per symbol (BTC,
+  ETH, SOL, etc.).
+- Across ALL strategies combined.
+- Prevents accidental concentrated bets via multiple small strategies.
+
+5.7 Concentration Guard (#[115])
+- Cap max capital allocation to any single strategy.
+- Protects from "one golden goose" becoming "single point of
+  failure".
+
+5.8 Market Regime Detector (#[21], #[34], #[78])
+- Classifies environment: calm / normal / volatile / chaotic.
+- Adjusts allowable:
+  * order size,
+  * hedge deadlines,
+  * frequency of entries,
+  * which strategies can run.
+- Automatically drops desk to REDUCED or MONITOR in chaos.
+
+5.9 Circuit Breaker (#[137])
+- If regime is "chaotic":
+  * block opening NEW net exposure,
+  * only allow hedging / flattening.
+- This is like exchange-level "circuit breaker" but local to us.
+
+5.10 SLO / Latency Budgets (#[7], #[36], #[58], #[131])
+- We maintain strict budgets:
+  e.g. "unhedged exposure cannot remain >X USD for >Y ms total per
+  hour".
+- Track consumption of that budget.
+- If too much budget burned quickly -> auto REDUCED or HOLD.
+
+5.11 Reason-Coded Incidents (#[82], #[117])
+- Any major stop or mode change is tagged:
+  LATENCY_BREACH,
+  HEDGE_FAILURE,
+  INVENTORY_IMBALANCE,
+  API_LIMIT,
+  STRATEGY_PNL_STOP,
+  SANITY_PRICE_FAIL.
+- We can quantify WHY we paused.
+
+5.12 Capital Health Score (#[174], #[95])
+- A 0-100 score summarizing:
+  * current VaR,
+  * drawdown,
+  * mode (FULL vs REDUCED),
+  * number of SAFE_MODE triggers,
+  * exchange/network health.
+- Operator sees instantly if "bank is fragile" or "bank is fine".
+
+================================================================
+6. STRATEGY ORCHESTRATION
+(#[19], #[20], #[56], #[57], #[67], #[71], #[72], #[74], #[75], #[76], #[80], #[81], #[100], #[101], #[102], #[110],
+ #[115], #[155], #[165], #[166])
+================================================================
+
+6.1 Strategy as Plugin (#[19], #[165])
+- Each strategy is a module with a strict interface:
+  get_signal(), execute(), required_latency(),
+  risk_profile(), capital_need().
+- Strategy CANNOT directly talk to broker; it must go through central
+  orchestrator and respect risk constraints.
+
+6.2 Capital Allocator (#[20], #[155])
+- Decides who gets capital.
+- Factors:
+  * strategy rating,
+  * recent drawdown,
+  * slippage efficiency,
+  * capital health score.
+- Can "park" idle capital in low-risk carry strategies (funding,
+  basis) instead of leaving it idle or feeding it to a bad strategy.
+
+6.3 Strategy Rating & Retirement (#[75], #[76], #[67])
+- Track PnL after fees, drawdown shape and recovery rate, slippage,
+  stability, risk usage efficiency.
+- If rating < threshold:
+  * remove allocation,
+  * put strategy into sandbox-only mode until reviewed.
+
+6.4 Sandbox / Canary / Rollout (#[56], #[57], #[74])
+- New strategy lifecycle:
+  PHASE 1: sandbox (paper trading live market data, no real orders).
+  PHASE 2: canary (tiny capital in live trades).
+  PHASE 3: production (normal allocation).
+- Promotion and demotion automatically logged.
+
+6.5 Latency SLA per Strategy (#[110])
+- Each strategy declares max acceptable execution latency.
+- If desk currently can't hit it (network slow, VPS laggy),
+  that strategy is temporarily disabled.
+- Other strategies may continue.
+
+6.6 Cross-Strategy Exposure Control (#[80], #[81])
+- The orchestrator aggregates net exposure across ALL strategies.
+- Stops new trades if combined net risk in an asset hits the cap.
+
+6.7 External Trader Sandbox / Revenue Share (#[100], #[101], #[102])
+- A 3rd-party trader can run a strategy in sandbox/canary mode
+  *inside* your infrastructure, without ever seeing your keys.
+- The system can attribute profit to that trader and compute revenue
+  share.
+- That trader can NOT touch withdrawals, global risk, RPI, etc.
+
+================================================================
+7. MARKET INTELLIGENCE
+(#[21], #[31], #[32], #[33], #[34], #[40], #[41], #[54], #[66], #[78], #[87], #[94], #[97], #[98], #[99], #[103],
+ #[104], #[105], #[107], #[108], #[123], #[124], #[168], #[173])
+================================================================
+
+7.1 Multi-Venue Order Book Aggregation (#[31])
+- Build a synthetic "best book" from multiple venues simultaneously.
+- Incorporate trading fees and rebates to estimate true best executable
+  price.
+
+7.2 Liquidity Profile / Heatmap (#[32], #[124])
+- Continuously measure depth at key distances from midprice
+  (0.01%, 0.05%, 0.1%).
+- Used by SOR and Adaptive Order Sizing.
+
+7.3 Exchange Quality Scoring (#[33], #[87])
+- Track per-exchange:
+  * round-trip latency,
+  * websocket stability,
+  * cancel/ack reliability,
+  * slippage performance.
+- Low-score venues get demoted for hedge usage.
+
+7.4 Volatility Spike Detector (#[34], #[78])
+- Detect sudden volatility bursts or order book thinning.
+- Automatically:
+  * tighten hedge deadlines,
+  * reduce allowed order size,
+  * possibly drop new trades.
+
+7.5 Toxic Flow Detector (#[123])
+- Detect if we are consistently getting adverse fills (we get hit
+  only when it's bad for us).
+- Mark pair/venue TOXIC and block aggressive entries on it.
+
+7.6 Outlier Price / Sanity Filter (#[40])
+- Compare quotes across venues.
+- If one venue looks "too good to be true", ignore it instead of
+  jumping into a trap.
+
+7.7 Wash-Trading / Fake Volume Detector (#[41])
+- Detect pairs whose "volume" looks fake (can't actually get fills).
+- Exclude them from tradable universe.
+
+7.8 Universe Whitelist (#[22], #[54], #[66])
+- Only trade instruments explicitly whitelisted.
+- Whitelist includes:
+  * min liquidity requirements,
+  * compliance permissions (legal/jurisdiction),
+  * allowed leverage.
+- A strategy CANNOT open a symbol outside its approved whitelist.
+
+7.9 Market Stability Rating (MSR) (#[177])
+- Aggregated score: GREEN / YELLOW / RED.
+- Uses:
+  * volatility state,
+  * network stability,
+  * recent hedge failures,
+  * capital health score,
+  * compliance state (are we in good standing with venues?).
+- MSR is displayed when operator tries to raise RPI.
+
+7.10 Latency / Connectivity Map (#[87], #[97], #[98])
+- Track ping / RTT / packet loss per venue over time.
+- If a venue/network degrades (RTT jumps from 40ms to 180ms),
+  that venue is downgraded for hedging and new entries.
+- This feeds into MSR and automatic throttling.
+
+7.11 Fee Negotiation Prep / Venue Economics (#[103], #[104])
+- Track monthly volume and slippage per venue.
+- Generate stats (maker % volume, taker % volume, average slippage).
+- This is used for negotiating better fee tiers with exchanges.
+
+================================================================
+8. MONITORING, INCIDENTS, SELF-HEALING
+(#[15], #[16], #[35], #[36], #[52], #[53], #[55], #[57], #[58], #[71], #[72], #[73], #[79], #[82], #[83],
+ #[84], #[94], #[95], #[101], #[107], #[110], #[111], #[112], #[117], #[131], #[137], #[140], #[143], #[147],
+ #[148], #[149], #[154], #[155], #[160], #[171], #[172], #[174], #[175])
+================================================================
+
+8.1 Heartbeats & Watchdogs (#[35], #[79])
+- Every critical module reports "alive" signals.
+- If any heartbeat dies or drifts:
+  * immediate downgrade to REDUCED or MONITOR,
+  * incident logged.
+
+8.2 Self-Check Loop (#[107], #[131])
+- Periodic self-audit:
+  * Are all positions hedged within budget?
+  * Any zombie orders?
+  * Are we still under VaR?
+  * Are we exceeding trade frequency caps?
+  * Is latency within SLA for enabled strategies?
+- If not, pre-emptive incident is raised BEFORE catastrophe.
+
+8.3 Canary Session Start (#[57])
+- At start of session/day:
+  * place micro-sized trades to test connectivity, fills, cancel/ack,
+    hedge responsiveness.
+- Only if canary passes -> allow FULL / RPI>low.
+
+8.4 Maintenance Mode (#[148])
+- Operator can declare maintenance.
+- In maintenance:
+  * No new net risk.
+  * Hedging/flattening allowed.
+  * Alerts understand this is "planned", not panic.
+
+8.5 Structured Incident Reports (#[16], #[117], #[143])
+- Every SAFE_MODE / HOLD / panic-cancel generates a structured
+  incident:
+  * timestamp,
+  * reason code,
+  * PnL impact,
+  * how long position was left unhedged,
+  * current mode,
+  * recovery plan.
+- A morning digest summarises all incidents during your sleep.
+
+8.6 Multi-Channel Alerting & On-Call (#[52], #[53], #[154], #[172])
+- Alert levels:
+  INFO / WARNING / CRITICAL / PAGE_NOW.
+- Routing:
+  * INFO/WARNING -> Telegram ops channel.
+  * CRITICAL -> Telegram + email.
+  * PAGE_NOW -> Telegram + email + immediate escalation target.
+- "On-call" contact can be rotated (today it's you; in future could
+  be teammate).
+
+8.7 Daily Report / Capital Health Dashboard (#[43], #[140], #[174])
+- Automatic daily summary:
+  * total PnL,
+  * max drawdown,
+  * SAFE_MODE count,
+  * worst venue / best venue,
+  * best/worst strategy,
+  * capital health score.
+- This turns raw chaos into human-readable status.
+
+8.8 Session Timeline / Trade Replay (#[44], #[84], #[114])
+- Full timeline of:
+  * when we entered which trades,
+  * latency,
+  * slippage,
+  * incidents,
+  * mode switches.
+- Ability to replay a specific trade decision:
+  * expected edge at decision time,
+  * actual realized edge,
+  * hedge timing.
+- This is for debugging strategies and proving to investors "why
+  we did X".
+
+8.9 End-of-Day / End-of-Session Wrap (#[149])
+- Automatic wrap at end of a session/day:
+  * flatten if policy requires flat overnight,
+  * archive incidents,
+  * snapshot risk state ("last clean point"),
+  * prep morning digest.
+
+================================================================
+9. GOVERNANCE / AUDIT / COMPLIANCE
+(#[10], #[11], #[13], #[14], #[15], #[16], #[47], #[48], #[49], #[50], #[51], #[63], #[66], #[83], #[92],
+ #[94], #[99], #[100], #[101], #[102], #[103], #[111], #[112], #[113], #[128], #[130], #[141], #[156], #[157],
+ #[158], #[159], #[160], #[161], #[162], #[163], #[164], #[168], #[169], #[171], #[173], #[175])
+================================================================
+
+9.1 RBAC Roles (#[10])
+- VIEW: read-only dashboard.
+- OPS: pause/resume strategies, acknowledge alerts.
+- RISK: adjust RPI within safe increments and change per-strategy
+  allocation within bounds.
+- ADMIN: ability to lift HOLD, change global risk ceilings, approve
+  withdrawals.
+- Every sensitive API/action is role-guarded.
+
+9.2 Two-Man Rule + Human Annotation (#[83], #[112], #[128])
+- Critical actions require either:
+  * dual confirmation,
+  OR
+  * explicit human annotation (reason text) that goes into audit.
+- Critical actions:
+  - raise RPI aggressively,
+  - exit HOLD into FULL on a volatile market,
+  - change withdrawal whitelist,
+  - escalate capital to a strategy after a drawdown,
+  - override a red MSR warning.
+
+9.3 Signed Configs / Immutable Risk Config (#[14], #[60])
+- All live configs (risk limits, whitelist universe, capital
+  allocation policy) are versioned and signed.
+- Production can only load signed configs.
+- Direct runtime edits are forbidden; changes require generating a new
+  signed config version.
+
+9.4 Withdrawal Policy / Whitelist (#[50], #[51], #[92], #[130])
+- Funds can only be withdrawn to whitelisted addresses.
+- Withdrawals require RBAC+two-man approval and annotation of reason.
+- All withdrawals are logged permanently.
+
+9.5 Capital Pools / Investor Segregation (#[47], #[48], #[49], #[101], #[113])
+- Track PnL and drawdown per pool:
+  * your main pool,
+  * investor pool,
+  * experimental pool.
+- Prevent experimental risk from touching main pool.
+- Produce investor statements:
+  * start balance,
+  * end balance,
+  * PnL,
+  * max drawdown,
+  * compliance status.
+
+9.6 Investor-Safe Dashboard (#[47], #[49], #[113], #[169])
+- A limited-view dashboard for capital providers:
+  * PnL,
+  * drawdown,
+  * VaR,
+  * "are we respecting limits?"
+- No access to secrets, configs, or live signals.
+
+9.7 Legal Freeze / Journaling Freeze (#[63], #[141], #[168])
+- Create tamper-evident archives of:
+  * incidents,
+  * strategies' performance,
+  * withdrawals,
+  * RPI changes.
+- Sign these archives (hash) so you can prove discipline later.
+
+9.8 Compliance & Jurisdiction Guard (#[66], #[99], #[164], #[173])
+- Bot is aware of:
+  * which venues are legally/safely tradable under current
+    conditions/IP,
+  * which assets or contract types are restricted.
+- If we drift into restricted territory, system:
+  * enforces REDUCED,
+  * raises COMPLIANCE_CHECK,
+  * blocks expansion of exposure.
+
+9.9 Security / Compromise Detection (#[156], #[158], #[159], #[160], #[161], #[162], #[163])
+- Secrets are encrypted and compartmentalized per strategy/pool.
+- Brute-force / suspicious access attempts cause lockout +
+  CRITICAL alert.
+- File integrity monitor ensures running code == signed build.
+- Emergency "revoke credentials now" button to nuke keys if we
+  suspect breach.
+- Any sign of compromise -> HOLD + alert + require manual recovery.
+
+================================================================
+10. DRPC / RPI MANUAL AGGRESSION CONTROL
+(#[176], #[177])
+================================================================
+
+10.1 Purpose
+- DRPC = Dynamic Risk Profile Control.
+- RPI = Risk Profile Index (0–100).
+
+This is the "global aggression lever" for the desk.
+
+10.2 DRPC Modes
+- OFF:
+  * Desk runs in autonomous mode.
+  * Adaptive throttle, capital allocator, per-strategy limits,
+    and mode transitions FULL/REDUCED/MONITOR/HOLD all operate
+    normally.
+- ON (CONFIGURING):
+  * Operator is choosing an RPI level and previewing impact.
+- ON (ACTIVE):
+  * RPI is enforced.
+  * Desk behavior (size, allowed strategies, hedge deadlines, daily
+    loss stop widths, VaR ceilings) all adjust to match chosen RPI.
+
+10.3 RPI Effects
+When DRPC is active:
+- Max per-order size scales with RPI.
+- Allowed net unhedged exposure scales with RPI.
+- Hedge deadline tolerance stretches slightly with higher RPI.
+- Trade frequency caps loosen with higher RPI.
+- Strategy access:
+  * Low RPI: only conservative carry/funding/basis.
+  * High RPI: allow latency-sensitive/arbitrage scalpers.
+- Daily stop-loss and VaR ceilings widen with higher RPI (within
+  predefined absolute safety bounds).
+- Desk mode can jump from MONITOR/REDUCED at low RPI to FULL at
+  higher RPI.
+
+10.4 MSR (Market Stability Rating)
+- Whenever operator tries to raise RPI:
+  * System calculates MSR = GREEN / YELLOW / RED.
+    - GREEN: stable liquidity and latency, healthy hedge performance.
+    - YELLOW: elevated volatility or minor venue instability.
+    - RED: dangerous (hedge failures, extreme vol, network issues,
+      compliance warning).
+- If MSR is RED:
+  * System warns: "Raising RPI now is unsafe".
+  * Requires explicit override + annotation to proceed.
+
+10.5 Health Gate
+- RPI cannot increase if:
+  * Desk is in SAFE_MODE,
+  * There's an outstanding unhedged position beyond limits,
+  * VaR limit already breached,
+  * Desk is under COMPLIANCE_CHECK,
+  * Or heartbeat/latency health is red.
+- Lowering RPI is always allowed immediately.
+
+10.6 Audit Trail
+- Every RPI change is logged with:
+  * timestamp,
+  * operator identity,
+  * old RPI,
+  * new RPI,
+  * MSR at decision time,
+  * whether override was required,
+  * human comment.
+- This is part of "trader-in-charge" accountability.
+
+================================================================
+11. OPERATOR UX / REPORTING
+(#[43], #[44], #[84], #[95], #[114], #[117], #[140], #[141], #[149], #[150], #[151], #[169], #[171], #[174])
+================================================================
+
+11.1 Daily Digest
+- Automatic daily Telegram (or dashboard) message:
+  * PnL,
+  * max drawdown,
+  * SAFE_MODE / panic events,
+  * worst behaving venue,
+  * best and worst strategy,
+  * capital health score.
+
+11.2 Incident Digest / Night Summary
+- If anything blew up overnight:
+  * "03:12 SAFE_MODE due to HEDGE_FAILURE,
+     unrealized loss -82 USD held 12s,
+     auto-hedge complete by 03:26,
+     desk now REDUCED."
+- So you wake up and instantly understand damage.
+
+11.3 Trade Replay / Strategy Replay
+- For any trade:
+  * Show predicted edge at decision time,
+  * actual fill prices,
+  * hedge timing,
+  * realized PnL after fees,
+  * slippage,
+  * which strategy asked for it and why.
+- For post-mortems and improvement.
+
+11.4 Drawdown Timeline (#[114])
+- Plot drawdown and recovery speed to judge strategy resilience.
+- Helps allocator decide which strategy deserves more capital.
+
+11.5 FX-aware PnL (#[150], #[151], #[152])
+- PnL reported also in fiat (USD/EUR/SEK).
+- Uses sane FX source and checks for absurd rates.
+- Supports investor-facing transparency.
+
+11.6 End-of-Day / End-of-Session Wrap (#[149])
+- Auto wrap-up:
+  * Flatten if policy requires,
+  * Archive incidents,
+  * Snapshot "last clean point".
+- Prepares the next session start (and canary if needed).
+
+11.7 Capital Health / Are We Scalable? (#[171], #[174])
+- System can answer:
+  * "Are we safe to scale capital right now?"
+  * "Can I sleep while in FULL?"
+  * "Do we require live monitoring if we run this size overnight?"
+- This is a human decision tool, not just raw metrics.
+
+================================================================
+12. SECURITY / INFRASTRUCTURE / DEPLOYMENT MODEL
+(#[16], #[17], #[35], #[37], #[38], #[39], #[52], #[53], #[58], #[59], #[60], #[61], #[86], #[93], #[94],
+ #[97], #[98], #[126], #[128], #[133], #[134], #[135], #[137], #[139], #[147], #[148], #[156], #[157], #[158],
+ #[159], #[160], #[161], #[162], #[163], #[164])
+================================================================
+
+12.1 Secrets Management (#[17], #[157])
+- API keys never appear in plaintext logs.
+- Keys are stored encrypted and scoped:
+  * different subaccounts / keys per strategy pool or investor pool.
+- If any key leaks, fallout is contained.
+
+12.2 Key Rotation & Emergency Revocation (#[156], #[158], #[163])
+- System supports:
+  * routine key rotation,
+  * instant revocation ("pull the plug now") if compromise suspected.
+- Revocation forces HOLD + panic cancel + incident.
+
+12.3 Brute-Force / Access Lockout (#[159])
+- Repeated failed auth -> lock + PAGE_NOW alert + forced REDUCED
+  mode if needed.
+
+12.4 File / Build Integrity (#[59], #[60], #[61], #[86], #[135])
+- Deterministic builds with pinned dependencies.
+- Every live deployment is signed.
+- Runtime process regularly checks its own code and config hashes.
+- If mismatch:
+  * Aggressive trading halts,
+  * Incident raised (possible tampering).
+
+12.5 Rollback / Immutable Artefacts (#[60], #[61])
+- Current prod build and last known-good build are both stored.
+- One-click rollback to last known-good without manual hacking.
+- NO "edit code directly in prod".
+
+12.6 System Health: Hardware / VPS (#[33], #[97], #[98], #[133], #[134], #[147])
+- Monitor CPU load, memory pressure, disk space, temperature,
+  clock sync drift.
+- If environment degrades:
+  * Force REDUCED or MONITOR,
+  * Alert operator that hardware/VPS is choking.
+- Clock drift > threshold triggers alert because it can break
+  latency logic and execution deadlines.
+
+12.7 Canary & Maintenance Windows (#[57], #[148])
+- Canary trades at start ensure the live environment is healthy.
+- Maintenance mode: planned downtime that doesn't trigger panic.
+
+12.8 Network / DDoS / Connectivity Resilience (#[97], #[98])
+- Watch RTT / packet loss per venue.
+- If network is degraded:
+  * Drop out of aggressive trading,
+  * Attempt to fail over to backup network path or passive node,
+  * Mark incident NETWORK_DEGRADED.
+
+12.9 Cold-Start Recon / "Dirty Start" Detection (#[37], #[38], #[73], #[93], #[139], #[147])
+- On startup:
+  * Reconcile actual balances/positions across venues with local
+    ledger.
+- If mismatch:
+  * Mark start as DIRTY_START.
+  * Stay in HOLD/MONITOR until operator reviews hedge plan.
+- Snapshot "last clean point" is used to understand what changed.
+
+12.10 Secure Archival / Legal Proof (#[63], #[94], #[141], #[168], #[169])
+- Periodically archive:
+  * incidents,
+  * PnL,
+  * risk settings,
+  * withdrawals.
+- Archives are tamper-evident (hash-signed).
+- This supports investor transparency and protects you against
+  accusations or misunderstandings.
+
+================================================================
+13. OPERATING ENVELOPE / LIMITATIONS
+================================================================
+
+This spec is designed to run on:
+- A serious home machine,
+- Or a decent VPS.
+
+It does NOT require:
+- FPGA,
+- colocated rack inside exchange matching-engine facility,
+- sub-millisecond round trip times,
+- 24/7 team of human risk officers,
+- external compliance department.
+
+Where this stops:
+- For deeper HFT, you'd need colocation (1-2ms or sub-ms latencies),
+  custom networking stacks, and special agreements with venues for
+  rate limits and maker priority.
+- For institutional scale (managing other people's millions):
+  you'd need real legal wrappers, regulated entity, auditability to
+  external regulators, and formal contracts with liquidity providers.
+
+Everything up to this document CAN BE BUILT in software + ops
+discipline on a home system / VPS.
+
+================================================================
+14. TL;DR MANDATORY CORE
+================================================================
+
+The following MUST be implemented for a production-grade PropBot:
+
+- Exactly-once order broker with persistent outbox and restart
+  reconciliation (#[1]).
+- Inventory guard with authority to STOP trading (#[2]).
+- Panic-cancel + SAFE_MODE/HOLD/REDUCED/FULL mode machine (#[18],
+  #[26], #[106], #[120], #[175]).
+- Adaptive risk throttle and per-strategy daily loss stops (#[12],
+  #[30]).
+- Global daily loss stop / VaR stop with final hard kill (#[11],
+  #[90], #[175]).
+- Capital allocator + multi-strategy scheduler with sandbox/canary
+  rollout and retirement (#[19], #[20], #[56], #[57], #[74], #[75],
+  #[76], #[165]).
+- Market intelligence layer:
+  multi-venue order book, liquidity profiling, venue quality,
+  volatility spike detector, toxic flow detector, whitelist universe
+  (#[31], #[32], #[33], #[34], #[40], #[41], #[54], #[123], #[124]).
+- Health/incident system with heartbeats, structured incidents,
+  daily digest, end-of-day wrap, canary-at-start, maintenance mode,
+  on-call alert escalation (#[35], #[36], #[43], #[52], #[53],
+  #[57], #[58], #[117], #[140], #[148], #[149], #[154]).
+- Governance:
+  RBAC, two-man rule, signed configs, withdrawal whitelist with audit,
+  investor-safe views, compliance self-check (#[10], #[14], #[50],
+  #[51], #[63], #[83], #[92], #[99], #[111], #[112], #[113],
+  #[130], #[141], #[169], #[173]).
+- Security / infra discipline:
+  secrets isolation, file/build integrity checking, deterministic
+  builds, rollback, brute-force lockout, emergency key revoke,
+  cold-start recon, DIRTY_START detection (#[16], #[17], #[37],
+  #[38], #[59], #[60], #[61], #[86], #[93], #[126], #[133], #[134],
+  #[156], #[157], #[158], #[159], #[160], #[161], #[162], #[163],
+  #[164]).
+- DRPC / RPI:
+  manual global aggression lever with MSR health gating, rate-of-change
+  limiting, audit logging, and the ability to TURN IT OFF to return
+  to auto risk mode (#[176], #[177]).
+- Autopilot governance layer that can run unattended overnight using
+  operator-approved loss limits, leverage ceilings, allowed venues,
+  and AFK throttling (Section 16).
+
+================================================================
+15. ADVANCED SOLO-PROP SAFETY / CONTROL EXTENSIONS
+================================================================
+
+[See items 15.1 - 15.21 above. These define edge scoring, AFK throttle,
+Shadow Mode, Pre-Escalation Simulator, etc.]
+
+================================================================
+16. HUMAN CONTROL LAYER / AUTOPILOT MODES / DASHBOARD SAFETY UX
+================================================================
+
+16.1 Core Idea
+- The bot can operate while you are sleeping or away.
+- You only define hard limits.
+- The bot manages strategies, aggression, margin, hedging,
+  shutdowns.
+- The interface must explain every control in plain language.
+
+16.2 Global Operating Modes
+Dashboard MUST expose three selectable modes:
+A. AUTOPILOT (Fully Managed)
+B. ASSISTED (Semi-Manual)
+C. MANUAL (Direct Control)
+
+16.2.1 AUTOPILOT (Fully Managed)
+- Bot controls:
+  * active strategies,
+  * effective RPI,
+  * capital allocation,
+  * risk throttling at night,
+  * switching FULL/REDUCED/MONITOR/HOLD.
+- Bot is allowed to self-throttle risk while you sleep:
+  * reduce aggression,
+  * pause toxic strategies,
+  * rebalance margin,
+  * enter HOLD if daily loss limit breached.
+
+Operator defines only ceilings:
+- Daily loss limit (max pain per day),
+- Max leverage ceiling,
+- Allowed venues/instruments,
+- AFK night policy ("can run FULL while I'm AFK?" yes/no).
+
+16.2.2 ASSISTED (Semi-Manual)
+- You can push risk up/down, enable/disable a strategy,
+  increase allocation, enable Proof Mode, request more aggressive
+  execution style.
+- BEFORE applying, system MUST run Pre-Escalation What-If Simulator:
+  * show worst-case PnL impact in $,
+  * show VaR jump,
+  * warn if this requires you to stay awake / on-call.
+- Action + your confirmation (+ optional comment) MUST be logged
+  for audit.
+
+16.2.3 MANUAL (Direct Control)
+- You directly edit parameters, leverage, size, etc.
+- FINAL HARD STOP and kill-safes still apply, but bot otherwise
+  obeys you.
+- This mode SHOULD be restricted if capital at risk is above a
+  configured threshold (e.g. >$10k); enabling or changing high-risk
+  settings in this mode MUST require dual confirmation or annotation.
+
+16.3 AFK Logic
+- System tracks operator presence (acknowledging alerts / Dashboard
+  interaction).
+- If operator AFK past configured window:
+  * Autopilot or Assisted MUST:
+    - clamp RPI down,
+    - force FULL→REDUCED or MONITOR,
+    - block enabling new strategies,
+    - block leverage promotion,
+    - enforce AFK Lock on New Risk Classes (15.15),
+    - enforce Self-Throttle When Operator Is Offline (15.9).
+- This guarantees safe overnight running.
+
+16.4 Contextual Safety by Capital Size
+- Dashboard behavior MUST depend on capital at risk:
+  * Small account (<$1k): allow faster manual tweaks.
+  * Large account (>$10k): any increase in risk/leverage/strategy set
+    MUST:
+      - trigger What-If Simulator,
+      - require explicit confirmation,
+      - optionally delay activation.
+- This mimics professional prop desk behavior: bigger money,
+  slower approval.
+
+16.5 Human-Readable Tooltips / Explanations
+Every setting in the UI MUST have:
+1. Human label ("Максимально допустимая потеря за день"),
+   not internal variable names.
+2. Info icon (?).
+3. Mouseover tooltip in plain Russian that explains:
+   - Что это делает,
+   - Чем опасно крутить выше,
+   - Когда профы реально повышают это,
+   - Можно ли так делать, если ты спишь,
+   - Какое поведение безопасно для маленького депозита,
+     и какое — опасно для большого.
+4. Ownership indicator:
+   - "Сейчас управляет бот (Autopilot)."
+   - "Сейчас управляешь ты (Manual)."
+   - "Сейчас гибрид (Assisted)."
+
+16.6 Plain-Language Global Status Strip
+Dashboard MUST always show a top status line, e.g.:
+
+"Режим: AUTOPILOT | Агрессия: снижена (RPI 22) | MSR: Жёлтый
+  Ночью работаем аккуратно. Можно не сидеть у экрана."
+
+or
+
+"Режим: ASSISTED | RPI: 62 (Ускоренный) | MSR: Красный
+  ВНИМАНИЕ: высокий риск. Не рекомендуется уходить спать."
+
+This must translate numeric/technical state (RPI, MSR, mode FULL vs
+REDUCED) into natural language guidance.
+
+16.7 Auditability of Operator Actions
+- Any manual escalation of risk / leverage / allocation /
+  override of HOLD / whitelist edit / Proof Mode off
+  MUST be logged with:
+  * timestamp,
+  * operator id,
+  * capital size at that moment,
+  * MSR,
+  * What-If Simulator output,
+  * operator comment (if provided).
+- This creates professional-grade accountability.
+
+16.8 Night-Safe Autopilot Guarantee
+Autopilot MUST:
+- stay active while you sleep,
+- self-throttle to REDUCED/MONITOR if environment becomes unsafe,
+- pause/kill strategies that start bleeding edge,
+- rebalance margin to avoid liquidation,
+- trigger HOLD if daily loss limit hit,
+- generate a Night Summary by morning with:
+  * overnight PnL,
+  * max drawdown,
+  * SAFE_MODE triggers,
+  * final mode on wake-up.
+
+================================================================
+17. SUMMARY
+================================================================
+
+This specification defines:
+- Core execution & hedging guarantees.
+- Risk management with VaR, throttles, SAFE_MODE, final hard stop.
+- Strategy orchestration with sandbox/canary/shadow, capital
+  allocation, edge scoring, retirement.
+- Market intelligence (liquidity mapping, venue scoring, toxic flow,
+  MSR).
+- Monitoring, incident reporting, governance, compliance.
+- DRPC (manual global aggression control).
+- Human Control Layer (Autopilot / Assisted / Manual) with AFK safety,
+  capital-size-aware safety, What-If risk previews, and full
+  dashboard explanations in plain language.
+
+This is a maximal professional desk design that a single operator can
+run on a home PC or VPS, sleep at night, and still protect capital.
+
+END OF SPEC
