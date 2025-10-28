@@ -18,7 +18,8 @@ venv/
 !.env.example
 !.env.prod.example
 pip-wheel-metadata/
-data/
+data/*
+!data/execution_stats.json
 
 # Build & Dist
 build/

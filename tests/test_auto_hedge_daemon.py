@@ -238,6 +238,25 @@ async def test_auto_daemon_simulates_in_dry_run_mode(monkeypatch, tmp_path) -> N
         ),
     )
 
+    def fake_choose_venue(side: str, symbol: str, size: float) -> dict:
+        if side.lower() in {"long", "buy"}:
+            price = 20000.0
+            venue = "binance"
+        else:
+            price = 20060.0
+            venue = "okx"
+        return {
+            "venue": venue,
+            "expected_fill_px": price,
+            "fee_bps": 2,
+            "liquidity_ok": True,
+            "size": size,
+            "expected_notional": size * price,
+        }
+
+    monkeypatch.setattr(cross_exchange_arb, "choose_venue", fake_choose_venue)
+    monkeypatch.setattr(cross_exchange_arb, "_record_execution_stat", lambda **_: None)
+
     daemon = AutoHedgeDaemon()
     await daemon.run_cycle()
 

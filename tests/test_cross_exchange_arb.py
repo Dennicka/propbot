@@ -89,6 +89,25 @@ def test_execute_hedged_trade_success(monkeypatch):
         "_clients",
         _ExchangeClients(binance=binance_stub, okx=okx_stub),
     )
+
+    def fake_choose_venue(side: str, symbol: str, size: float) -> dict:
+        if side.lower() in {"long", "buy"}:
+            price = 20490.0
+            venue = "binance"
+        else:
+            price = 20550.0
+            venue = "okx"
+        return {
+            "venue": venue,
+            "expected_fill_px": price,
+            "fee_bps": 2,
+            "liquidity_ok": True,
+            "size": size,
+            "expected_notional": size * price,
+        }
+
+    monkeypatch.setattr(cross_exchange_arb, "choose_venue", fake_choose_venue)
+    monkeypatch.setattr(cross_exchange_arb, "_record_execution_stat", lambda **_: None)
     result = cross_exchange_arb.execute_hedged_trade(
         "ETHUSDT", notion_usdt=1000.0, leverage=3.0, min_spread=20.0
     )
