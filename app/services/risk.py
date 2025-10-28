@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping
 
 from .. import ledger
 from ..util.venues import VENUE_ALIASES
+from . import risk_alerts
 from .portfolio import PortfolioPosition, PortfolioSnapshot
 from .pnl import Fill, compute_realized_pnl
 from .runtime import (
@@ -182,6 +183,7 @@ def refresh_runtime_state(
     state.risk.current.open_orders = dict(orders)
     state.risk.current.daily_loss_usdt = daily_loss
     state.risk.breaches = _active_breaches(state.risk, metrics)
+    risk_alerts.evaluate_alerts()
     return state.risk
 
 

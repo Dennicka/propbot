@@ -672,3 +672,19 @@ async def ops_alerts(
     alerts = get_recent_alerts(limit=limit, since=since)
     return {"alerts": alerts}
 
+
+@router.get("/audit/export")
+async def audit_export(
+    request: Request,
+    limit: int = Query(200, ge=1, le=1_000),
+) -> JSONResponse:
+    """Return the latest audit entries for operator export."""
+
+    require_token(request)
+    try:
+        from ..opsbot.notifier import read_audit_events
+    except Exception:
+        return JSONResponse({"events": []})
+    events = read_audit_events(limit=limit)
+    return JSONResponse({"events": events})
+

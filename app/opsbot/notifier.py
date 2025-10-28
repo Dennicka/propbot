@@ -124,12 +124,23 @@ def _trim_records(collection: MutableSequence[Mapping[str, object]], limit: int)
         del collection[0]
 
 
-def emit_alert(kind: str, text: str, *, extra: Mapping[str, object] | None = None) -> Dict[str, object]:
+def emit_alert(
+    kind: str,
+    text: str,
+    *,
+    extra: Mapping[str, object] | None = None,
+    active: bool | None = None,
+    alert_id: str | None = None,
+) -> Dict[str, object]:
     """Append an ops alert and enqueue Telegram notification if enabled."""
 
     record: Dict[str, object] = {"ts": _timestamp(), "kind": kind, "text": text}
     if extra:
         record["extra"] = dict(extra)
+    if active is not None:
+        record["active"] = bool(active)
+    if alert_id:
+        record["alert_id"] = alert_id
 
     path = _alerts_path()
     with _LOCK:
@@ -235,6 +246,16 @@ def get_recent_alerts(*, limit: int = 100, since: str | None = None) -> List[Dic
     if limit > 0:
         alerts = alerts[-limit:]
     return list(reversed(alerts))
+
+
+def read_audit_events(limit: int | None = None) -> List[Dict[str, object]]:
+    """Return the most recent audit entries without reversing order."""
+
+    path = _alerts_path()
+    alerts = _load_alerts(path)
+    if limit is not None and limit > 0:
+        alerts = alerts[-int(limit) :]
+    return [dict(entry) for entry in alerts]
 
 
 def _parse_timestamp(raw: str | None) -> datetime | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import asdict
 from html import escape
@@ -7,9 +8,11 @@ from typing import Any, Dict, Mapping
 
 from fastapi import Request
 
+from ..opsbot import notifier
 from ..runtime_state_store import load_runtime_payload
 from ..version import APP_VERSION
 from .approvals_store import list_requests as list_pending_requests
+from . import risk_alerts
 from .runtime import (
     get_auto_hedge_state,
     get_last_opportunity_state,
@@ -173,6 +176,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     ]
 
     control_flags = state.control.flags
+    active_alerts = risk_alerts.evaluate_alerts()
+    recent_audit = notifier.get_recent_alerts(limit=5)
 
     return {
         "request": request,
@@ -195,6 +200,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "health_checks": health_checks,
         "pending_approvals": approvals,
         "persisted_snapshot": persisted,
+        "active_alerts": active_alerts,
+        "recent_audit": recent_audit,
     }
 
 
@@ -218,6 +225,19 @@ def _status_span(ok: bool) -> str:
 
 def _tag(text: str, *, color: str, weight: str = "700") -> str:
     return f'<span style="color:{color};font-weight:{weight};margin-left:0.5rem;">{escape(text)}</span>'
+
+
+def _extra_block(extra: object) -> str:
+    if not isinstance(extra, Mapping):
+        return ""
+    payload = {str(key): value for key, value in extra.items()}
+    if not payload:
+        return ""
+    try:
+        text = json.dumps(payload, sort_keys=True)
+    except (TypeError, ValueError):
+        text = str(payload)
+    return f"<div style=\"font-size:0.8rem;color:#4b5563;margin-top:0.25rem;\">{escape(text)}</div>"
 
 
 def _near_limit_tag(current: object, limit: object) -> str:
@@ -248,6 +268,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     health_checks = context.get("health_checks", []) or []
     approvals = context.get("pending_approvals", []) or []
     flash_messages = context.get("flash_messages", []) or []
+    active_alerts = context.get("active_alerts", []) or []
+    recent_audit = context.get("recent_audit", []) or []
 
     parts: list[str] = []
     parts.append(
@@ -272,6 +294,41 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     for message in flash_messages:
         parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
+
+    parts.append("<h2>Active Alerts / Recent Audit</h2>")
+    parts.append("<table><thead><tr><th>Alert</th><th>Detail</th><th>Active Since</th></tr></thead><tbody>")
+    if not active_alerts:
+        parts.append("<tr><td colspan=\"3\">No active risk alerts</td></tr>")
+    else:
+        for alert in active_alerts:
+            text_html = _fmt(alert.get("text"))
+            extra_html = _extra_block(alert.get("extra"))
+            parts.append(
+                "<tr><td>{kind}</td><td>{text}{extra}</td><td>{since}</td></tr>".format(
+                    kind=_fmt(alert.get("kind")),
+                    text=text_html,
+                    extra=extra_html,
+                    since=_fmt(alert.get("active_since")),
+                )
+            )
+    parts.append("</tbody></table>")
+
+    parts.append("<table><thead><tr><th>Timestamp</th><th>Event</th><th>Detail</th></tr></thead><tbody>")
+    if not recent_audit:
+        parts.append("<tr><td colspan=\"3\">No recent audit entries</td></tr>")
+    else:
+        for entry in recent_audit:
+            text_html = _fmt(entry.get("text"))
+            extra_html = _extra_block(entry.get("extra"))
+            parts.append(
+                "<tr><td>{ts}</td><td>{kind}</td><td>{text}{extra}</td></tr>".format(
+                    ts=_fmt(entry.get("ts")),
+                    kind=_fmt(entry.get("kind")),
+                    text=text_html,
+                    extra=extra_html,
+                )
+            )
+    parts.append("</tbody></table>")
 
     hold_active = bool(safety.get("hold_active"))
     hold_reason = safety.get("hold_reason")
