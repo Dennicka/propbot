@@ -6,13 +6,15 @@ import io
 import os
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
+from ..audit_log import log_operator_action
+from ..rbac import Action, can_execute_action
 from ..services.loop import (
     cancel_all_orders,
     hold_loop,
@@ -39,7 +41,8 @@ from ..services.runtime import (
 from ..services import portfolio, risk, risk_guard
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
-from ..security import require_token
+from ..secrets_store import SecretsStore
+from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
@@ -64,6 +67,49 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+OperatorIdentity = Tuple[str, str]
+
+
+def _resolve_operator_identity(token: str) -> Optional[OperatorIdentity]:
+    store: Optional[SecretsStore]
+    try:
+        store = SecretsStore()
+    except Exception:
+        store = None
+    if store:
+        identity = store.get_operator_by_token(token)
+        if identity:
+            return identity
+    expected_token = os.getenv("API_TOKEN")
+    if expected_token and secrets.compare_digest(token, expected_token):
+        return ("api", "operator")
+    return None
+
+
+def _authorize_operator_action(request: Request, action: Action) -> Optional[OperatorIdentity]:
+    if not is_auth_enabled():
+        return None
+    token = require_token(request)
+    if token is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+    identity = _resolve_operator_identity(token)
+    if not identity:
+        log_operator_action("unknown", "unknown", action, channel="api", details="forbidden")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    name, role = identity
+    if not can_execute_action(role, action):
+        log_operator_action(name, role, action, channel="api", details="forbidden")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    return identity
+
+
+def _log_operator_success(identity: Optional[OperatorIdentity], action: Action) -> None:
+    if not identity:
+        return
+    name, role = identity
+    log_operator_action(name, role, action, channel="api", details="ok")
 
 
 class HoldPayload(BaseModel):
@@ -527,7 +573,8 @@ async def orders_snapshot() -> dict:
 
 
 @router.post("/hold")
-async def hold(payload: HoldPayload | None = None) -> dict:
+async def hold(request: Request, payload: HoldPayload | None = None) -> dict:
+    identity = _authorize_operator_action(request, "HOLD")
     reason = (payload.reason.strip() if payload and payload.reason else "manual_hold")
     requested_by = payload.requested_by if payload else None
     await hold_loop()
@@ -545,11 +592,14 @@ async def hold(payload: HoldPayload | None = None) -> dict:
     )
     state = get_state()
     safety = get_safety_status()
-    return {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "safety": safety, "ts": _ts()}
+    response = {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "safety": safety, "ts": _ts()}
+    _log_operator_success(identity, "HOLD")
+    return response
 
 
 @router.post("/resume-request")
-async def resume_request(payload: ResumeRequestPayload) -> dict:
+async def resume_request(request: Request, payload: ResumeRequestPayload) -> dict:
+    identity = _authorize_operator_action(request, "RESUME")
     reason = payload.reason.strip()
     if not reason:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason_required")
@@ -565,15 +615,18 @@ async def resume_request(payload: ResumeRequestPayload) -> dict:
             "request_id": request_snapshot.get("id"),
         },
     )
-    return {
+    response = {
         "resume_request": request_snapshot,
         "hold_active": True,
         "ts": _ts(),
     }
+    _log_operator_success(identity, "RESUME")
+    return response
 
 
 @router.post("/resume-confirm")
-async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
+async def resume_confirm(request: Request, payload: ResumeConfirmPayload) -> dict:
+    identity = _authorize_operator_action(request, "RESUME")
     if not is_hold_active():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold_not_active")
     safety_snapshot = get_safety_status()
@@ -598,16 +651,19 @@ async def resume_confirm(payload: ResumeConfirmPayload) -> dict:
             "request_id": request_id,
         },
     )
-    return {
+    response = {
         "hold_cleared": result.get("hold_cleared", False),
         "hold_active": safety.get("hold_active", False),
         "safety": safety,
         "ts": _ts(),
     }
+    _log_operator_success(identity, "RESUME")
+    return response
 
 
 @router.post("/resume")
-async def resume() -> dict:
+async def resume(request: Request) -> dict:
+    identity = _authorize_operator_action(request, "RESUME")
     if is_hold_active():
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="hold_active")
     state = get_state()
@@ -619,7 +675,9 @@ async def resume() -> dict:
     _emit_ops_alert("mode_change", "Mode switched to RUN", {"source": "ui"})
     state = get_state()
     safety = get_safety_status()
-    return {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "ts": _ts()}
+    response = {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "ts": _ts()}
+    _log_operator_success(identity, "RESUME")
+    return response
 
 
 @router.post("/stop")
@@ -661,17 +719,24 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
 
 
 @router.post("/cancel_all")
-async def cancel_all_ui(payload: CancelAllPayload | None = None) -> dict:
-    return await _cancel_all_payload(payload)
+async def cancel_all_ui(request: Request, payload: CancelAllPayload | None = None) -> dict:
+    identity = _authorize_operator_action(request, "CANCEL_ALL")
+    result = await _cancel_all_payload(payload)
+    _log_operator_success(identity, "CANCEL_ALL")
+    return result
 
 
 @router.post("/cancel-all")
-async def cancel_all(payload: CancelAllPayload | None = None) -> dict:
-    return await _cancel_all_payload(payload)
+async def cancel_all(request: Request, payload: CancelAllPayload | None = None) -> dict:
+    identity = _authorize_operator_action(request, "CANCEL_ALL")
+    result = await _cancel_all_payload(payload)
+    _log_operator_success(identity, "CANCEL_ALL")
+    return result
 
 
 @router.post("/kill")
-async def kill_switch() -> dict:
+async def kill_switch(request: Request) -> dict:
+    identity = _authorize_operator_action(request, "KILL")
     state = get_state()
     state.control.safe_mode = True
     set_mode("HOLD")
@@ -685,12 +750,14 @@ async def kill_switch() -> dict:
     ledger.record_event(level="CRITICAL", code="kill_switch", payload=result)
     _emit_ops_alert("kill_switch", "Kill switch engaged", result)
     risk.refresh_runtime_state()
-    return {
+    response = {
         "ts": _ts(),
         "result": result,
         "safe_mode": True,
         "mode": state.control.mode,
     }
+    _log_operator_success(identity, "KILL")
+    return response
 
 
 @router.post("/close_exposure")

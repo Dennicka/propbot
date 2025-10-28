@@ -4,15 +4,21 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Union
 
 
 _AUDIT_LOG_PATH = Path("data/audit.log")
 
 
-def _serialize_details(details: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _serialize_details(
+    details: Optional[Union[Dict[str, Any], Mapping[str, Any], str, Any]]
+) -> Optional[Union[Dict[str, Any], str]]:
     if details is None:
         return None
+    if isinstance(details, str):
+        return details
+    if not isinstance(details, Mapping):
+        return str(details)
     sanitized: Dict[str, Any] = {}
     for key, value in details.items():
         if key and "key" in key.lower():
@@ -29,7 +35,7 @@ def log_operator_action(
     role: str,
     action: str,
     channel: str,
-    details: Optional[Dict[str, Any]] = None,
+    details: Optional[Union[Dict[str, Any], Mapping[str, Any], str, Any]] = None,
 ) -> None:
     """Write an operator action to the audit log."""
 
