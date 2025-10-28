@@ -212,6 +212,24 @@
 - В Telegram-боте доступна команда `/daily`, которая выводит сводку тем же
   операторам, что уже авторизованы в чат.
 
+### Forensics snapshot / audit export
+
+- Для полной форензики нажмите «Generate snapshot» на `/ui/dashboard` — всплывающая
+  подсказка покажет готовую curl-команду. Можно вызвать экспорт напрямую:
+  ```bash
+  curl -H "Authorization: Bearer $API_TOKEN" \
+    https://<host>/api/ui/snapshot | jq
+  ```
+  Требуется включённый `AUTH_ENABLED` и валидный bearer-токен оператора.
+- Ответ одновременно пишет файл `data/snapshots/<timestamp>.json` и возвращает
+  тот же JSON. Внутри: текущее runtime состояние (режим, HOLD/safe/dry-run,
+  лимиты, последние таймштампы), живые и `partial` позиции, очередь two-man
+  approvals, последние execution stats (slippage), актуальные reconciliation
+  alerts и свежий daily report.
+- Используйте снапшоты для инвесторских апдейтов, ретроспектив и юридической
+  фиксации инцидентов — экспорт показывает «что бот видел и делал» без SSH к
+  контейнеру.
+
 Следите за ростом `consecutive_failures`, runaway-счётчиков и повторными HOLD —
 это сигналы к расследованию.
 

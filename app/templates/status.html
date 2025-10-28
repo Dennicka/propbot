@@ -199,6 +199,15 @@
         letter-spacing: 0.06em;
         text-transform: uppercase;
       }
+      .code-block {
+        background: rgba(15, 23, 42, 0.65);
+        border-radius: 8px;
+        padding: 0.75rem 0.85rem;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 0.8rem;
+        overflow-x: auto;
+        margin-top: 0.5rem;
+      }
       .badge-info {
         background: rgba(59, 130, 246, 0.2);
         color: #60a5fa;
@@ -498,6 +507,18 @@
         <div id="dailyNotes" class="muted" style="margin-top:0.5rem;font-size:0.75rem;"></div>
       </section>
       <section class="card">
+        <h2>Forensics snapshot</h2>
+        <p class="muted" style="margin-bottom:0.75rem;">
+          Export the current runtime flags, hedge positions (including partial legs), pending approvals,
+          execution slippage stats, reconciliation alerts, and the latest daily report for audit or investor reviews.
+        </p>
+        <button id="snapshotInfoBtn">Generate snapshot</button>
+        <p class="muted" style="margin-top:0.75rem;font-size:0.8rem;">
+          Endpoint: <code>/api/ui/snapshot</code> (Bearer <code>$API_TOKEN</code> required).
+        </p>
+        <pre id="snapshotCurlExample" class="code-block">curl -H 'Authorization: Bearer $API_TOKEN' https://your-host/api/ui/snapshot</pre>
+      </section>
+      <section class="card">
         <h2>Risk</h2>
         <div class="card-actions">
           <button id="killBtn" class="danger">Kill Switch</button>
@@ -691,6 +712,8 @@
       const dailySummaryEl = document.getElementById('dailySummary');
       const dailyStatsEl = document.getElementById('dailyStats');
       const dailyNotesEl = document.getElementById('dailyNotes');
+      const snapshotInfoBtn = document.getElementById('snapshotInfoBtn');
+      const snapshotCurlEl = document.getElementById('snapshotCurlExample');
       const exposuresBody = document.getElementById('exposures');
       const balancesBody = document.getElementById('portfolioBalances');
       const riskLimitsEl = document.getElementById('riskLimits');
@@ -774,6 +797,21 @@
           timer = setTimeout(() => fn(...args), delay);
         };
       };
+
+      const buildSnapshotCurl = () => {
+        const origin = String(window.location.origin || '').replace(/\/$/, '');
+        return `curl -H 'Authorization: Bearer $API_TOKEN' ${origin}/api/ui/snapshot`;
+      };
+
+      if (snapshotCurlEl) {
+        snapshotCurlEl.textContent = buildSnapshotCurl();
+      }
+
+      if (snapshotInfoBtn) {
+        snapshotInfoBtn.addEventListener('click', () => {
+          showToast(`Run: ${buildSnapshotCurl()}`, 'success');
+        });
+      }
 
       const eventsFiltersAreDefault = () =>
         state.eventsFilters.level === 'all' && !state.eventsFilters.venue && !state.eventsFilters.search;

@@ -333,6 +333,22 @@ flow to clear HOLD.
 `safety.hold_reason`, `safety.hold_since`, `safety.last_released_ts` и
 `auto_hedge.last_success_ts` — это источник истины при расследованиях.
 
+## Forensics snapshot / audit export
+
+- Чтобы выгрузить полный срез, запросите защищённый эндпоинт:
+  ```bash
+  curl -H "Authorization: Bearer $API_TOKEN" \
+    https://<host>/api/ui/snapshot | jq
+  ```
+  Он одновременно пишет файл `data/snapshots/<timestamp>.json` и возвращает его
+  содержимое.
+- В снэпшоте лежат: текущее состояние runtime (режим, HOLD, SAFE_MODE,
+  dry-run флаги, лимиты), живые и `partial` позиции из `positions_store`,
+  очередь two-man approvals, последние метрики исполнения (slippage), активные
+  reconciliation alerts и свежий daily report.
+- Используйте экспорт для отчётов инвесторам, расследования инцидентов и
+  юридической фиксации «что бот знал и делал» без SSH-доступа к контейнеру.
+
 ## Ежедневный мониторинг
 
 Операторы отслеживают жизнеспособность инстанса следующими инструментами:
