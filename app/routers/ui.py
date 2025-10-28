@@ -36,13 +36,14 @@ from ..services.runtime import (
     set_mode,
     set_open_orders,
 )
-from ..services import portfolio, risk
+from ..services import portfolio, risk, risk_guard
 from ..services.hedge_log import read_entries
 from ..security import require_token
 from positions import list_positions
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
 from pnl_history_store import list_recent as list_recent_snapshots
+from services import adaptive_risk_advisor
 
 
 def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
@@ -193,6 +194,33 @@ async def pnl_history(request: Request, limit: int = Query(50, ge=1, le=500)) ->
     require_token(request)
     snapshots = list_recent_snapshots(limit=limit)
     return {"snapshots": snapshots, "count": len(snapshots)}
+
+
+@router.get("/risk_advice")
+async def risk_advice(request: Request) -> dict[str, Any]:
+    """Return adaptive risk advisor suggestions (read-only, token-protected)."""
+
+    require_token(request)
+    state = get_state()
+    safety = state.safety
+    snapshots = list_recent_snapshots(limit=adaptive_risk_advisor._DEFAULT_SNAPSHOT_WINDOW * 3)
+    hold_info = {
+        "hold_active": safety.hold_active,
+        "hold_reason": safety.hold_reason,
+        "hold_since": safety.hold_since,
+        "last_released_ts": safety.last_released_ts,
+    }
+    risk_throttled = bool(
+        safety.hold_active
+        and str(safety.hold_reason or "").upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX)
+    )
+    advice = adaptive_risk_advisor.generate_risk_advice(
+        snapshots,
+        hold_info=hold_info,
+        dry_run_mode=getattr(state.control, "dry_run_mode", False),
+        risk_throttled=risk_throttled,
+    )
+    return advice
 
 
 def _secret_payload(state) -> dict:

@@ -21,6 +21,7 @@ from .runtime import (
 from .positions_view import build_positions_snapshot
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
+from services import adaptive_risk_advisor
 
 
 def _env_int(name: str, default: int) -> int:
@@ -241,6 +242,24 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     pnl_history = list_recent_snapshots(limit=5)
     pnl_trend = _trend_summary(pnl_history)
 
+    hold_info = {
+        "hold_active": safety_payload.get("hold_active"),
+        "hold_reason": safety_payload.get("hold_reason"),
+        "hold_since": safety_payload.get("hold_since"),
+        "last_released_ts": safety_payload.get("last_released_ts"),
+    }
+    limits_for_advisor = {
+        "MAX_TOTAL_NOTIONAL_USDT": risk_limits_env.get("MAX_TOTAL_NOTIONAL_USDT"),
+        "MAX_OPEN_POSITIONS": risk_limits_env.get("MAX_OPEN_POSITIONS"),
+    }
+    risk_advice = adaptive_risk_advisor.generate_risk_advice(
+        pnl_history,
+        current_limits=limits_for_advisor,
+        hold_info=hold_info,
+        dry_run_mode=getattr(state.control, "dry_run_mode", False),
+        risk_throttled=risk_throttled,
+    )
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -268,6 +287,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "risk_throttle_reason": hold_reason if risk_throttled else "",
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
+        "risk_advice": risk_advice,
     }
 
 
@@ -355,6 +375,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     recent_audit = context.get("recent_audit", []) or []
     trend = context.get("pnl_trend", {}) or {}
 
+    risk_advice = context.get("risk_advice", {}) or {}
+
     parts: list[str] = []
     parts.append(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
@@ -425,6 +447,40 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 )
             )
     parts.append("</tbody></table>")
+
+    parts.append("<h2>Risk Advisor Suggestion</h2>")
+    if not risk_advice:
+        parts.append("<p>No adaptive risk suggestion available yet.</p>")
+    else:
+        parts.append(
+            "<p><strong>Manual two-step approval required:</strong> Suggestions are advisory only."
+            " Apply limit changes exclusively via the existing request/approve flow.</p>"
+        )
+        window_value = risk_advice.get("analysis_window")
+        if window_value:
+            parts.append(
+                f"<p class=\"note\">Analysis window: {_fmt(window_value)} snapshots.</p>"
+            )
+        parts.append(
+            "<table><thead><tr><th>Limit</th><th>Current</th><th>Suggested</th></tr></thead><tbody>"
+            f"<tr><td>MAX_TOTAL_NOTIONAL_USDT</td><td>{_fmt(risk_advice.get('current_max_notional'))}</td>"
+            f"<td>{_fmt(risk_advice.get('suggested_max_notional'))}</td></tr>"
+            f"<tr><td>MAX_OPEN_POSITIONS</td><td>{_fmt(risk_advice.get('current_max_positions'))}</td>"
+            f"<td>{_fmt(risk_advice.get('suggested_max_positions'))}</td></tr>"
+            "</tbody></table>"
+        )
+        parts.append(
+            "<p><strong>Recommendation:</strong> {}</p>".format(
+                _fmt(risk_advice.get("recommendation"))
+            )
+        )
+        reason_text = _fmt(risk_advice.get("reason"))
+        if reason_text:
+            parts.append(f"<p class=\"note\">Reason: {reason_text}</p>")
+        if risk_advice.get("recommend_dry_run_mode"):
+            parts.append(
+                "<p class=\"note\">Advisor suggests keeping DRY_RUN_MODE engaged while conditions are investigated.</p>"
+            )
 
     parts.append("<h2>Risk &amp; PnL trend</h2>")
     latest_trend = trend.get("latest") if isinstance(trend, Mapping) else None
