@@ -47,6 +47,7 @@ def _reset_runtime(monkeypatch):
     monkeypatch.setattr(module, "register_order_attempt", lambda **_: None)
     monkeypatch.setattr(module, "append_entry", lambda entry: entry)
     monkeypatch.setattr(module, "_record_execution_stat", lambda **kwargs: None)
+    monkeypatch.setattr(module, "guard_allowed_to_trade", lambda symbol: (True, "ok"))
 
     def fake_choose_venue(side: str, symbol: str, size: float) -> dict:
         if side.lower() in {"long", "buy"}:

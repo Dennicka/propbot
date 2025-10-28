@@ -23,6 +23,10 @@ from .positions_view import build_positions_snapshot
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
+from services.edge_guard import (
+    allowed_to_trade as edge_guard_allowed,
+    current_context as edge_guard_current_context,
+)
 from services.execution_stats_store import (
     list_recent as list_recent_execution_stats,
 )
@@ -280,6 +284,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     execution_history = list_recent_execution_stats(limit=15)
     execution_quality = _execution_quality_summary(execution_history)
 
+    guard_allowed, guard_reason = edge_guard_allowed()
+    guard_context = edge_guard_current_context()
+
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
         "hold_reason": safety_payload.get("hold_reason"),
@@ -324,6 +331,11 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "recent_ops_incidents": recent_ops_incidents,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
+        "edge_guard": {
+            "allowed": guard_allowed,
+            "reason": guard_reason,
+            "context": asdict(guard_context),
+        },
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
         "risk_advice": risk_advice,
@@ -450,6 +462,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     execution_history = execution_quality.get("history") or []
     success_rate = execution_quality.get("success_rate")
     per_venue_quality = execution_quality.get("per_venue") or {}
+
+    edge_guard_status = context.get("edge_guard", {}) or {}
+    edge_guard_allowed = bool(edge_guard_status.get("allowed"))
+    edge_guard_reason = edge_guard_status.get("reason") or "ok"
 
     parts: list[str] = []
     parts.append(
@@ -652,6 +668,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         hold_cell = '<span style=\"color:#1b7f3b;font-weight:600;\">NO</span>'
     parts.append(f"<tr><th>HOLD Active</th><td>{hold_cell}</td></tr>")
+
+    if edge_guard_allowed:
+        guard_cell = '<span style="color:#1b7f3b;font-weight:600;">YES</span>'
+        guard_suffix = ""
+        if edge_guard_reason not in {"", "ok"}:
+            guard_suffix = f" — {_fmt(edge_guard_reason)}"
+    else:
+        guard_cell = '<span style="color:#b00020;font-weight:700;">NO</span>'
+        guard_suffix = f" — {_fmt(edge_guard_reason)}"
+    parts.append(
+        f"<tr><th>Edge guard status</th><td>{guard_cell}{guard_suffix}</td></tr>"
+    )
     parts.append(
         "<tr><th>Safe Mode</th><td>{}</td></tr>".format(
             _bool_pill(bool(context.get("control", {}).get("safe_mode")), true="ON", false="OFF")

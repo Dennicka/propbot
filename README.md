@@ -405,6 +405,21 @@ profiles and keep `.env` outside version control.
   of the UI API (`Authorization: Bearer <API_TOKEN>`). This feed is intended for
   internal desks only; do not expose it publicly.
 
+### Edge Guard (adaptive entry filter)
+
+- Before opening a new cross-exchange hedge the bot now consults an adaptive
+  `edge_guard` module that evaluates live risk: HOLD/auto-throttle status,
+  outstanding partial hedges, recent execution quality (average slippage and
+  failure rate), and unrealised PnL trends versus current exposure.
+- If the environment looks toxic (e.g. HOLD engaged, partial hedges still
+  hanging, average slippage over the last attempts above the configured bps
+  ceiling, or unrealised PnL falling five snapshots in a row while exposure is
+  heavy) the guard refuses to place fresh legs. The rejection reason is logged
+  to the ops/audit timeline so the desk has an audit trail.
+- The operator dashboard exposes the live "Edge guard status" row under the
+  runtime/risk section, showing whether new hedges are allowed and, if blocked,
+  the exact reason to accelerate triage.
+
 ### Operator Dashboard (`/ui/dashboard`)
 
 - Token-protected HTML dashboard for on-call operators. Access requires the

@@ -110,6 +110,7 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "OUTSTANDING RISK" in html
     assert "SIMULATED" in html
     assert "NEAR LIMIT" in html
+    assert "Edge guard status" in html
     # Health section should name the monitored daemons
     assert "auto_hedge_daemon" in html
     assert "scanner" in html
