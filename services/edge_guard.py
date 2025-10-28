@@ -161,6 +161,9 @@ def allowed_to_trade(symbol_pair: str | None = None) -> Tuple[bool, str]:
     """Evaluate whether a new hedge leg should be attempted."""
 
     safety = runtime.get_safety_status()
+    reconciliation = runtime.get_reconciliation_status()
+    if bool(reconciliation.get("desync_detected")):
+        return False, "desync"
     hold_active = bool(safety.get("hold_active"))
     hold_reason = str(safety.get("hold_reason") or "")
     if hold_active:

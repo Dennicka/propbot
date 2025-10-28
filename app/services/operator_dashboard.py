@@ -18,6 +18,7 @@ from .runtime import (
     get_auto_hedge_state,
     get_last_opportunity_state,
     get_liquidity_status,
+    get_reconciliation_status,
     get_state,
 )
 from .positions_view import build_positions_snapshot
@@ -293,6 +294,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     guard_allowed, guard_reason = edge_guard_allowed()
     guard_context = edge_guard_current_context()
     liquidity_status = get_liquidity_status()
+    reconciliation_status = get_reconciliation_status()
 
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
@@ -337,6 +339,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "recent_audit": recent_audit,
         "recent_ops_incidents": recent_ops_incidents,
         "liquidity": liquidity_status,
+        "reconciliation": reconciliation_status,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
         "edge_guard": {
@@ -466,6 +469,15 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
     liquidity_reason = liquidity.get("reason") or ""
     liquidity_snapshot = liquidity.get("per_venue") or {}
+    reconciliation = context.get("reconciliation", {}) or {}
+    desync_detected = bool(reconciliation.get("desync_detected"))
+    reconciliation_issues = reconciliation.get("issues") or []
+    issue_count = reconciliation.get("issue_count")
+    if issue_count is None:
+        issue_count = len(reconciliation_issues)
+    else:
+        issue_count = _coerce_int(issue_count, len(reconciliation_issues))
+    last_recon_ts = reconciliation.get("last_checked")
 
     recent_ops_incidents = context.get("recent_ops_incidents", []) or []
 
@@ -514,10 +526,50 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append(
             "<div class=\"flash\" style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;\">"
             "<strong>RISK_THROTTLED</strong> — automatic risk guard hold active. "
-            "Manual two-step RESUME approval required before trading can restart." 
+            "Manual two-step RESUME approval required before trading can restart."
             f"{reason_clause}"
             "</div>"
         )
+
+    parts.append("<h2>Reconciliation status</h2>")
+    if desync_detected:
+        parts.append(
+            "<div style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;"
+            "padding:1rem;border-radius:6px;font-weight:700;font-size:1.1rem;\">"
+            "STATE DESYNC — manual intervention required"
+            "</div>"
+        )
+    else:
+        parts.append(
+            "<p><strong style=\"color:#166534;\">In sync with exchange state.</strong></p>"
+        )
+    parts.append(
+        "<p class=\"note\">Outstanding mismatches: {count}. Resolve manually before resume.</p>".format(
+            count=_fmt(issue_count)
+        )
+    )
+    if last_recon_ts:
+        parts.append(
+            f"<p class=\"note\">Last checked: {_fmt(last_recon_ts)}.</p>"
+        )
+    if desync_detected and reconciliation_issues:
+        visible_issues = reconciliation_issues[:5]
+        parts.append("<ul style=\"background:#fff;border:1px solid #fca5a5;padding:0.75rem 1rem;\">")
+        for issue in visible_issues:
+            summary = "{kind}: {venue} {symbol} {side} — {detail}".format(
+                kind=_fmt(issue.get("kind")),
+                venue=_fmt(issue.get("venue")),
+                symbol=_fmt(issue.get("symbol")),
+                side=_fmt(issue.get("side")),
+                detail=_fmt(issue.get("description")),
+            )
+            parts.append(f"<li style=\"margin-bottom:0.5rem;\">{summary}</li>")
+        remaining = max(0, issue_count - len(visible_issues))
+        if remaining > 0:
+            parts.append(
+                f"<li style=\"color:#b91c1c;\">+{remaining} more issues not shown</li>"
+            )
+        parts.append("</ul>")
 
     parts.append("<h2>Balances / Liquidity</h2>")
     if liquidity_blocked:

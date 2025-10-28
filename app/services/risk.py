@@ -13,8 +13,10 @@ from .pnl import Fill, compute_realized_pnl
 from .runtime import (
     RiskBreach,
     RiskState,
+    get_reconciliation_status,
     get_state,
 )
+from services import reconciler
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -176,7 +178,8 @@ def refresh_runtime_state(
 ) -> RiskState:
     state = get_state()
     positions = _positions_from_snapshot(snapshot)
-    orders = _open_orders_from_payload(open_orders)
+    open_orders_payload = list(open_orders) if open_orders is not None else None
+    orders = _open_orders_from_payload(open_orders_payload)
     daily_loss = _daily_realized_loss()
     metrics = RiskMetrics(positions_usdt=positions, open_orders=orders, daily_realized_usdt=daily_loss)
     state.risk.current.position_usdt = dict(positions)
@@ -184,6 +187,10 @@ def refresh_runtime_state(
     state.risk.current.daily_loss_usdt = daily_loss
     state.risk.breaches = _active_breaches(state.risk, metrics)
     risk_alerts.evaluate_alerts()
+    try:
+        reconciler.reconcile(open_orders=open_orders_payload)
+    except Exception:
+        pass
     return state.risk
 
 
@@ -233,6 +240,15 @@ def _plan_limit_reasons(plan: "Plan", risk_state: RiskState) -> list[str]:
 
 def guard_plan(plan: "Plan") -> tuple[bool, str | None, RiskState]:
     risk_state = refresh_runtime_state()
+    reconciliation = get_reconciliation_status()
+    if bool(reconciliation.get("desync_detected")):
+        reason = "desync"
+        ledger.record_event(
+            level="WARNING",
+            code="risk_blocked",
+            payload={"symbol": getattr(plan, "symbol", "unknown"), "reasons": [reason]},
+        )
+        return False, reason, risk_state
     reasons = _plan_limit_reasons(plan, risk_state)
     if reasons:
         ledger.record_event(

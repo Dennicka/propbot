@@ -21,6 +21,7 @@ pip-wheel-metadata/
 data/*
 !data/execution_stats.json
 !data/daily_reports.json
+!data/reconciliation_alerts.json
 
 # Build & Dist
 build/
