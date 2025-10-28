@@ -295,6 +295,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     guard_context = edge_guard_current_context()
     liquidity_status = get_liquidity_status()
     reconciliation_status = get_reconciliation_status()
+    autopilot_state = state.autopilot.as_dict()
 
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
@@ -333,6 +334,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "exposure": positions_payload.get("exposure", {}),
         "position_totals": positions_payload.get("totals", {}),
         "health_checks": health_checks,
+        "autopilot": autopilot_state,
         "pending_approvals": approvals,
         "persisted_snapshot": persisted,
         "active_alerts": active_alerts,
@@ -492,6 +494,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     edge_guard_status = context.get("edge_guard", {}) or {}
     edge_guard_allowed = bool(edge_guard_status.get("allowed"))
     edge_guard_reason = edge_guard_status.get("reason") or "ok"
+    autopilot = context.get("autopilot", {}) or {}
+    autopilot_enabled = bool(autopilot.get("enabled"))
+    autopilot_action_raw = str(autopilot.get("last_action") or "none")
+    autopilot_action = autopilot_action_raw.lower()
+    autopilot_reason = autopilot.get("last_reason") or ""
+    autopilot_attempt = autopilot.get("last_attempt_ts") or ""
+    autopilot_armed = bool(autopilot.get("armed"))
 
     parts: list[str] = []
     parts.append(
@@ -518,6 +527,34 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     for message in flash_messages:
         parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
+
+    autopilot_details = [
+        f"autopilot_status: <strong>{_fmt('enabled' if autopilot_enabled else 'disabled')}</strong>",
+        f"last_autopilot_action: <strong>{_fmt(autopilot_action_raw)}</strong>",
+        f"last_autopilot_reason: <strong>{_fmt(autopilot_reason or 'n/a')}</strong>",
+    ]
+    if autopilot_attempt:
+        autopilot_details.append(f"last_attempt: {_fmt(autopilot_attempt)}")
+    autopilot_html = [
+        "<div style=\"background:#fff;padding:1rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;\">",
+        "<strong>Autopilot mode</strong>",
+        f"<div style=\"margin-top:0.5rem;font-size:0.9rem;color:#1f2937;\">{' · '.join(autopilot_details)}</div>",
+    ]
+    if autopilot_enabled and autopilot_armed:
+        autopilot_html.append(
+            "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
+            "background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-weight:700;\">"
+            "AUTOPILOT ARMED — trading WITHOUT human two-man approval"
+            "</div>"
+        )
+    elif autopilot_enabled and autopilot_action == "refused":
+        autopilot_html.append(
+            "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
+            "background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;\">"
+            f"AUTOPILOT refused to arm — {_fmt(autopilot_reason or 'reason unknown')}"
+            "</div>"
+        )
+    parts.append("".join(autopilot_html) + "</div>")
 
     if risk_throttled:
         reason_clause = (

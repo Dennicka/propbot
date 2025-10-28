@@ -350,6 +350,28 @@ class AutoHedgeState:
 
 
 @dataclass
+class AutopilotState:
+    enabled: bool = False
+    last_action: str = "none"
+    last_reason: str | None = None
+    last_attempt_ts: str | None = None
+    armed: bool = False
+    target_mode: str = "HOLD"
+    target_safe_mode: bool = True
+
+    def as_dict(self) -> Dict[str, object | None]:
+        return {
+            "enabled": self.enabled,
+            "last_action": self.last_action,
+            "last_reason": self.last_reason,
+            "last_attempt_ts": self.last_attempt_ts,
+            "armed": self.armed,
+            "target_mode": self.target_mode,
+            "target_safe_mode": self.target_safe_mode,
+        }
+
+
+@dataclass
 class ResumeRequestState:
     reason: str
     requested_by: str | None = None
@@ -491,6 +513,7 @@ class RuntimeState:
     hedge_positions: List[Dict[str, Any]] = field(default_factory=list)
     last_opportunity: OpportunityState = field(default_factory=OpportunityState)
     auto_hedge: AutoHedgeState = field(default_factory=AutoHedgeState)
+    autopilot: AutopilotState = field(default_factory=AutopilotState)
     safety: SafetyState = field(default_factory=SafetyState)
 
 
@@ -582,6 +605,12 @@ def _bootstrap_runtime() -> RuntimeState:
         loop_pair=loop_pair_env.upper() if loop_pair_env else None,
         loop_venues=loop_venues,
     )
+    autopilot_enabled = _env_flag("AUTOPILOT_ENABLE", False)
+    autopilot_state = AutopilotState(
+        enabled=autopilot_enabled,
+        target_mode=control.mode,
+        target_safe_mode=control.safe_mode,
+    )
     guards = _init_guards(loaded)
     metrics = MetricsState()
     derivatives = bootstrap_derivatives(loaded, safe_mode=safe_mode)
@@ -645,6 +674,7 @@ def _bootstrap_runtime() -> RuntimeState:
         open_orders=[],
         risk=risk_state,
         auto_hedge=AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False)),
+        autopilot=autopilot_state,
         safety=SafetyState(limits=safety_limits),
     )
     _sync_loop_from_control(state)
@@ -1171,8 +1201,18 @@ def append_latency_sample(ms: float) -> None:
 
 
 def set_preflight_result(ok: bool) -> None:
-    _STATE.control.preflight_passed = ok
-    _STATE.control.last_preflight_ts = _ts()
+    snapshot: Dict[str, object] | None = None
+    autopilot_snapshot: Dict[str, object] | None = None
+    with _STATE_LOCK:
+        control = _STATE.control
+        control.preflight_passed = ok
+        control.last_preflight_ts = _ts()
+        snapshot = asdict(control)
+        autopilot_snapshot = _sync_autopilot_targets_locked()
+    if snapshot is not None:
+        _persist_control_snapshot(snapshot)
+    if autopilot_snapshot is not None:
+        _persist_autopilot_snapshot(autopilot_snapshot)
 
 
 def register_approval(actor: str, value: str) -> None:
@@ -1184,18 +1224,74 @@ def bump_counter(name: str, delta: float = 1.0) -> float:
     return _STATE.metrics.counters[name]
 
 
+def _sync_autopilot_targets_locked() -> Dict[str, object]:
+    autopilot = _STATE.autopilot
+    control = _STATE.control
+    autopilot.target_mode = control.mode
+    autopilot.target_safe_mode = control.safe_mode
+    return autopilot.as_dict()
+
+
+def get_autopilot_state() -> AutopilotState:
+    return _STATE.autopilot
+
+
+def autopilot_mark_action(action: str, reason: str | None, *, armed: bool) -> AutopilotState:
+    with _STATE_LOCK:
+        autopilot = _STATE.autopilot
+        autopilot.last_action = str(action or "none")
+        autopilot.last_reason = reason
+        autopilot.last_attempt_ts = _ts()
+        autopilot.armed = armed
+        snapshot = autopilot.as_dict()
+    _persist_autopilot_snapshot(snapshot)
+    return _STATE.autopilot
+
+
+def autopilot_apply_resume(*, safe_mode: bool) -> Dict[str, object]:
+    persist_control: Dict[str, object] | None = None
+    persist_safety: Dict[str, object] | None = None
+    persist_autopilot: Dict[str, object] | None = None
+    hold_cleared = False
+    with _STATE_LOCK:
+        control = _STATE.control
+        safety = _STATE.safety
+        loop_state = _STATE.loop
+        hold_cleared = safety.clear_hold()
+        safety_snapshot = safety.as_dict()
+        control.safe_mode = bool(safe_mode)
+        control.mode = "RUN"
+        control.auto_loop = True
+        loop_state.status = "RUN"
+        loop_state.running = True
+        persist_control = asdict(control)
+        persist_safety = safety_snapshot
+        persist_autopilot = _sync_autopilot_targets_locked()
+    if persist_safety is not None:
+        _persist_safety_snapshot(persist_safety)
+    if persist_control is not None:
+        _persist_control_snapshot(persist_control)
+    if persist_autopilot is not None:
+        _persist_autopilot_snapshot(persist_autopilot)
+    return {"hold_cleared": hold_cleared, "control": persist_control, "safety": persist_safety}
+
+
 def set_mode(mode: str) -> None:
     normalised = mode.upper()
     if normalised not in {"RUN", "HOLD"}:
         raise ValueError(f"unsupported mode {mode}")
     snapshot: Dict[str, object] | None = None
+    autopilot_snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
         control = _STATE.control
         if control.mode != normalised:
             control.mode = normalised
             snapshot = asdict(control)
+            autopilot_snapshot = _sync_autopilot_targets_locked()
     if snapshot is not None:
         _persist_control_snapshot(snapshot)
+    if autopilot_snapshot is not None:
+        _persist_autopilot_snapshot(autopilot_snapshot)
 
 
 def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
@@ -1203,6 +1299,7 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
 
     persist_snapshot: Dict[str, object] | None = None
     safety_snapshot: Dict[str, object] | None = None
+    autopilot_snapshot: Dict[str, object] | None = None
     changed = False
     hold_changed = False
     with _STATE_LOCK:
@@ -1228,6 +1325,8 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
             changed = True
         if changed:
             persist_snapshot = asdict(control)
+        if changed or hold_changed:
+            autopilot_snapshot = _sync_autopilot_targets_locked()
         duplicate = next(
             (
                 incident
@@ -1245,6 +1344,8 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
         _persist_control_snapshot(persist_snapshot)
     if safety_snapshot is not None:
         _persist_safety_snapshot(safety_snapshot)
+    if autopilot_snapshot is not None:
+        _persist_autopilot_snapshot(autopilot_snapshot)
     if changed or hold_changed:
         _emit_ops_alert(
             "safety_hold",
@@ -1287,6 +1388,7 @@ def reset_for_tests() -> None:
         limits = _STATE.safety.limits
         _STATE.safety = SafetyState(limits=limits)
         _STATE.auto_hedge = AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False))
+        _STATE.autopilot = AutopilotState(enabled=_env_flag("AUTOPILOT_ENABLE", False))
         _enforce_safe_start(_STATE)
     try:
         from positions_store import reset_store as _reset_positions_store
@@ -1296,6 +1398,7 @@ def reset_for_tests() -> None:
         _reset_positions_store()
     globals()["_STATE"] = _STATE
     _persist_safety_snapshot(_STATE.safety.as_dict())
+    _persist_autopilot_snapshot(_STATE.autopilot.as_dict())
     update_auto_hedge_state(
         enabled=_STATE.auto_hedge.enabled,
         last_checked_ts=None,
@@ -1412,14 +1515,18 @@ def apply_control_patch(patch: Mapping[str, object]) -> Tuple[ControlState, Dict
     normalised_patch = _normalise_control_patch(patch)
     updates: Dict[str, object] = {}
     persist_snapshot: Dict[str, object] | None = None
+    autopilot_snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
         control = _STATE.control
         updates = _apply_control_updates(control, normalised_patch)
         if updates:
             _sync_loop_from_control(_STATE)
             persist_snapshot = asdict(control)
+            autopilot_snapshot = _sync_autopilot_targets_locked()
     if persist_snapshot is not None:
         _persist_control_snapshot(persist_snapshot)
+    if autopilot_snapshot is not None:
+        _persist_autopilot_snapshot(autopilot_snapshot)
     return _STATE.control, updates
 
 
@@ -1577,6 +1684,7 @@ def _runtime_status_snapshot() -> Dict[str, Any]:
             "risk_limits": _STATE.risk.limits.as_dict(),
             "operational_flags": control.flags,
         }
+        status["autopilot"] = _STATE.autopilot.as_dict()
         return status
 
 
@@ -1595,6 +1703,10 @@ def _persist_safety_snapshot(snapshot: Mapping[str, object]) -> None:
     _persist_runtime_payload({"safety": dict(snapshot)})
 
 
+def _persist_autopilot_snapshot(snapshot: Mapping[str, object]) -> None:
+    _persist_runtime_payload({"autopilot": dict(snapshot)})
+
+
 def _load_persisted_state(state: RuntimeState) -> None:
     payload = _load_runtime_payload()
     control_payload = payload.get("control") if isinstance(payload, Mapping) else None
@@ -1605,6 +1717,9 @@ def _load_persisted_state(state: RuntimeState) -> None:
             updates = {}
         for field, value in updates.items():
             setattr(state.control, field, value)
+    autopilot_state = state.autopilot
+    autopilot_state.target_mode = state.control.mode
+    autopilot_state.target_safe_mode = state.control.safe_mode
     positions_payload = payload.get("positions")
     if isinstance(positions_payload, list):
         state.hedge_positions = [dict(entry) for entry in positions_payload if isinstance(entry, Mapping)]
@@ -1632,6 +1747,21 @@ def _load_persisted_state(state: RuntimeState) -> None:
             auto_state.consecutive_failures = int(auto_payload.get("consecutive_failures", 0))
         except (TypeError, ValueError):
             auto_state.consecutive_failures = 0
+    autopilot_payload = payload.get("autopilot")
+    if isinstance(autopilot_payload, Mapping):
+        last_action = autopilot_payload.get("last_action")
+        if last_action is not None:
+            autopilot_state.last_action = str(last_action)
+        autopilot_state.last_reason = autopilot_payload.get("last_reason") or None
+        last_attempt = autopilot_payload.get("last_attempt_ts")
+        autopilot_state.last_attempt_ts = str(last_attempt) if last_attempt else None
+        if "armed" in autopilot_payload:
+            autopilot_state.armed = bool(autopilot_payload.get("armed"))
+        target_mode = autopilot_payload.get("target_mode")
+        if target_mode:
+            autopilot_state.target_mode = str(target_mode).upper()
+        if "target_safe_mode" in autopilot_payload:
+            autopilot_state.target_safe_mode = bool(autopilot_payload.get("target_safe_mode"))
     safety_payload = payload.get("safety")
     safety = state.safety
     if isinstance(safety_payload, Mapping):
@@ -1784,6 +1914,7 @@ _enforce_safe_start(_STATE)
 _persist_runtime_payload({
     "control": asdict(_STATE.control),
     "safety": _STATE.safety.as_dict(),
+    "autopilot": _STATE.autopilot.as_dict(),
 })
 class HoldActiveError(RuntimeError):
     """Raised when execution should stop due to the global hold flag."""

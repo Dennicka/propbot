@@ -358,6 +358,28 @@
       .toast.error {
         border-left: 4px solid #f87171;
       }
+      .autopilot-banner {
+        margin-bottom: 0.75rem;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        font-weight: 600;
+        display: block;
+      }
+      .autopilot-banner-warning {
+        background: #fef3c7;
+        border: 1px solid #f59e0b;
+        color: #92400e;
+      }
+      .autopilot-banner-error {
+        background: #fee2e2;
+        border: 1px solid #fca5a5;
+        color: #b91c1c;
+      }
+      .autopilot-status {
+        margin-bottom: 0.5rem;
+        font-size: 0.9rem;
+        color: #f8fafc;
+      }
       .modal-backdrop {
         position: fixed;
         inset: 0;
@@ -376,6 +398,9 @@
       .modal.hidden,
       .modal-backdrop.hidden,
       .toast.hidden {
+        display: none;
+      }
+      .hidden {
         display: none;
       }
       .modal-content {
@@ -458,6 +483,8 @@
       </section>
       <section class="card">
         <h2>Runtime Flags</h2>
+        <div id="autopilotBanner" class="autopilot-banner hidden"></div>
+        <div id="autopilotStatus" class="autopilot-status muted">autopilot_status: loading…</div>
         <div id="flags"></div>
         <div id="controlValues" class="control-values muted"></div>
       </section>
@@ -702,6 +729,8 @@
       const cancelAllBtn = document.getElementById('cancelAllBtn');
       const closeExposureBtn = document.getElementById('closeExposureBtn');
       const editConfigBtn = document.getElementById('editConfigBtn');
+      const autopilotBannerEl = document.getElementById('autopilotBanner');
+      const autopilotStatusEl = document.getElementById('autopilotStatus');
       const loopStatusEl = document.getElementById('loopStatus');
       const loopConfigEl = document.getElementById('loopConfig');
       const loopCountersEl = document.getElementById('loopCounters');
@@ -1082,6 +1111,47 @@
         controlValuesEl.innerHTML = html;
       };
 
+      const renderAutopilot = (payload) => {
+        if (!autopilotStatusEl || !autopilotBannerEl) return;
+        autopilotStatusEl.classList.add('muted');
+        autopilotStatusEl.textContent = 'autopilot_status: unavailable';
+        autopilotBannerEl.textContent = '';
+        autopilotBannerEl.classList.add('hidden');
+        autopilotBannerEl.classList.remove('autopilot-banner-warning', 'autopilot-banner-error');
+        if (!payload || typeof payload !== 'object') {
+          return;
+        }
+        const enabled = Boolean(payload.enabled);
+        const actionRaw = String(payload.last_action || 'none');
+        const actionLower = actionRaw.toLowerCase();
+        const reasonRaw = payload.last_reason ? String(payload.last_reason) : 'n/a';
+        const attemptTs = payload.last_attempt_ts ? new Date(payload.last_attempt_ts).toLocaleString() : null;
+        const statusParts = [
+          `autopilot_status: <strong>${escapeHtml(enabled ? 'enabled' : 'disabled')}</strong>`,
+          `last_autopilot_action: <strong>${escapeHtml(actionRaw)}</strong>`,
+          `last_autopilot_reason: <strong>${escapeHtml(reasonRaw)}</strong>`,
+        ];
+        if (attemptTs) {
+          statusParts.push(`last_attempt: ${escapeHtml(attemptTs)}`);
+        }
+        autopilotStatusEl.innerHTML = statusParts.join(' · ');
+        if (enabled) {
+          autopilotStatusEl.classList.remove('muted');
+        }
+        autopilotBannerEl.classList.remove('autopilot-banner-warning', 'autopilot-banner-error');
+        autopilotBannerEl.classList.add('hidden');
+        const reasonSafe = escapeHtml(reasonRaw);
+        if (enabled && Boolean(payload.armed)) {
+          autopilotBannerEl.textContent = 'AUTOPILOT ARMED — trading WITHOUT human two-man approval';
+          autopilotBannerEl.classList.add('autopilot-banner-warning');
+          autopilotBannerEl.classList.remove('hidden');
+        } else if (enabled && actionLower === 'refused') {
+          autopilotBannerEl.textContent = `AUTOPILOT refused to arm — ${reasonSafe}`;
+          autopilotBannerEl.classList.add('autopilot-banner-error');
+          autopilotBannerEl.classList.remove('hidden');
+        }
+      };
+
       const renderEvents = () => {
         const rows = Array.isArray(state.eventsItems) ? state.eventsItems : [];
         if (!rows.length) {
@@ -1449,6 +1519,7 @@
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
           renderControlSnapshot(state.control);
+          renderAutopilot(data.autopilot || {});
           renderRisk(data.risk);
 
           if (secretResp.ok) {

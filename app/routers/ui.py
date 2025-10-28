@@ -174,6 +174,7 @@ async def runtime_state() -> dict:
         "risk": risk_payload,
         "risk_blocked": risk_blocked,
         "risk_reasons": risk_reasons,
+        "autopilot": state.autopilot.as_dict(),
     }
     return redact_sensitive_data(response)
 
