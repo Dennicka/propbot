@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from .. import ledger
 from ..services import portfolio, risk, approvals_store
+from services.daily_reporter import load_latest_report
 from ..services.loop import cancel_all_orders, hold_loop
 from ..services.runtime import (
     CRITICAL_ACTION_EXIT_DRY_RUN,
@@ -342,6 +343,8 @@ class TelegramBot:
                 response = await self._handle_resume_request(actor_label, args)
             elif command == "/status":
                 response = await self._handle_status()
+            elif command == "/daily":
+                response = await self._handle_daily()
             elif command == "/raise_limit":
                 response = await self._handle_raise_limit(actor_label, args)
             elif command == "/exit_dry_run":
@@ -352,7 +355,7 @@ class TelegramBot:
                 response = await self._handle_close_all()
             else:
                 response = (
-                    "Unknown command. Available: /status, /hold, /resume, "
+                    "Unknown command. Available: /status, /daily, /hold, /resume, "
                     "/raise_limit, /exit_dry_run, /approve, /close"
                 )
         except Exception as exc:  # pragma: no cover - ensure failure is reported
@@ -408,6 +411,47 @@ class TelegramBot:
     async def _handle_status(self) -> str:
         message = await build_status_message()
         return message
+
+    async def _handle_daily(self) -> str:
+        report = load_latest_report()
+        if not report:
+            return "No daily report captured in the last 24h."
+        timestamp = str(report.get("timestamp") or "n/a")
+        window = int(float(report.get("window_hours") or 24))
+        realized = float(report.get("pnl_realized_total") or 0.0)
+        unrealized = float(
+            report.get("pnl_unrealized_avg")
+            or report.get("pnl_unrealized_latest")
+            or 0.0
+        )
+        exposure = float(report.get("exposure_avg") or 0.0)
+        slippage = report.get("slippage_avg_bps")
+        breakdown = report.get("hold_breakdown") if isinstance(report.get("hold_breakdown"), Mapping) else {}
+        auto_holds = int(float(breakdown.get("safety_hold") or 0))
+        throttles = int(float(breakdown.get("risk_throttle") or 0))
+        total_holds = int(float(report.get("hold_events") or auto_holds + throttles))
+        pnl_samples = int(float(report.get("pnl_unrealized_samples") or 0))
+        exposure_samples = int(float(report.get("exposure_samples") or 0))
+        slippage_samples = int(float(report.get("slippage_samples") or 0))
+        if slippage is None:
+            slippage_text = "n/a"
+        else:
+            try:
+                slippage_text = f"{float(slippage):.3f}"
+            except (TypeError, ValueError):
+                slippage_text = str(slippage)
+        lines = [
+            "Daily report:",
+            f"Timestamp={timestamp}",
+            f"Window={window}h",
+            f"PnL_realized={realized:.2f}",
+            f"PnL_unrealized_avg={unrealized:.2f}",
+            f"Avg_exposure_usd={exposure:.2f}",
+            f"Avg_slippage_bps={slippage_text}",
+            f"HOLD_events={total_holds} (auto={auto_holds}, throttle={throttles})",
+            f"Samples: pnl={pnl_samples}, exposure={exposure_samples}, slippage={slippage_samples}",
+        ]
+        return "\n".join(lines)
 
     async def _handle_raise_limit(self, actor: str, args: list[str]) -> str:
         if len(args) < 4:

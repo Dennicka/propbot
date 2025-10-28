@@ -15,6 +15,7 @@ os.environ.setdefault("HEDGE_LOG_PATH", "/tmp/propbot-tests-hedge-log.json")
 os.environ.setdefault("OPS_ALERTS_FILE", "/tmp/propbot-tests-ops-alerts.json")
 os.environ.setdefault("PNL_HISTORY_PATH", "/tmp/propbot-tests-pnl.json")
 os.environ.setdefault("OPS_APPROVALS_FILE", "/tmp/propbot-tests-approvals.json")
+os.environ.setdefault("DAILY_REPORTS_PATH", "/tmp/propbot-tests-daily.json")
 
 from app import ledger
 from app.main import app
@@ -90,9 +91,11 @@ def override_runtime_and_logs(monkeypatch, tmp_path: Path):
     runtime_path = tmp_path / "runtime_state.json"
     hedge_log = tmp_path / "hedge_log.json"
     alerts_path = tmp_path / "ops_alerts.json"
+    daily_reports_path = tmp_path / "daily_reports.json"
     monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
     monkeypatch.setenv("HEDGE_LOG_PATH", str(hedge_log))
     monkeypatch.setenv("OPS_ALERTS_FILE", str(alerts_path))
+    monkeypatch.setenv("DAILY_REPORTS_PATH", str(daily_reports_path))
     yield
 
 

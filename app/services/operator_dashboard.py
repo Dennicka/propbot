@@ -30,6 +30,7 @@ from services.edge_guard import (
 from services.execution_stats_store import (
     list_recent as list_recent_execution_stats,
 )
+from services.daily_reporter import load_latest_report
 
 
 def _env_int(name: str, default: int) -> int:
@@ -283,6 +284,10 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     pnl_trend = _trend_summary(pnl_history)
     execution_history = list_recent_execution_stats(limit=15)
     execution_quality = _execution_quality_summary(execution_history)
+    try:
+        daily_report = load_latest_report()
+    except Exception:
+        daily_report = None
 
     guard_allowed, guard_reason = edge_guard_allowed()
     guard_context = edge_guard_current_context()
@@ -340,6 +345,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "pnl_trend": pnl_trend,
         "risk_advice": risk_advice,
         "execution_quality": execution_quality,
+        "daily_report": daily_report or {},
     }
 
 
@@ -439,6 +445,7 @@ def _trend_delta_cell(delta: float | None, improved: bool) -> str:
 def render_dashboard_html(context: Dict[str, Any]) -> str:
     safety = context.get("safety", {}) or {}
     auto = context.get("auto_hedge", {}) or {}
+    daily_report = context.get("daily_report", {}) or {}
     risk_limits_env = context.get("risk_limits_env", {}) or {}
     risk_state = context.get("risk_limits_state", {}) or {}
     exposures = context.get("exposure", {}) or {}
@@ -806,6 +813,48 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append(f"<tr><td>{_fmt(name)}</td><td>{_fmt(value)}</td></tr>")
     parts.append("</tbody></table>")
     parts.append(f"<p class=\"note\">Runtime risk limits snapshot: {_fmt(risk_state)}</p>")
+
+    parts.append("<h2>Daily PnL / Ops summary</h2>")
+    if not daily_report:
+        parts.append("<p>No daily report captured in the last 24 hours.</p>")
+    else:
+        realized_text = _fmt(daily_report.get("pnl_realized_total")) or "0"
+        unrealised_text = _fmt(daily_report.get("pnl_unrealized_avg")) or "0"
+        exposure_text = _fmt(daily_report.get("exposure_avg")) or "0"
+        slippage_avg = daily_report.get("slippage_avg_bps")
+        slippage_text = _fmt(slippage_avg) if slippage_avg is not None else "n/a"
+        hold_breakdown = (
+            daily_report.get("hold_breakdown")
+            if isinstance(daily_report.get("hold_breakdown"), Mapping)
+            else {}
+        )
+        hold_total = int(float(daily_report.get("hold_events") or 0))
+        auto_holds = int(float(hold_breakdown.get("safety_hold") or 0))
+        throttles = int(float(hold_breakdown.get("risk_throttle") or 0))
+        parts.append(
+            "<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>"
+            f"<tr><td>PnL realised (24h)</td><td>{realized_text}</td></tr>"
+            f"<tr><td>Unrealised PnL avg</td><td>{unrealised_text}</td></tr>"
+            f"<tr><td>Average exposure (USD)</td><td>{exposure_text}</td></tr>"
+            f"<tr><td>Average slippage (bps)</td><td>{slippage_text}</td></tr>"
+            f"<tr><td>HOLD / throttle events</td><td>{hold_total} (auto {auto_holds}, throttle {throttles})</td></tr>"
+            "</tbody></table>"
+        )
+        window = _fmt(daily_report.get("window_hours")) or "24"
+        timestamp = _fmt(daily_report.get("timestamp")) or "n/a"
+        pnl_samples = int(float(daily_report.get("pnl_unrealized_samples") or 0))
+        exposure_samples = int(float(daily_report.get("exposure_samples") or 0))
+        slippage_samples = int(float(daily_report.get("slippage_samples") or 0))
+        parts.append(
+            "<p class=\"note\">Window: {window}h; last snapshot {ts}. PnL samples: {pnl}, "
+            "exposure samples: {exp}; slippage samples: {slip}.</p>".format(
+                window=_fmt(window),
+                ts=_fmt(timestamp),
+                pnl=_fmt(pnl_samples),
+                exp=_fmt(exposure_samples),
+                slip=_fmt(slippage_samples),
+            )
+        )
 
     parts.append("<h2>Exposure (Open / Partial)</h2>")
     if exposures:

@@ -298,3 +298,49 @@ def test_dashboard_footer_contains_build_and_warning(monkeypatch, client) -> Non
     assert f"Build version: <strong>{APP_VERSION}</strong>" in html
     assert timestamp in html
     assert "All trading actions require dual approval. Manual overrides are audited." in html
+
+
+def test_dashboard_html_includes_daily_report_section() -> None:
+    from app.services.operator_dashboard import render_dashboard_html
+
+    context = {
+        "build_version": "test",
+        "safety": {},
+        "auto_hedge": {},
+        "risk_limits_env": {},
+        "risk_limits_state": {},
+        "positions": [],
+        "exposure": {},
+        "position_totals": {},
+        "health_checks": [],
+        "pending_approvals": [],
+        "persisted_snapshot": {},
+        "active_alerts": [],
+        "recent_audit": [],
+        "recent_ops_incidents": [],
+        "risk_throttled": False,
+        "risk_throttle_reason": "",
+        "edge_guard": {"allowed": True, "reason": "ok", "context": {}},
+        "pnl_history": [],
+        "pnl_trend": {},
+        "risk_advice": {},
+        "execution_quality": {},
+        "daily_report": {
+            "timestamp": "2024-05-01T00:00:00+00:00",
+            "window_hours": 24,
+            "pnl_realized_total": 10.0,
+            "pnl_unrealized_avg": 5.0,
+            "exposure_avg": 1_000.0,
+            "slippage_avg_bps": 0.75,
+            "hold_events": 2,
+            "hold_breakdown": {"safety_hold": 1, "risk_throttle": 1},
+            "pnl_unrealized_samples": 3,
+            "exposure_samples": 3,
+            "slippage_samples": 2,
+        },
+    }
+
+    html = render_dashboard_html(context)
+    assert "Daily PnL / Ops summary" in html
+    assert "PnL realised (24h)" in html
+    assert "HOLD / throttle events" in html

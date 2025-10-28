@@ -20,6 +20,7 @@ venv/
 pip-wheel-metadata/
 data/*
 !data/execution_stats.json
+!data/daily_reports.json
 
 # Build & Dist
 build/
