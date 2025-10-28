@@ -20,6 +20,30 @@
 ⚠️ Без ручного двухшагового RESUME хеджер остаётся в SAFE_MODE/HOLD и не начнёт
 реально торговать, даже если контейнер уже запущен.
 
+### Production bring-up checklist
+
+1. Клонируйте репозиторий на прод-хост и переключитесь на нужный релиз.
+2. Скопируйте шаблон: `cp .env.prod.example .env.prod`. Заполните `REPO` и `TAG`
+   для образа в GHCR, задайте уникальные `API_TOKEN` и `APPROVE_TOKEN`, пропишите
+   реальные пути `RUNTIME_STATE_PATH`, `POSITIONS_STORE_PATH`, `PNL_HISTORY_PATH`,
+   `HEDGE_LOG_PATH`, `OPS_ALERTS_FILE` внутри примонтированного `./data/`. Удалите
+   все плейсхолдеры (`TODO`, `change-me` и т.п.).
+3. Создайте каталог данных рядом с compose-файлом и выдайте права записи контейнеру:
+   `mkdir -p ./data && chown 1000:1000 ./data && chmod 770 ./data`.
+4. Проверьте, что в `.env.prod` нет пустых обязательных значений: `APPROVE_TOKEN`,
+   все пути к persistent state файлам, биржевые ключи для включённых демонов.
+5. Запустите стэк: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d`.
+6. Просмотрите логи: `docker compose logs -f propbot_app_prod`. Убедитесь, что
+   появляется запись `PropBot starting with build_version=...` и нет `[FATAL CONFIG]`
+   ошибок — это означает, что startup validation прошёл успешно.
+7. Проверьте `/healthz` (`curl -fsS http://localhost:8000/healthz`) и `/api/ui/status/overview`
+   (с bearer-токеном) до того, как снимать HOLD/SAFE_MODE.
+
+Если startup validation остановил контейнер, выполните `docker compose logs propbot_app_prod`
+и устраните ошибки из сообщений `[FATAL CONFIG]` (самые частые причины: пустой
+`APPROVE_TOKEN`, оставленные плейсхолдеры в `.env.prod`, отсутствующие пути к файлам
+состояния). После исправления перезапустите `docker compose up -d`.
+
 # PropBot v0.1.2
 
 Production-ready arbitrage runner with FastAPI, Binance Futures integration, SQLite

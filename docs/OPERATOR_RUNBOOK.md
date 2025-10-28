@@ -5,29 +5,37 @@
 
 ## Старт в продакшене
 
+### Production bring-up checklist
+
 1. Подготовьте постоянный каталог `/opt/propbot/data` (или другой путь),
    примонтированный в контейнер как `/app/data`. В `data/` находятся
-   `runtime_state.json`, `runtime_state_store.json` (если используется override),
-   `hedge_positions.json`, `hedge_log.json`, `alerts.json`, `ops_alerts.json` и
-   другие журналы. Потеря каталога = потеря истории, поэтому храните его на
-   надёжном диске и включите бэкап.
+   `runtime_state.json`, `hedge_positions.json`, `pnl_history.json`, `hedge_log.json`,
+   `ops_alerts.json` и другие журналы. Потеря каталога = потеря истории, поэтому
+   храните его на надёжном диске и включите бэкап.
 2. Создайте файл окружения из шаблона: `cp .env.prod.example .env.prod`. Затем
-   заполните секреты и лимиты:
+   заполните все секции, удалив плейсхолдеры `TODO`/`change-me` и пустые значения:
    - Биржевые ключи `BINANCE_*`, `OKX_*` (используйте отдельные субаккаунты и
      IP white-list).
-   - `API_TOKEN`, `APPROVE_TOKEN`, `AUTH_ENABLED=true`.
+   - `REPO`/`TAG` для образа в GHCR, `API_TOKEN`, `APPROVE_TOKEN`, `AUTH_ENABLED=true`.
    - Лимиты риска `MAX_POSITION_USDT`, `MAX_DAILY_LOSS_USDT`, runaway guard
      (`MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN`), настройки Telegram.
    - `SAFE_MODE=true`, `DRY_RUN_ONLY=true`, `DRY_RUN_MODE=true` и режим HOLD на
      старте оставляйте включёнными до прохождения двухшагового
      `resume-request`/`resume-confirm`.
    - Пути хранения (`RUNTIME_STATE_PATH`, `POSITIONS_STORE_PATH`,
-     `HEDGE_LOG_PATH`, `OPS_ALERTS_FILE`) указывайте внутри `./data/`.
-3. Запускайте контейнеры: `docker compose -f docker-compose.prod.yml --env-file
-   .env.prod up -d`. Проверяйте healthcheck через
-   `docker inspect --format '{{json .State.Health}}' propbot_app_prod | jq` —
-   статус `healthy` означает, что `/healthz` отдаёт `{ "ok": true }`.
-4. После старта убедитесь, что защита включена:
+     `PNL_HISTORY_PATH`, `HEDGE_LOG_PATH`, `OPS_ALERTS_FILE`) указывайте внутри
+     примонтированного каталога `./data/`.
+3. Запустите контейнер: `docker compose -f docker-compose.prod.yml --env-file
+   .env.prod up -d`. Startup validation немедленно остановит сервис, если
+   обязательные токены или пути не заданы.
+4. Следите за логами: `docker compose logs -f propbot_app_prod`. Ожидаемая
+   строка — `PropBot starting with build_version=...`. Любые сообщения
+   `[FATAL CONFIG] ...` означают, что нужно поправить `.env.prod` и перезапустить
+   `docker compose up -d`.
+5. Проверяйте healthcheck через `docker inspect --format '{{json .State.Health}}'
+   propbot_app_prod | jq` — статус `healthy` означает, что `/healthz` отдаёт
+   `{ "ok": true }`.
+6. После старта убедитесь, что защита включена:
    ```bash
    curl -sfS -H "Authorization: Bearer $API_TOKEN" \
      http://<host>:8000/api/ui/status/overview | jq '.flags'
@@ -35,11 +43,11 @@
    Значения `safe_mode`, `hold_active` и `dry_run_mode` должны быть `true`.
    Любое отклонение рассматривайте как инцидент и не отключайте SAFE_MODE, пока
    оба оператора не пройдут двухшаговый флоу.
-5. Перед переходом в live пройдите процедуру:
+7. Перед переходом в live пройдите процедуру:
    `resume-request` → `resume-confirm` (со вторым оператором и `APPROVE_TOKEN`) →
    `resume`. Только после этого вручную выключайте `SAFE_MODE`/`DRY_RUN_MODE` и
    переводите режим в `RUN`.
-6. Не снимайте лимиты по плечу/ноционалу — runaway guard и риск-блокировки
+8. Не снимайте лимиты по плечу/ноционалу — runaway guard и риск-блокировки
    используют их для защиты.
 
 ## Startup validation / go-live safety

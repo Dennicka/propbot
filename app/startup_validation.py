@@ -4,7 +4,34 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Set
+
+_PLACEHOLDER_TOKENS = ("change-me", "changeme", "todo", "replace-me", "fill-me")
+
+
+def _load_template_env_names() -> Set[str]:
+    root = Path(__file__).resolve().parent.parent
+    template = root / ".env.prod.example"
+    names: Set[str] = set()
+    try:
+        for line in template.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" not in stripped:
+                continue
+            name, _ = stripped.split("=", 1)
+            name = name.strip()
+            if not name:
+                continue
+            names.add(name)
+    except OSError:
+        # Missing template is not fatal but reduces placeholder coverage.
+        pass
+    return names
+
+
+_TEMPLATE_ENV_NAMES = _load_template_env_names()
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -44,6 +71,10 @@ def _collect_errors() -> list[str]:
             fatal(f"{hint} (получено '{raw}')")
             return
         if value <= 0:
+            fatal(hint)
+
+    def require_path_defined(name: str, *, hint: str) -> None:
+        if not _is_truthy(os.getenv(name)):
             fatal(hint)
 
     def ensure_path_writable(name: str, default: str, *, description: str) -> None:
@@ -89,6 +120,21 @@ def _collect_errors() -> list[str]:
                     target.unlink()
                 except OSError:
                     pass
+
+    # ------------------------------------------------------------------
+    # Placeholder detection to ensure template values were replaced.
+    for name in sorted(_TEMPLATE_ENV_NAMES):
+        raw_value = os.getenv(name)
+        if raw_value is None:
+            continue
+        normalized = str(raw_value).strip().lower()
+        if not normalized:
+            continue
+        if any(token in normalized for token in _PLACEHOLDER_TOKENS):
+            fatal(
+                f"{name} содержит плейсхолдер '{raw_value}'. "
+                "Актуализируй .env.prod перед запуском."
+            )
 
     # ------------------------------------------------------------------
     # Secrets and tokens guarded by feature flags.
@@ -171,6 +217,36 @@ def _collect_errors() -> list[str]:
 
     # ------------------------------------------------------------------
     # File system locations.
+    require_path_defined(
+        "RUNTIME_STATE_PATH",
+        hint=(
+            "RUNTIME_STATE_PATH пуст. Укажи путь для runtime_state_store, примонтированный к persistent volume."
+        ),
+    )
+    require_path_defined(
+        "POSITIONS_STORE_PATH",
+        hint=(
+            "POSITIONS_STORE_PATH пуст. Пропиши файл для positions_store с сохранением на диск."
+        ),
+    )
+    require_path_defined(
+        "PNL_HISTORY_PATH",
+        hint=(
+            "PNL_HISTORY_PATH пуст. Задай файл для pnl_history_store, чтобы снапшоты были persistent."
+        ),
+    )
+    require_path_defined(
+        "HEDGE_LOG_PATH",
+        hint=(
+            "HEDGE_LOG_PATH пуст. Укажи файл для журнала авто-хеджа на примонтированном storage."
+        ),
+    )
+    require_path_defined(
+        "OPS_ALERTS_FILE",
+        hint=(
+            "OPS_ALERTS_FILE пуст. Укажи путь для журнала ops_alerts на persistent storage."
+        ),
+    )
     ensure_path_writable(
         "RUNTIME_STATE_PATH",
         default="data/runtime_state.json",
@@ -190,6 +266,16 @@ def _collect_errors() -> list[str]:
         "OPS_ALERTS_FILE",
         default="data/ops_alerts.json",
         description="OPS_ALERTS_FILE",
+    )
+    ensure_path_writable(
+        "PNL_HISTORY_PATH",
+        default="data/pnl_history.json",
+        description="PNL_HISTORY_PATH",
+    )
+    ensure_path_writable(
+        "OPS_APPROVALS_FILE",
+        default="data/ops_approvals.json",
+        description="OPS_APPROVALS_FILE",
     )
 
     # ------------------------------------------------------------------
