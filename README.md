@@ -197,6 +197,17 @@ below:
     loop follows strategy defaults.
 - `ENABLE_PLACE_TEST_ORDERS` — allow real order placement on testnet.
 
+## Secrets store & RBAC (draft)
+
+- Секреты постепенно переносятся из `.env` в JSON-хранилище, которое читает
+  `SecretsStore`. Путь задаётся через `SECRETS_STORE_PATH` (см. `.env.example`).
+  ПРИМЕЧАНИЕ: структура сейчас черновая и не задействована в рантайме.
+- Вводятся роли операторов: `viewer` (только просмотр) и `operator`
+  (привилегированные действия). Проверки прав выполняет `app/rbac.py`.
+- Любые привилегированные действия должны записываться в аудит через
+  `app/audit_log.log_operator_action`, чтобы фиксировать, кто и откуда инициировал
+  операцию. Логи сохраняются в `data/audit.log`.
+
 ## Risk governor / auto-HOLD
 
 The runtime now includes a dedicated risk governor that continuously samples the
