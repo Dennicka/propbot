@@ -3,6 +3,7 @@ from __future__ import annotations
 from positions import create_position
 
 from app.services import approvals_store, runtime
+from app.services.runtime import is_hold_active
 
 
 def test_dashboard_requires_token(monkeypatch, client) -> None:
@@ -25,10 +26,10 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
         consecutive_failures=2,
     )
     state = runtime.get_state()
-    state.safety.counters.orders_placed_last_min = 3
-    state.safety.counters.cancels_last_min = 1
+    state.safety.counters.orders_placed_last_min = 9
+    state.safety.counters.cancels_last_min = 8
     state.safety.limits.max_orders_per_min = 10
-    state.safety.limits.max_cancels_per_min = 20
+    state.safety.limits.max_cancels_per_min = 10
 
     create_position(
         symbol="ETHUSDT",
@@ -39,6 +40,36 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
         leverage=2.0,
         entry_long_price=1800.0,
         entry_short_price=1805.0,
+        status="partial",
+        legs=[
+            {
+                "side": "long",
+                "venue": "binance-um",
+                "symbol": "ETHUSDT",
+                "notional_usdt": 1000.0,
+                "status": "partial",
+            },
+            {
+                "side": "short",
+                "venue": "okx-perp",
+                "symbol": "ETHUSDT",
+                "notional_usdt": 500.0,
+                "status": "partial",
+            },
+        ],
+    )
+
+    create_position(
+        symbol="BTCUSDT",
+        long_venue="binance-um",
+        short_venue="okx-perp",
+        notional_usdt=500.0,
+        entry_spread_bps=5.0,
+        leverage=1.5,
+        entry_long_price=28000.0,
+        entry_short_price=28010.0,
+        simulated=True,
+        status="open",
     )
 
     approvals_store.create_request(
@@ -63,6 +94,52 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "Controls" in html
     assert "Request RESUME" in html
     assert "Emergency CANCEL ALL" in html
+    assert "OUTSTANDING RISK" in html
+    assert "SIMULATED" in html
+    assert "NEAR LIMIT" in html
     # Health section should name the monitored daemons
     assert "auto_hedge_daemon" in html
     assert "scanner" in html
+
+    assert "Pending Approvals" in html
+    assert "resume" in html
+    assert "alice" in html
+    assert "reason" in html
+
+    assert "form method=\"post\" action=\"/ui/dashboard/hold\"" in html
+    assert "form method=\"post\" action=\"/ui/dashboard/resume\"" in html
+    assert "form method=\"post\" action=\"/ui/dashboard/kill\"" in html
+
+
+def test_dashboard_proxy_routes(monkeypatch, client) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("API_TOKEN", "dashboard-token")
+
+    unauth = client.post("/ui/dashboard/hold", data={"reason": "panic"})
+    assert unauth.status_code in {401, 403}
+
+    headers = {"Authorization": "Bearer dashboard-token"}
+
+    hold_response = client.post(
+        "/ui/dashboard/hold",
+        headers=headers,
+        data={"reason": "panic", "operator": "alice"},
+    )
+    assert hold_response.status_code == 200
+    assert "HOLD engaged" in hold_response.text
+    assert is_hold_active()
+
+    resume_response = client.post(
+        "/ui/dashboard/resume",
+        headers=headers,
+        data={"reason": "ready", "operator": "bob"},
+    )
+    assert resume_response.status_code == 202
+    assert "Resume request logged" in resume_response.text
+
+    approvals = approvals_store.list_requests()
+    pending = [entry for entry in approvals if entry.get("status") == "pending"]
+    assert pending
+    assert pending[0]["action"] == "resume"
+    assert pending[0]["parameters"].get("reason") == "ready"
+    assert is_hold_active()

@@ -387,24 +387,30 @@ profiles and keep `.env` outside version control.
   same bearer token as other `api/ui` endpoints and works only when
   `AUTH_ENABLED=true`.
 - Aggregates runtime state from `runtime_state.json`, the in-memory safety
-  controller, hedge positions store, and approvals queue.
+  controller, hedge positions store, and the persistent two-man approvals queue.
 - Shows build version, current HOLD status with reason/since timestamp,
   SAFE_MODE and DRY_RUN flags, runaway guard counters/limits, and the latest
   auto-hedge status (`enabled`, last success timestamp, consecutive failures,
   and last execution result).
 - Displays live hedge exposure per venue, unrealised PnL totals, and detailed
-  open/partial positions (venue, side, entry/mark prices, status). Closed or
-  purely simulated DRY_RUN hedges are suppressed.
+  open/partial positions (venue, side, entry/mark prices, status). Simulated
+  DRY_RUN hedges remain visible but are clearly marked as `SIMULATED`, while
+  partial hedges and unbalanced exposure are flagged as `OUTSTANDING RISK`.
+- Adds inline risk hints: runaway guard counters within 20% of their caps are
+  labelled `NEAR LIMIT`, and background health rows for stalled auto-hedge or
+  scanner tasks show red status/detail text for quick triage.
 - Lists configured risk limits (e.g. `MAX_OPEN_POSITIONS`,
   `MAX_TOTAL_NOTIONAL_USDT`, per-venue order caps) together with the runtime
   snapshot of limits maintained by the risk engine.
 - Highlights background daemon health (auto-hedge loop, opportunity scanner)
   using the same checks as `/healthz`, marking dead/inactive tasks in red.
 - Renders pending approvals from the two-man workflow so the desk can see who
-  requested HOLD release, dry-run exit, or limit changes.
-- Includes simple `<form>` controls that post to existing guarded endpoints:
-  manual HOLD trigger, RESUME request (with reminder that approval requires a
-  second operator/`APPROVE_TOKEN`), and the emergency cancel-all/kill switch.
+  requested HOLD release, limit changes, resume, or other guarded actions.
+- Includes simple `<form>` controls that post to dedicated `/ui/dashboard/*`
+  proxy routes. These convert operator form submissions into the JSON payloads
+  expected by the guarded API, so HOLD, RESUME request, and kill switch actions
+  stay behind the same token/two-man protections while remaining usable from
+  the browser.
 
 ### Hedge positions persistence & monitoring
 

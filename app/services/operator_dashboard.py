@@ -16,7 +16,7 @@ from .runtime import (
     get_state,
 )
 from .positions_view import build_positions_snapshot
-from positions import list_open_positions
+from positions import list_positions
 
 
 def _env_int(name: str, default: int) -> int:
@@ -152,8 +152,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     state = get_state()
     persisted = load_runtime_payload()
     auto_state = get_auto_hedge_state()
-    open_positions = list_open_positions()
-    positions_payload = await build_positions_snapshot(state, open_positions)
+    positions_snapshot_source = list_positions()
+    positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
         persisted.get("safety") if isinstance(persisted, Mapping) else None
@@ -212,8 +212,29 @@ def _fmt(value: object) -> str:
 
 def _status_span(ok: bool) -> str:
     if ok:
-        return '<span class="status-ok">OK</span>'
-    return '<span class="status-bad">DEAD</span>'
+        return '<span style="color:#1b7f3b;font-weight:600;">OK</span>'
+    return '<span style="color:#b00020;font-weight:700;">DEAD</span>'
+
+
+def _tag(text: str, *, color: str, weight: str = "700") -> str:
+    return f'<span style="color:{color};font-weight:{weight};margin-left:0.5rem;">{escape(text)}</span>'
+
+
+def _near_limit_tag(current: object, limit: object) -> str:
+    try:
+        current_value = float(current)
+        limit_value = float(limit)
+    except (TypeError, ValueError):
+        return ""
+    if limit_value <= 0:
+        return ""
+    try:
+        ratio = current_value / limit_value
+    except ZeroDivisionError:
+        return ""
+    if ratio >= 0.8:
+        return _tag("NEAR LIMIT", color="#b58900")
+    return ""
 
 
 def render_dashboard_html(context: Dict[str, Any]) -> str:
@@ -226,6 +247,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     totals = context.get("position_totals", {}) or {}
     health_checks = context.get("health_checks", []) or []
     approvals = context.get("pending_approvals", []) or []
+    flash_messages = context.get("flash_messages", []) or []
 
     parts: list[str] = []
     parts.append(
@@ -235,18 +257,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "h1,h2{color:#14365d;}table{border-collapse:collapse;width:100%;margin-bottom:2rem;background:#fff;}"
         "th,td{border:1px solid #d0d5dd;padding:0.5rem 0.75rem;text-align:left;vertical-align:top;}"
         "th{background:#e9eef5;}"
-        ".status-ok{color:#1b7f3b;font-weight:600;}.status-bad{color:#a8232d;font-weight:700;}"
         ".controls{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;}form{margin-bottom:1.5rem;}"
         "label{display:block;font-weight:600;margin-bottom:0.25rem;}"
         "input[type=text]{width:100%;padding:0.5rem;border:1px solid #c1c7d0;border-radius:4px;margin-bottom:0.5rem;}"
         "button{padding:0.5rem 1rem;border:none;border-radius:4px;background:#14365d;color:#fff;cursor:pointer;}"
         "button:hover{background:#0d2440;}"
         ".note{font-size:0.9rem;color:#555;margin-top:-0.5rem;margin-bottom:0.75rem;}"
+        ".flash{background:#fff3cd;border:1px solid #f1c232;color:#533f03;padding:0.75rem 1rem;margin-bottom:1.5rem;border-radius:4px;}"
         "</style></head><body>"
     )
     parts.append(
         f"<h1>Operator Dashboard</h1><p>Build Version: <strong>{_fmt(context.get('build_version'))}</strong></p>"
     )
+
+    for message in flash_messages:
+        parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
 
     hold_active = bool(safety.get("hold_active"))
     hold_reason = safety.get("hold_reason")
@@ -259,9 +284,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             detail += f" - Reason: {_fmt(hold_reason)}"
         if hold_since:
             detail += f" (since {_fmt(hold_since)})"
-        hold_cell = f'<span class="status-bad">{detail}</span>'
+        hold_cell = f'<span style="color:#b00020;font-weight:700;">{detail}</span>'
     else:
-        hold_cell = '<span class="status-ok">NO</span>'
+        hold_cell = '<span style=\"color:#1b7f3b;font-weight:600;\">NO</span>'
     parts.append(f"<tr><th>HOLD Active</th><td>{hold_cell}</td></tr>")
     parts.append(
         "<tr><th>Safe Mode</th><td>{}</td></tr>".format(
@@ -282,8 +307,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     )
     counters = safety.get("counters", {})
     limits = safety.get("limits", {})
-    orders_line = f"Orders: {_fmt(counters.get('orders_placed_last_min'))} / Limit {_fmt(limits.get('max_orders_per_min'))}"
-    cancels_line = f"Cancels: {_fmt(counters.get('cancels_last_min'))} / Limit {_fmt(limits.get('max_cancels_per_min'))}"
+    orders_current = counters.get("orders_placed_last_min")
+    orders_limit = limits.get("max_orders_per_min")
+    cancels_current = counters.get("cancels_last_min")
+    cancels_limit = limits.get("max_cancels_per_min")
+    orders_line = (
+        f"Orders: {_fmt(orders_current)} / Limit {_fmt(orders_limit)}"
+        f"{_near_limit_tag(orders_current, orders_limit)}"
+    )
+    cancels_line = (
+        f"Cancels: {_fmt(cancels_current)} / Limit {_fmt(cancels_limit)}"
+        f"{_near_limit_tag(cancels_current, cancels_limit)}"
+    )
     parts.append(
         f"<tr><th>Runaway Counters (last min)</th><td>{orders_line}<br />{cancels_line}</td></tr>"
     )
@@ -319,12 +354,19 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if exposures:
         parts.append("<table><thead><tr><th>Venue</th><th>Long Notional</th><th>Short Notional</th><th>Net USDT</th></tr></thead><tbody>")
         for venue, payload in sorted(exposures.items()):
+            risk_badge = ""
+            try:
+                net_value = abs(float(payload.get("net_usdt") or 0.0))
+            except (TypeError, ValueError):
+                net_value = 0.0
+            if net_value > 0.0:
+                risk_badge = _tag("OUTSTANDING RISK", color="#b00020")
             parts.append(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
                     _fmt(venue),
                     _fmt(payload.get("long_notional")),
                     _fmt(payload.get("short_notional")),
-                    _fmt(payload.get("net_usdt")),
+                    f"{_fmt(payload.get('net_usdt'))}{risk_badge}",
                 )
             )
         parts.append("</tbody></table>")
@@ -335,6 +377,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     )
 
     parts.append("<h2>Open Hedge Positions</h2>")
+    display_positions: list[Mapping[str, Any]] = []
+    for position in positions:
+        status_value = str(position.get("status") or "").lower()
+        if status_value in {"open", "partial"} or bool(position.get("simulated")):
+            display_positions.append(position)
+    positions = display_positions
     if positions:
         parts.append(
             "<table><thead><tr><th>Symbol</th><th>Status</th><th>Notional (USDT)</th><th>Legs</th><th>Unrealised PnL</th></tr></thead><tbody>"
@@ -347,15 +395,26 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 side = _fmt(leg.get("side"))
                 entry_price = _fmt(leg.get("entry_price"))
                 mark_price = _fmt(leg.get("mark_price"))
-                status = _fmt(leg.get("status"))
+                status_raw = str(leg.get("status") or "")
+                status = _fmt(status_raw)
+                if status_raw.lower() == "partial":
+                    status += _tag("OUTSTANDING RISK", color="#b00020")
+                elif status_raw.lower() == "simulated":
+                    status += _tag("SIMULATED", color="#555", weight="600")
                 leg_lines.append(
                     f"<div>{venue} — {side} @ entry {entry_price} (mark {mark_price}) [{status}]</div>"
                 )
             legs_html = "".join(leg_lines) or "<div>n/a</div>"
+            status_value = str(position.get("status") or "")
+            status_html = _fmt(status_value)
+            if status_value.lower() == "partial":
+                status_html += _tag("OUTSTANDING RISK", color="#b00020")
+            if bool(position.get("simulated")) or status_value.lower() == "simulated":
+                status_html += _tag("SIMULATED", color="#555", weight="600")
             parts.append(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
                     _fmt(position.get("symbol")),
-                    _fmt(position.get("status")),
+                    status_html,
                     _fmt(position.get("notional_usdt")),
                     legs_html,
                     _fmt(position.get("unrealized_pnl_usdt")),
@@ -368,9 +427,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append("<h2>Background Health</h2><table><thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead><tbody>")
     for entry in health_checks:
         name = _fmt(entry.get("name"))
-        detail = _fmt(entry.get("detail"))
+        ok = bool(entry.get("ok"))
+        detail_value = entry.get("detail")
+        detail = _fmt(detail_value)
+        if not ok:
+            detail = f"<span style=\"color:#b00020;font-weight:700;\">{detail or 'unavailable'}</span>"
         parts.append(
-            f"<tr><td>{name}</td><td>{_status_span(bool(entry.get('ok')))}</td><td>{detail}</td></tr>"
+            f"<tr><td>{name}</td><td>{_status_span(ok)}</td><td>{detail}</td></tr>"
         )
     parts.append("</tbody></table>")
 
@@ -396,14 +459,19 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     parts.append(
         "<div class=\"controls\"><h2>Controls</h2>"
-        "<form method=\"post\" action=\"/api/ui/hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
+        "<form method=\"post\" action=\"/ui/dashboard/hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
         "<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\" />"
+        "<label for=\"hold-operator\">Operator (optional)</label>"
+        "<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\" />"
         "<button type=\"submit\">Enable HOLD</button></form>"
-        "<form method=\"post\" action=\"/api/ui/resume-request\"><label for=\"resume-reason\">Request RESUME</label>"
+        "<form method=\"post\" action=\"/ui/dashboard/resume\"><label for=\"resume-reason\">Request RESUME</label>"
         "<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required />"
+        "<label for=\"resume-operator\">Operator (optional)</label>"
+        "<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\" />"
         "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
         "<button type=\"submit\">Request RESUME</button></form>"
-        "<form method=\"post\" action=\"/api/ui/kill\"><label>Emergency Cancel All / Kill Switch</label>"
+        "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
+        "<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\" />"
         "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
         "<button type=\"submit\">Emergency CANCEL ALL</button></form></div>"
     )
