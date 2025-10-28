@@ -412,6 +412,23 @@ profiles and keep `.env` outside version control.
   stay behind the same token/two-man protections while remaining usable from
   the browser.
 
+### PnL / Exposure trend
+
+- Rolling exposure and PnL snapshots are persisted to the file configured by
+  `PNL_HISTORY_PATH` (default: `data/pnl_history.json`). The path lives next to
+  other operator-facing JSON stores and can be relocated via environment
+  variable if the default does not suit your deployment layout.
+- Operators can fetch the latest snapshots via the token-protected
+  `GET /api/ui/pnl_history?limit=N` endpoint. The response contains
+  `{ "snapshots": [...] }` with the newest entry first so the desk can export a
+  quick history without shell access to the host.
+- Each snapshot records live (non-simulated) open/partial positions only. Legs
+  executed in `DRY_RUN_MODE` are labelled under a separate `simulated` section
+  and excluded from the real exposure totals shown on the dashboard.
+- The dashboard renders a compact "Risk & PnL trend" block comparing the two
+  most recent snapshots, highlighting changes in unrealised PnL and aggregate
+  exposure together with counts of open, partial, and simulated hedges.
+
 ### Hedge positions persistence & monitoring
 
 - All cross-exchange hedge positions (including both legs, entry prices,

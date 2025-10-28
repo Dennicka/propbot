@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from positions import create_position
 
+import asyncio
+
 from app.services import approvals_store, risk_guard, runtime
+from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
 
 
@@ -72,6 +75,15 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
         status="open",
     )
 
+    class DummySnapshot:
+        pnl_totals = {"unrealized": 25.0, "total": 25.0, "realized": 0.0}
+
+    async def fake_snapshot(*_args, **_kwargs):
+        return DummySnapshot()
+
+    monkeypatch.setattr("app.services.pnl_history.portfolio.snapshot", fake_snapshot)
+    asyncio.run(record_snapshot(reason="test"))
+
     approvals_store.create_request(
         "resume",
         requested_by="alice",
@@ -109,6 +121,11 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "form method=\"post\" action=\"/ui/dashboard/hold\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/resume\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/kill\"" in html
+
+    assert "Risk &amp; PnL trend" in html
+    assert "Unrealised PnL" in html
+    assert "Total Exposure (USD)" in html
+    assert "Open positions:" in html
 
 
 def test_dashboard_shows_risk_throttle_banner(monkeypatch, client) -> None:

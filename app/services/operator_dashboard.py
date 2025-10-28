@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import asdict
 from html import escape
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Sequence
 
 from fastapi import Request
 
@@ -20,6 +20,7 @@ from .runtime import (
 )
 from .positions_view import build_positions_snapshot
 from positions import list_positions
+from pnl_history_store import list_recent as list_recent_snapshots
 
 
 def _env_int(name: str, default: int) -> int:
@@ -40,6 +41,58 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _trend_summary(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not history:
+        return {}
+
+    latest = dict(history[0]) if isinstance(history[0], Mapping) else {}
+    previous = dict(history[1]) if len(history) > 1 and isinstance(history[1], Mapping) else None
+
+    current_pnl = _coerce_float(latest.get("unrealized_pnl_total"))
+    current_exposure = _coerce_float(latest.get("total_exposure_usd_total"))
+    previous_pnl = _coerce_float(previous.get("unrealized_pnl_total")) if previous else None
+    previous_exposure = _coerce_float(previous.get("total_exposure_usd_total")) if previous else None
+
+    pnl_delta = None if previous is None else current_pnl - (previous_pnl or 0.0)
+    exposure_delta = None if previous is None else current_exposure - (previous_exposure or 0.0)
+
+    simulated_payload = latest.get("simulated") if isinstance(latest.get("simulated"), Mapping) else {}
+
+    return {
+        "history": [dict(entry) for entry in history if isinstance(entry, Mapping)],
+        "latest": latest,
+        "previous": previous,
+        "current_pnl": current_pnl,
+        "current_exposure": current_exposure,
+        "previous_pnl": previous_pnl,
+        "previous_exposure": previous_exposure,
+        "pnl_delta": pnl_delta,
+        "exposure_delta": exposure_delta,
+        "pnl_improved": True if pnl_delta is None else pnl_delta >= 0.0,
+        "exposure_improved": True if exposure_delta is None else exposure_delta <= 0.0,
+        "per_venue": dict(latest.get("total_exposure_usd") or {}),
+        "simulated_per_venue": dict(simulated_payload.get("per_venue") or {}),
+        "simulated_total": _coerce_float(simulated_payload.get("total")),
+        "open_positions": _coerce_int(latest.get("open_positions")),
+        "partial_positions": _coerce_int(latest.get("partial_positions")),
+        "simulated_positions": _coerce_int(simulated_payload.get("positions")),
+    }
 
 
 def _task_running(task: Any) -> bool:
@@ -185,6 +238,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         and hold_reason.upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX)
     )
 
+    pnl_history = list_recent_snapshots(limit=5)
+    pnl_trend = _trend_summary(pnl_history)
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -210,6 +266,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "recent_audit": recent_audit,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
+        "pnl_history": pnl_history,
+        "pnl_trend": pnl_trend,
     }
 
 
@@ -265,6 +323,21 @@ def _near_limit_tag(current: object, limit: object) -> str:
     return ""
 
 
+def _trend_delta_cell(delta: float | None, improved: bool) -> str:
+    if delta is None:
+        return '<span style="color:#555;">n/a</span>'
+    if abs(delta) <= 1e-9:
+        arrow = "→"
+        color = "#555"
+    else:
+        arrow = "↑" if delta > 0 else "↓"
+        color = "#1b7f3b" if improved else "#b00020"
+    value_text = _fmt(delta)
+    if delta > 0:
+        value_text = f"+{value_text}"
+    return f'<span style="color:{color};font-weight:600;">{arrow} {value_text}</span>'
+
+
 def render_dashboard_html(context: Dict[str, Any]) -> str:
     safety = context.get("safety", {}) or {}
     auto = context.get("auto_hedge", {}) or {}
@@ -280,6 +353,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     throttle_reason = context.get("risk_throttle_reason") or ""
     active_alerts = context.get("active_alerts", []) or []
     recent_audit = context.get("recent_audit", []) or []
+    trend = context.get("pnl_trend", {}) or {}
 
     parts: list[str] = []
     parts.append(
@@ -351,6 +425,62 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 )
             )
     parts.append("</tbody></table>")
+
+    parts.append("<h2>Risk &amp; PnL trend</h2>")
+    latest_trend = trend.get("latest") if isinstance(trend, Mapping) else None
+    if not latest_trend:
+        parts.append("<p>No snapshots recorded yet.</p>")
+    else:
+        timestamp = _fmt(latest_trend.get("timestamp"))
+        parts.append(f"<p class=\"note\">Latest snapshot at {timestamp or 'n/a'}.</p>")
+        parts.append(
+            "<table><thead><tr><th>Metric</th><th>Current</th><th>Δ vs previous</th></tr></thead><tbody>"
+        )
+        parts.append(
+            "<tr><td>Unrealised PnL</td><td>{current}</td><td>{delta}</td></tr>".format(
+                current=_fmt(trend.get("current_pnl")),
+                delta=_trend_delta_cell(trend.get("pnl_delta"), bool(trend.get("pnl_improved"))),
+            )
+        )
+        parts.append(
+            "<tr><td>Total Exposure (USD)</td><td>{current}</td><td>{delta}</td></tr>".format(
+                current=_fmt(trend.get("current_exposure")),
+                delta=_trend_delta_cell(
+                    trend.get("exposure_delta"), bool(trend.get("exposure_improved"))
+                ),
+            )
+        )
+        parts.append("</tbody></table>")
+        parts.append(
+            "<p class=\"note\">Open positions: {open_count} &nbsp; Partial: {partial_count} &nbsp; "
+            "Simulated: {sim_positions}</p>".format(
+                open_count=_fmt(trend.get("open_positions")),
+                partial_count=_fmt(trend.get("partial_positions")),
+                sim_positions=_fmt(trend.get("simulated_positions")),
+            )
+        )
+        per_venue = trend.get("per_venue") or {}
+        if per_venue:
+            per_venue_text = ", ".join(
+                f"{escape(str(venue))}: {_fmt(value)}" for venue, value in sorted(per_venue.items())
+            )
+            parts.append(f"<p class=\"note\">Per-venue exposure: {per_venue_text}</p>")
+        simulated_total = trend.get("simulated_total")
+        simulated_per_venue = trend.get("simulated_per_venue") or {}
+        if simulated_total or simulated_per_venue:
+            sim_detail = ""
+            if simulated_per_venue:
+                sim_detail = ", ".join(
+                    f"{escape(str(venue))}: {_fmt(value)}"
+                    for venue, value in sorted(simulated_per_venue.items())
+                )
+                sim_detail = f" (per venue: {sim_detail})"
+            parts.append(
+                "<p class=\"note\">Simulated exposure total {total}{detail}</p>".format(
+                    total=_fmt(simulated_total),
+                    detail=sim_detail,
+                )
+            )
 
     hold_active = bool(safety.get("hold_active"))
     hold_reason = safety.get("hold_reason")
