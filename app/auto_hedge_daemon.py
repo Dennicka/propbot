@@ -17,9 +17,9 @@ from services.cross_exchange_arb import execute_hedged_trade
 from services.opportunity_scanner import get_scanner
 from services.risk_manager import can_open_new_position
 
+from .services import risk_guard
 from .services.hedge_log import append_entry
 from .services.runtime import (
-    engage_safety_hold,
     get_state,
     is_dry_run_mode,
     is_hold_active,
@@ -238,7 +238,13 @@ class AutoHedgeDaemon:
             )
         )
         if self._max_failures > 0 and failures > self._max_failures:
-            engage_safety_hold(f"auto_hedge_failures:{reason}", source="auto_hedge_daemon")
+            risk_guard.force_hold(
+                risk_guard.REASON_AUTO_HEDGE_FAILURES,
+                extra={
+                    "reason": reason,
+                    "consecutive_failures": failures,
+                },
+            )
         logger.warning("auto hedge rejected: %s", reason)
         alert_payload: Dict[str, object] = {"failures": failures, "reason": reason}
         if isinstance(candidate, Mapping):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from positions import create_position
 
-from app.services import approvals_store, runtime
+from app.services import approvals_store, risk_guard, runtime
 from app.services.runtime import is_hold_active
 
 
@@ -109,6 +109,23 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, client) -> None:
     assert "form method=\"post\" action=\"/ui/dashboard/hold\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/resume\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/kill\"" in html
+
+
+def test_dashboard_shows_risk_throttle_banner(monkeypatch, client) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("API_TOKEN", "risk-throttle")
+
+    runtime.engage_safety_hold(risk_guard.REASON_PARTIAL_STALLED, source="risk_guard")
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer risk-throttle"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "RISK_THROTTLED" in html
+    assert "Manual two-step RESUME approval required" in html
 
 
 def test_dashboard_proxy_routes(monkeypatch, client) -> None:

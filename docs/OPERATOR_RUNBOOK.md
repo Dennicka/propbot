@@ -121,6 +121,19 @@
   (`safety.hold_reason`, `safety.risk_snapshot`). Не снимайте HOLD, пока не
   устранена причина; затем используйте `resume-request` → `resume-confirm`.
 
+### Auto-throttle / аварийный HOLD
+
+- Risk-guard следит за жёсткими нарушениями и может сам поставить HOLD с
+  причиной вида `AUTO_THROTTLE/...`:
+  - фактическое превышение runaway лимита
+    (`MAX_TOTAL_NOTIONAL_USDT`, `MAX_OPEN_POSITIONS`);
+  - слишком много последовательных ошибок авто-хеджа
+    (`auto_hedge.consecutive_failures` выше порога);
+  - зависшие partial hedges (второй лег не выставился дольше порога);
+  - live-торговля и серия отказов/банов биржи при размещении ордеров.
+- Такой HOLD нельзя снять автоматически: чтобы продолжить торговлю, всегда
+  используйте стандартный двухшаговый `resume-request` → `resume-confirm`.
+
 ## Ежедневный мониторинг
 
 - `GET /healthz` — проверка живости.

@@ -12,7 +12,7 @@ from ..opsbot import notifier
 from ..runtime_state_store import load_runtime_payload
 from ..version import APP_VERSION
 from .approvals_store import list_requests as list_pending_requests
-from . import risk_alerts
+from . import risk_alerts, risk_guard
 from .runtime import (
     get_auto_hedge_state,
     get_last_opportunity_state,
@@ -179,6 +179,12 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     active_alerts = risk_alerts.evaluate_alerts()
     recent_audit = notifier.get_recent_alerts(limit=5)
 
+    hold_reason = str(safety_payload.get("hold_reason") or "")
+    risk_throttled = bool(
+        safety_payload.get("hold_active")
+        and hold_reason.upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX)
+    )
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -202,6 +208,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "persisted_snapshot": persisted,
         "active_alerts": active_alerts,
         "recent_audit": recent_audit,
+        "risk_throttled": risk_throttled,
+        "risk_throttle_reason": hold_reason if risk_throttled else "",
     }
 
 
@@ -268,6 +276,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     health_checks = context.get("health_checks", []) or []
     approvals = context.get("pending_approvals", []) or []
     flash_messages = context.get("flash_messages", []) or []
+    risk_throttled = bool(context.get("risk_throttled"))
+    throttle_reason = context.get("risk_throttle_reason") or ""
     active_alerts = context.get("active_alerts", []) or []
     recent_audit = context.get("recent_audit", []) or []
 
@@ -294,6 +304,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     for message in flash_messages:
         parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
+
+    if risk_throttled:
+        reason_clause = (
+            f" Trigger: {_fmt(throttle_reason)}." if throttle_reason else ""
+        )
+        parts.append(
+            "<div class=\"flash\" style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;\">"
+            "<strong>RISK_THROTTLED</strong> — automatic risk guard hold active. "
+            "Manual two-step RESUME approval required before trading can restart." 
+            f"{reason_clause}"
+            "</div>"
+        )
 
     parts.append("<h2>Active Alerts / Recent Audit</h2>")
     parts.append("<table><thead><tr><th>Alert</th><th>Detail</th><th>Active Since</th></tr></thead><tbody>")
@@ -334,7 +356,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     hold_reason = safety.get("hold_reason")
     hold_since = safety.get("hold_since")
     parts.append("<h2>Runtime &amp; Safety</h2><table><tbody>")
-    parts.append(f"<tr><th>Mode</th><td>{_fmt(context.get('control', {}).get('mode'))}</td></tr>")
+    mode_value = _fmt(context.get("control", {}).get("mode"))
+    if risk_throttled:
+        mode_value = f"RISK_THROTTLED ({mode_value})"
+    parts.append(f"<tr><th>Mode</th><td>{mode_value}</td></tr>")
     if hold_active:
         detail = "YES"
         if hold_reason:

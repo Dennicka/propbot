@@ -8,7 +8,7 @@ from typing import Dict
 import pytest
 
 from app.auto_hedge_daemon import AutoHedgeDaemon
-from app.services import runtime
+from app.services import risk_guard, runtime
 from app.services.hedge_log import read_entries, reset_log
 from app.services.status import get_status_overview
 from positions import list_positions
@@ -172,7 +172,7 @@ async def test_auto_daemon_triggers_hold_after_failures(monkeypatch, tmp_path) -
     assert state.auto_hedge.last_execution_result.startswith("error: spread_below_threshold")
     assert runtime.is_hold_active()
     reason = runtime.get_safety_status().get("hold_reason")
-    assert reason and reason.startswith("auto_hedge_failures")
+    assert reason == risk_guard.REASON_AUTO_HEDGE_FAILURES
 
 
 @pytest.mark.asyncio
