@@ -47,11 +47,21 @@ def _require_operator(request: Request, action: str) -> OperatorIdentity:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     identity = _resolve_operator_identity(token)
     if not identity:
-        log_operator_action("unknown", "unknown", action, channel="orchestrator", details="forbidden")
+        log_operator_action(
+            "unknown",
+            "unknown",
+            action,
+            details={"status": "forbidden"},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     name, role = identity
     if role != "operator":
-        log_operator_action(name, role, action, channel="orchestrator", details="forbidden")
+        log_operator_action(
+            name,
+            role,
+            action,
+            details={"status": "forbidden"},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     return identity
 

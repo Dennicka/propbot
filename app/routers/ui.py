@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
-from ..audit_log import log_operator_action
+from ..audit_log import list_recent_operator_actions, log_operator_action
 from ..capital_manager import get_capital_manager
 from ..pnl_report import DailyPnLReporter
 from ..rbac import Action, can_execute_action
@@ -110,11 +110,21 @@ def _authorize_operator_action(request: Request, action: Action) -> Optional[Ope
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     identity = _resolve_operator_identity(token)
     if not identity:
-        log_operator_action("unknown", "unknown", action, channel="api", details="forbidden")
+        log_operator_action(
+            "unknown",
+            "unknown",
+            action,
+            details={"status": "forbidden"},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     name, role = identity
     if not can_execute_action(role, action):
-        log_operator_action(name, role, action, channel="api", details="forbidden")
+        log_operator_action(
+            name,
+            role,
+            action,
+            details={"status": "forbidden"},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     return identity
 
@@ -123,7 +133,7 @@ def _log_operator_success(identity: Optional[OperatorIdentity], action: Action) 
     if not identity:
         return
     name, role = identity
-    log_operator_action(name, role, action, channel="api", details="ok")
+    log_operator_action(name, role, action, details={"status": "ok"})
 
 
 class HoldPayload(BaseModel):
@@ -305,8 +315,7 @@ async def generate_daily_pnl_report(request: Request) -> dict[str, Any]:
                 name,
                 role,
                 action="report_daily_forbidden",
-                channel="api",
-                details="forbidden",
+                details={"status": "forbidden"},
             )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
@@ -320,8 +329,7 @@ async def generate_daily_pnl_report(request: Request) -> dict[str, Any]:
             name,
             role,
             action="report_daily_export",
-            channel="api",
-            details="ok",
+            details={"status": "ok"},
         )
 
     return snapshot
@@ -890,9 +898,8 @@ async def audit_export(
 
     require_token(request)
     try:
-        from ..opsbot.notifier import read_audit_events
+        events = list_recent_operator_actions(limit=limit)
     except Exception:
-        return JSONResponse({"events": []})
-    events = read_audit_events(limit=limit)
+        events = []
     return JSONResponse({"events": events})
 

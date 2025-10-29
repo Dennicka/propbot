@@ -47,7 +47,6 @@ class StrategyOrchestrator:
             operator,
             role,
             action=f"enable_strategy:{strategy}",
-            channel="orchestrator",
             details={"strategy": strategy, "reason": reason},
         )
 
@@ -67,7 +66,6 @@ class StrategyOrchestrator:
             operator,
             role,
             action=f"disable_strategy:{strategy}",
-            channel="orchestrator",
             details={"strategy": strategy, "reason": reason},
         )
 
@@ -102,7 +100,6 @@ class StrategyOrchestrator:
                 operator,
                 role,
                 action=f"enable_strategy:{name}",
-                channel="orchestrator",
                 details={"strategy": name, "reason": reason},
             )
 

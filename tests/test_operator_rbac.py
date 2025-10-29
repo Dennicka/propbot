@@ -21,10 +21,10 @@ def test_operator_rbac_enforcement(monkeypatch, tmp_path, client):
     monkeypatch.delenv("API_TOKEN", raising=False)
     monkeypatch.setenv("APPROVE_TOKEN", "ZZZ")
 
-    calls: list[tuple[str, str, str, str, object]] = []
+    calls: list[tuple[str, str, str, object]] = []
 
-    def _capture(name: str, role: str, action: str, channel: str, details):
-        calls.append((name, role, action, channel, details))
+    def _capture(name: str, role: str, action: str, details):
+        calls.append((name, role, action, details))
 
     monkeypatch.setattr("app.routers.ui.log_operator_action", _capture)
 
@@ -62,10 +62,10 @@ def test_operator_rbac_enforcement(monkeypatch, tmp_path, client):
     kill_resp = client.post("/api/ui/kill", headers=operator_headers)
     assert kill_resp.status_code == 200
 
-    assert ("bob", "viewer", "HOLD", "api", "forbidden") in calls
-    assert ("bob", "viewer", "RESUME", "api", "forbidden") in calls
-    assert ("bob", "viewer", "KILL", "api", "forbidden") in calls
+    assert ("bob", "viewer", "HOLD", {"status": "forbidden"}) in calls
+    assert ("bob", "viewer", "RESUME", {"status": "forbidden"}) in calls
+    assert ("bob", "viewer", "KILL", {"status": "forbidden"}) in calls
 
-    assert ("alice", "operator", "HOLD", "api", "ok") in calls
-    assert any(entry == ("alice", "operator", "RESUME", "api", "ok") for entry in calls)
-    assert ("alice", "operator", "KILL", "api", "ok") in calls
+    assert ("alice", "operator", "HOLD", {"status": "ok"}) in calls
+    assert any(entry == ("alice", "operator", "RESUME", {"status": "ok"}) for entry in calls)
+    assert ("alice", "operator", "KILL", {"status": "ok"}) in calls
