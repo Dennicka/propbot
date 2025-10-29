@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Mapping
 
 from app.services import runtime
+from app.strategy_budget import get_strategy_budget_manager
 from positions_store import append_record, list_records, mark_closed, reset_store
 
 
@@ -57,6 +58,7 @@ def create_position(
     status: str | None = None,
     simulated: bool | None = None,
     legs: Iterable[Mapping[str, Any]] | None = None,
+    strategy: str | None = None,
 ) -> Dict[str, Any]:
     """Create and persist a new hedge position."""
 
@@ -74,6 +76,9 @@ def create_position(
         if entry_short_price is not None
         else None,
     }
+    strategy_name = str(strategy or "").strip()
+    if strategy_name:
+        payload["strategy"] = strategy_name
     if status:
         payload["status"] = str(status)
     if simulated is not None:
@@ -87,6 +92,12 @@ def create_position(
             payload["base_size"] = 0.0
     record = append_record(payload)
     runtime.append_position_state(record)
+    if strategy_name and not bool(payload.get("simulated")):
+        try:
+            manager = get_strategy_budget_manager()
+            manager.reserve(strategy_name, notional_usdt, positions=1)
+        except Exception:
+            pass
     return record
 
 
@@ -104,6 +115,18 @@ def close_position(
         exit_short_price=float(exit_short_price),
     )
     runtime.set_positions_state(list_records())
+    strategy_name = str(updated.get("strategy") or "").strip()
+    simulated_flag = bool(updated.get("simulated"))
+    if strategy_name and not simulated_flag:
+        try:
+            manager = get_strategy_budget_manager()
+            manager.release(
+                strategy_name,
+                float(updated.get("notional_usdt") or 0.0),
+                positions=1,
+            )
+        except Exception:
+            pass
     return updated
 
 
@@ -112,6 +135,11 @@ def reset_positions() -> None:
 
     reset_store()
     runtime.set_positions_state([])
+    try:
+        manager = get_strategy_budget_manager()
+        manager.reset_all_usage()
+    except Exception:
+        pass
 
 
 def validate_record_structure(entries: Iterable[Dict[str, Any]]) -> None:

@@ -25,6 +25,9 @@ from services.risk_manager import can_open_new_position
 router = APIRouter()
 
 
+STRATEGY_NAME = "cross_exchange_arb"
+
+
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     try:
         from ..opsbot.notifier import emit_alert
@@ -204,6 +207,7 @@ async def execute(plan_body: ExecutePayload) -> dict:
             status="simulated" if simulated else "open",
             simulated=simulated,
             legs=trade_result.get("legs"),
+            strategy=STRATEGY_NAME,
         )
         trade_result["position"] = position
         alert_payload = {
@@ -299,6 +303,7 @@ async def confirm(payload: ConfirmPayload) -> dict:
         entry_short_price=float(trade_result.get("short_order", {}).get("price", 0.0)),
         status="simulated" if simulated else None,
         simulated=simulated,
+        strategy=STRATEGY_NAME,
     )
     trade_result["position"] = position
     trade_result["opportunity_id"] = opportunity.get("id")

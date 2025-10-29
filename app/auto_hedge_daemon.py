@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 INITIATOR = "YOUR_NAME_OR_TOKEN"
 _FAIL_WINDOW = 60.0
 
+STRATEGY_NAME = "cross_exchange_arb"
+
 
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     try:
@@ -359,6 +361,7 @@ class AutoHedgeDaemon:
             status="simulated" if simulated else "open",
             simulated=simulated,
             legs=trade_result.get("legs"),
+            strategy=STRATEGY_NAME,
         )
         trade_result["position"] = position
         ts = _ts()

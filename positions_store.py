@@ -161,6 +161,9 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "pnl_usdt": float(payload.get("pnl_usdt") or 0.0),
         "base_size": float(base_size),
     }
+    strategy_value = payload.get("strategy")
+    if strategy_value not in (None, ""):
+        record["strategy"] = str(strategy_value)
     simulated_flag = payload.get("simulated")
     if simulated_flag is not None:
         record["simulated"] = bool(simulated_flag)

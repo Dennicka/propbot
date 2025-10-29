@@ -122,6 +122,23 @@
   ордеров и не блокирует сделки автоматически. Используйте метрики для контроля и
   ручных решений об изменении лимитов.
 
+## Capital / Per-Strategy Budget
+
+- Для каждой стратегии введён отдельный бюджет капитала. Базовая реализация —
+  `StrategyBudgetManager`, он хранит `max_notional_usdt`,
+  `max_open_positions` и текущую загрузку в runtime-state (`data/runtime_state.json`).
+  Сейчас бюджет подключён для `cross_exchange_arb`; значения по умолчанию
+  подтягиваются из глобальных лимитов (`MAX_TOTAL_NOTIONAL_USDT`,
+  `MAX_OPEN_POSITIONS`).
+- Если стратегия выбирает лимит, `execute_hedged_trade` возвращает
+  `state=BUDGET_BLOCKED` и `reason=strategy_budget_exceeded`. Это останавливает
+  только конкретную стратегию — HOLD/SAFE_MODE, глобальный risk manager, DRY_RUN
+  и двухоператорное RESUME продолжают работать как раньше.
+- Снимок доступен через `GET /api/ui/strategy_budget` (viewer/operator read-only)
+  и на `/ui/dashboard` появилась таблица «Strategy Budgets» с текущим notional и
+  количеством открытых позиций против лимитов. Стратегии в статусе blocked
+  подсвечиваются красным.
+
 ## Exchange watchdog
 
 - `GET /api/ui/exchange_health` показывает агрегированное состояние биржевых
