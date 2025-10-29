@@ -512,6 +512,10 @@ profiles and keep `.env` outside version control.
   expected by the guarded API, so HOLD, RESUME request, and kill switch actions
   stay behind the same token/two-man protections while remaining usable from
   the browser.
+- Surfaces a read-only **PnL / Risk** card with unrealised PnL, the current
+  day's realised PnL stub (currently fixed at `0.0` until settlement reporting
+  is wired in), total live exposure, and CapitalManager headroom per strategy.
+  Use it as the landing spot for a quick risk scan instead of grepping logs.
 
 ### PnL / Exposure trend
 

@@ -103,6 +103,49 @@ def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:
     assert "button type=\"submit\" disabled" in html
 
 
+def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.build_pnl_snapshot",
+        lambda *_args, **_kwargs: {
+            "unrealized_pnl_usdt": 123.45,
+            "realised_pnl_today_usdt": 0.0,
+            "total_exposure_usdt": 6789.0,
+            "capital_headroom_per_strategy": {
+                "cross_exchange_arb": {"headroom_notional": 1000.0}
+            },
+            "capital_snapshot": {
+                "per_strategy_limits": {
+                    "cross_exchange_arb": {"max_notional": 5000.0}
+                },
+                "current_usage": {
+                    "cross_exchange_arb": {"open_notional": 4000.0}
+                },
+            },
+        },
+    )
+
+    secrets_payload = {
+        "operator_tokens": {"viewer": {"token": "VVV", "role": "viewer"}},
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer VVV"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "PnL / Risk" in html
+    assert "headroom" in html.lower()
+
+
 def test_dashboard_risk_snapshot_viewer(monkeypatch, tmp_path, client) -> None:
     async def fake_risk_snapshot() -> dict[str, object]:
         return {
