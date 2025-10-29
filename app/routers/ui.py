@@ -6,6 +6,7 @@ import io
 import os
 import secrets
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -13,8 +14,9 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
-from ..capital_manager import get_capital_manager
 from ..audit_log import log_operator_action
+from ..capital_manager import get_capital_manager
+from ..pnl_report import DailyPnLReporter
 from ..rbac import Action, can_execute_action
 from ..services.loop import (
     cancel_all_orders,
@@ -285,6 +287,44 @@ async def daily_report(request: Request) -> dict[str, Any]:
     payload = dict(report)
     payload.setdefault("available", True)
     return payload
+
+
+@router.post("/report/daily")
+async def generate_daily_pnl_report(request: Request) -> dict[str, Any]:
+    """Generate and persist a daily PnL/risk snapshot for audit."""
+
+    token = require_token(request)
+    identity = None
+    if token:
+        identity = _resolve_operator_identity(token)
+    if is_auth_enabled():
+        if not identity or identity[1] != "operator":
+            name = identity[0] if identity else "unknown"
+            role = identity[1] if identity else "unknown"
+            log_operator_action(
+                name,
+                role,
+                action="report_daily_forbidden",
+                channel="api",
+                details="forbidden",
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+
+    reporter = DailyPnLReporter()
+    snapshot = reporter.build_daily_snapshot()
+    reporter.write_snapshot_to_file(Path("data/daily_reports"), snapshot=snapshot)
+
+    if identity:
+        name, role = identity
+        log_operator_action(
+            name,
+            role,
+            action="report_daily_export",
+            channel="api",
+            details="ok",
+        )
+
+    return snapshot
 
 
 @router.post("/snapshot")
