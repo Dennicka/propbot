@@ -39,6 +39,7 @@ from services.execution_stats_store import (
 from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
 from ..strategy_budget import get_strategy_budget_manager
+from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
 
 
@@ -264,6 +265,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     risk_snapshot = await build_risk_snapshot()
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
+    strategy_pnl_snapshot = snapshot_strategy_pnl()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
         persisted.get("safety") if isinstance(persisted, Mapping) else None
@@ -423,7 +425,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "risk_snapshot": risk_snapshot,
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
+        "strategy_pnl_snapshot": strategy_pnl_snapshot,
         "strategy_budgets": strategy_budgets,
+        "strategy_budget_snapshot": strategy_budget_snapshot,
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
     }
@@ -640,7 +644,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     risk_snapshot_per_venue = risk_snapshot.get("per_venue") or {}
 
     strategy_risk_snapshot = context.get("strategy_risk_snapshot", {}) or {}
-    strategy_risk_strategies = strategy_risk_snapshot.get("strategies") or {}
+    if not isinstance(strategy_risk_snapshot, Mapping):
+        strategy_risk_snapshot = {}
+    strategy_risk_strategies_raw = strategy_risk_snapshot.get("strategies") or {}
+    strategy_risk_strategies = (
+        strategy_risk_strategies_raw
+        if isinstance(strategy_risk_strategies_raw, Mapping)
+        else {}
+    )
     strategy_risk_ts_raw = strategy_risk_snapshot.get("timestamp")
     if isinstance(strategy_risk_ts_raw, (int, float)):
         strategy_risk_ts = datetime.fromtimestamp(strategy_risk_ts_raw, tz=timezone.utc).isoformat()
@@ -708,6 +719,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-budgets tr.blocked{background:#fee2e2;}"
         ".strategy-budgets .status-ok{color:#166534;font-weight:700;}"
         ".strategy-budgets .status-blocked{color:#b91c1c;font-weight:700;}"
+        ".strategy-performance{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".strategy-performance h2{margin-top:0;}"
+        ".strategy-performance table{margin-top:1rem;}"
+        ".strategy-performance tr.alert{background:#fee2e2;}"
+        ".strategy-performance .flag-true{color:#b91c1c;font-weight:700;}"
+        ".strategy-performance .flag-false{color:#166534;font-weight:700;}"
         ".pnl-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".pnl-risk h2{margin-top:0;}"
         ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
@@ -785,6 +802,93 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
     parts.append("".join(autopilot_html) + "</div>")
 
+
+    strategy_pnl_snapshot = context.get("strategy_pnl_snapshot", {}) or {}
+    if not isinstance(strategy_pnl_snapshot, Mapping):
+        strategy_pnl_snapshot = {}
+    strategy_budget_snapshot = context.get("strategy_budget_snapshot", {}) or {}
+    if not isinstance(strategy_budget_snapshot, Mapping):
+        strategy_budget_snapshot = {}
+    performance_names = sorted(
+        set(strategy_pnl_snapshot) | set(strategy_risk_strategies) | set(strategy_budget_snapshot)
+    )
+    strategy_performance_rows: list[dict[str, Any]] = []
+    for name in performance_names:
+        pnl_entry = (
+            strategy_pnl_snapshot.get(name)
+            if isinstance(strategy_pnl_snapshot.get(name), Mapping)
+            else {}
+        )
+        risk_entry = (
+            strategy_risk_strategies.get(name)
+            if isinstance(strategy_risk_strategies.get(name), Mapping)
+            else {}
+        )
+        state_entry = (
+            risk_entry.get("state")
+            if isinstance(risk_entry.get("state"), Mapping)
+            else {}
+        )
+        budget_entry = (
+            strategy_budget_snapshot.get(name)
+            if isinstance(strategy_budget_snapshot.get(name), Mapping)
+            else {}
+        )
+        frozen = bool(state_entry.get("frozen") or risk_entry.get("frozen"))
+        strategy_performance_rows.append(
+            {
+                "name": name,
+                "realized_today": _coerce_float(pnl_entry.get("realized_pnl_today")),
+                "realized_total": _coerce_float(pnl_entry.get("realized_pnl_total")),
+                "frozen": frozen,
+                "budget_blocked": bool(budget_entry.get("blocked")),
+                "consecutive_failures": _coerce_int(
+                    state_entry.get("consecutive_failures"), default=0
+                ),
+            }
+        )
+
+    strategy_performance_html = [
+        "<div class=\"strategy-performance\"><h2>Strategy Performance</h2>"
+    ]
+    if not strategy_performance_rows:
+        strategy_performance_html.append(
+            "<p class=\"note\">No strategy performance data available.</p>"
+        )
+    else:
+        strategy_performance_html.append(
+            "<table><thead><tr><th>Strategy</th><th>Realised PnL (today)</th>"
+            "<th>Realised PnL (total)</th><th>Frozen?</th><th>Budget blocked?</th>"
+            "<th>Consecutive failures</th></tr></thead><tbody>"
+        )
+        for row in strategy_performance_rows:
+            row_class = " class=\"alert\"" if row["frozen"] or row["budget_blocked"] else ""
+            frozen_flag = (
+                "<span class=\"flag-true\">Yes</span>"
+                if row["frozen"]
+                else "<span class=\"flag-false\">No</span>"
+            )
+            budget_flag = (
+                "<span class=\"flag-true\">Yes</span>"
+                if row["budget_blocked"]
+                else "<span class=\"flag-false\">No</span>"
+            )
+            strategy_performance_html.append(
+                "<tr{row_class}><td>{name}</td><td>{today}</td><td>{total}</td>"
+                "<td>{frozen}</td><td>{budget}</td><td>{failures}</td></tr>".format(
+                    row_class=row_class,
+                    name=_fmt(row["name"]),
+                    today=_fmt(row["realized_today"]),
+                    total=_fmt(row["realized_total"]),
+                    frozen=frozen_flag,
+                    budget=budget_flag,
+                    failures=_fmt(row["consecutive_failures"]),
+                )
+            )
+        strategy_performance_html.append("</tbody></table>")
+    strategy_performance_html.append("</div>")
+
+    parts.append("".join(strategy_performance_html))
 
     strategy_risk_html = ["<div class=\"strategy-risk\"><h2>Strategy Risk / Breach status</h2>"]
     if strategy_risk_ts:
