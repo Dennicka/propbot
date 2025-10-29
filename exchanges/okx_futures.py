@@ -13,6 +13,8 @@ from typing import Any, Dict
 
 import requests
 
+from app.secrets_store import get_secrets_store
+
 from .base import FuturesExchangeClient
 
 
@@ -21,6 +23,21 @@ _DEFAULT_TIMEOUT = 10.0
 
 def _iso_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _okx_store_credentials() -> tuple[str | None, str | None, str | None]:
+    try:
+        store = get_secrets_store()
+    except (FileNotFoundError, ValueError):
+        return None, None, None
+    except Exception:
+        return None, None, None
+    credentials = store.get_exchange_credentials("okx")
+    return (
+        credentials.get("key"),
+        credentials.get("secret"),
+        credentials.get("passphrase"),
+    )
 
 
 class OKXFuturesClient(FuturesExchangeClient):
@@ -39,9 +56,14 @@ class OKXFuturesClient(FuturesExchangeClient):
         api_url: str | None = None,
         session: requests.Session | None = None,
     ) -> None:
-        self.api_key = api_key or os.getenv("OKX_API_KEY")
-        self.api_secret = api_secret or os.getenv("OKX_API_SECRET")
-        self.passphrase = passphrase or os.getenv("OKX_API_PASSPHRASE")
+        store_key, store_secret, store_passphrase = _okx_store_credentials()
+        env_key = None if store_key else os.getenv("OKX_API_KEY")
+        env_secret = None if store_secret else os.getenv("OKX_API_SECRET")
+        env_passphrase = None if store_passphrase else os.getenv("OKX_API_PASSPHRASE")
+
+        self.api_key = api_key or store_key or env_key
+        self.api_secret = api_secret or store_secret or env_secret
+        self.passphrase = passphrase or store_passphrase or env_passphrase
         self.api_url = api_url or os.getenv("OKX_FUTURES_API_URL", "https://www.okx.com")
         self._session = session or requests.Session()
 

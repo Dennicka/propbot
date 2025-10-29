@@ -11,11 +11,24 @@ from typing import Any, Dict
 
 import requests
 
+from app.secrets_store import get_secrets_store
+
 from .base import FuturesExchangeClient
 
 
 _DEFAULT_TIMEOUT = 10.0
 _DEFAULT_RECV_WINDOW = 5000
+
+
+def _binance_store_credentials() -> tuple[str | None, str | None]:
+    try:
+        store = get_secrets_store()
+    except (FileNotFoundError, ValueError):
+        return None, None
+    except Exception:
+        return None, None
+    credentials = store.get_exchange_credentials("binance")
+    return credentials.get("key"), credentials.get("secret")
 
 
 class BinanceFuturesClient(FuturesExchangeClient):
@@ -32,8 +45,12 @@ class BinanceFuturesClient(FuturesExchangeClient):
         api_url: str | None = None,
         session: requests.Session | None = None,
     ) -> None:
-        self.api_key = api_key or os.getenv("BINANCE_API_KEY")
-        self.api_secret = api_secret or os.getenv("BINANCE_API_SECRET")
+        store_key, store_secret = _binance_store_credentials()
+        env_key = None if store_key else os.getenv("BINANCE_API_KEY")
+        env_secret = None if store_secret else os.getenv("BINANCE_API_SECRET")
+
+        self.api_key = api_key or store_key or env_key
+        self.api_secret = api_secret or store_secret or env_secret
         self.api_url = api_url or os.getenv(
             "BINANCE_FUTURES_API_URL", "https://fapi.binance.com"
         )
