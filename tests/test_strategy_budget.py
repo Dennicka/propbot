@@ -41,6 +41,7 @@ def test_strategy_budget_endpoint_allows_viewer(client, monkeypatch, tmp_path) -
     monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.delenv("API_TOKEN", raising=False)
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(tmp_path / "runtime.json"))
 
     manager = StrategyBudgetManager(
         initial_budgets={
@@ -60,8 +61,10 @@ def test_strategy_budget_endpoint_allows_viewer(client, monkeypatch, tmp_path) -
         assert response.status_code == 200
         payload = response.json()
         assert "strategies" in payload
+        assert "snapshot" in payload
         entry = next(item for item in payload["strategies"] if item["strategy"] == "demo")
         assert entry["current_notional_usdt"] == 600.0
         assert entry["blocked"] is False
+        assert payload["snapshot"]["demo"]["current_notional_usdt"] == 600.0
     finally:
         reset_strategy_budget_manager_for_tests()

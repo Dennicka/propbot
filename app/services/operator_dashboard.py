@@ -41,6 +41,7 @@ from ..risk_snapshot import build_risk_snapshot
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
+from .strategy_status import build_strategy_status
 
 
 def _env_int(name: str, default: int) -> int:
@@ -266,6 +267,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
+    strategy_status_snapshot = build_strategy_status()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
         persisted.get("safety") if isinstance(persisted, Mapping) else None
@@ -426,6 +428,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
         "strategy_pnl_snapshot": strategy_pnl_snapshot,
+        "strategy_status_snapshot": strategy_status_snapshot,
         "strategy_budgets": strategy_budgets,
         "strategy_budget_snapshot": strategy_budget_snapshot,
         "summary_highlights": summary_highlights,
@@ -606,6 +609,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_reason = autopilot.get("last_reason") or ""
     autopilot_attempt = autopilot.get("last_attempt_ts") or ""
     autopilot_armed = bool(autopilot.get("armed"))
+    autopilot_decision = str(autopilot.get("last_decision") or "unknown")
+    autopilot_decision_reason = autopilot.get("last_decision_reason") or ""
+    autopilot_decision_ts = autopilot.get("last_decision_ts") or ""
 
     pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
     pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
@@ -787,15 +793,27 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         f"autopilot_status: <strong>{_fmt('enabled' if autopilot_enabled else 'disabled')}</strong>",
         f"last_autopilot_action: <strong>{_fmt(autopilot_action_raw)}</strong>",
         f"last_autopilot_reason: <strong>{_fmt(autopilot_reason or 'n/a')}</strong>",
+        f"autopilot_last_decision: <strong>{_fmt(autopilot_decision)}</strong>",
+        f"decision_reason: <strong>{_fmt(autopilot_decision_reason or 'n/a')}</strong>",
     ]
     if autopilot_attempt:
         autopilot_details.append(f"last_attempt: {_fmt(autopilot_attempt)}")
+    if autopilot_decision_ts:
+        autopilot_details.append(f"decision_ts: {_fmt(autopilot_decision_ts)}")
     autopilot_html = [
         "<div style=\"background:#fff;padding:1rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;\">",
         "<strong>Autopilot mode</strong>",
         f"<div style=\"margin-top:0.5rem;font-size:0.9rem;color:#1f2937;\">{' · '.join(autopilot_details)}</div>",
     ]
-    if autopilot_enabled and autopilot_armed:
+    if autopilot_enabled and autopilot_decision == "blocked_by_risk":
+        reason_text = _fmt(autopilot_decision_reason or autopilot_reason or 'risk block')
+        autopilot_html.append(
+            "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
+            "background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;\">"
+            f"AUTOPILOT blocked by risk — {reason_text}"
+            "</div>"
+        )
+    elif autopilot_enabled and autopilot_armed:
         autopilot_html.append(
             "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
             "background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-weight:700;\">"
@@ -812,53 +830,29 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append("".join(autopilot_html) + "</div>")
 
 
-    strategy_pnl_snapshot = context.get("strategy_pnl_snapshot", {}) or {}
-    if not isinstance(strategy_pnl_snapshot, Mapping):
-        strategy_pnl_snapshot = {}
-    strategy_budget_snapshot = context.get("strategy_budget_snapshot", {}) or {}
-    if not isinstance(strategy_budget_snapshot, Mapping):
-        strategy_budget_snapshot = {}
-    performance_names = sorted(
-        set(strategy_pnl_snapshot) | set(strategy_risk_strategies) | set(strategy_budget_snapshot)
-    )
+    strategy_status_snapshot = context.get("strategy_status_snapshot", {}) or {}
+    if not isinstance(strategy_status_snapshot, Mapping):
+        strategy_status_snapshot = {}
     strategy_performance_rows: list[dict[str, Any]] = []
-    for name in performance_names:
-        pnl_entry = (
-            strategy_pnl_snapshot.get(name)
-            if isinstance(strategy_pnl_snapshot.get(name), Mapping)
-            else {}
-        )
-        risk_entry = (
-            strategy_risk_strategies.get(name)
-            if isinstance(strategy_risk_strategies.get(name), Mapping)
-            else {}
-        )
-        state_entry = (
-            risk_entry.get("state")
-            if isinstance(risk_entry.get("state"), Mapping)
-            else {}
-        )
-        budget_entry = (
-            strategy_budget_snapshot.get(name)
-            if isinstance(strategy_budget_snapshot.get(name), Mapping)
-            else {}
-        )
-        frozen = bool(state_entry.get("frozen") or risk_entry.get("frozen"))
+    for name in sorted(strategy_status_snapshot):
+        entry = strategy_status_snapshot.get(name) or {}
         strategy_performance_rows.append(
             {
                 "name": name,
-                "realized_today": _coerce_float(pnl_entry.get("realized_pnl_today")),
-                "realized_total": _coerce_float(pnl_entry.get("realized_pnl_total")),
-                "frozen": frozen,
-                "budget_blocked": bool(budget_entry.get("blocked")),
+                "realized_today": _coerce_float(entry.get("realized_pnl_today")),
+                "realized_total": _coerce_float(entry.get("realized_pnl_total")),
+                "max_drawdown": _coerce_float(entry.get("max_drawdown_observed")),
+                "frozen": bool(entry.get("frozen")),
+                "freeze_reason": str(entry.get("freeze_reason") or ""),
+                "budget_blocked": bool(entry.get("budget_blocked")),
                 "consecutive_failures": _coerce_int(
-                    state_entry.get("consecutive_failures"), default=0
+                    entry.get("consecutive_failures"), default=0
                 ),
             }
         )
 
     strategy_performance_html = [
-        "<div class=\"strategy-performance\"><h2>Strategy Performance</h2>"
+        "<div class=\"strategy-performance\"><h2>Strategy Performance / Risk</h2>"
     ]
     if not strategy_performance_rows:
         strategy_performance_html.append(
@@ -867,8 +861,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         strategy_performance_html.append(
             "<table><thead><tr><th>Strategy</th><th>Realised PnL (today)</th>"
-            "<th>Realised PnL (total)</th><th>Frozen?</th><th>Budget blocked?</th>"
-            "<th>Consecutive failures</th></tr></thead><tbody>"
+            "<th>Realised PnL (total)</th><th>Max drawdown</th><th>Frozen?</th>"
+            "<th>Freeze reason</th><th>Budget blocked?</th><th>Consecutive failures</th></tr></thead><tbody>"
         )
         for row in strategy_performance_rows:
             row_class = " class=\"alert\"" if row["frozen"] or row["budget_blocked"] else ""
@@ -884,12 +878,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
             strategy_performance_html.append(
                 "<tr{row_class}><td>{name}</td><td>{today}</td><td>{total}</td>"
-                "<td>{frozen}</td><td>{budget}</td><td>{failures}</td></tr>".format(
+                "<td>{drawdown}</td><td>{frozen}</td><td>{freeze_reason}</td><td>{budget}</td><td>{failures}</td></tr>".format(
                     row_class=row_class,
                     name=_fmt(row["name"]),
                     today=_fmt(row["realized_today"]),
                     total=_fmt(row["realized_total"]),
+                    drawdown=_fmt(row["max_drawdown"]),
                     frozen=frozen_flag,
+                    freeze_reason=_fmt(row["freeze_reason"]) or "&mdash;",
                     budget=budget_flag,
                     failures=_fmt(row["consecutive_failures"]),
                 )

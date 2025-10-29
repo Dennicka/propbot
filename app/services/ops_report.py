@@ -18,6 +18,7 @@ from ..strategy_risk import get_strategy_risk_manager
 from . import runtime
 from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
+from .strategy_status import build_strategy_status
 
 
 def _iso_now() -> str:
@@ -117,6 +118,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
     strategy_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
+    strategy_status_snapshot = build_strategy_status()
 
     control = state.control
     autopilot = state.autopilot.as_dict() if hasattr(state.autopilot, "as_dict") else {}
@@ -144,6 +146,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
                 "resume_request": safety.get("resume_request"),
             },
         },
+        "autopilot": autopilot,
         "pnl": pnl_snapshot,
         "positions_snapshot": {
             "positions": list(positions_snapshot.get("positions", [])),
@@ -156,6 +159,8 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
             strategy_budget_snapshot,
             strategy_pnl_snapshot,
         ),
+        "strategy_status": strategy_status_snapshot,
+        "strategy_budgets": strategy_budget_snapshot,
         "audit": {
             "operator_actions": operator_actions,
             "ops_events": ops_events,
@@ -190,6 +195,48 @@ def _iter_strategy_rows(strategies: Mapping[str, Mapping[str, Any]]) -> Iterable
                     "section": section,
                     "key": f"breach_reason_{index}",
                     "value": _stringify(reason),
+                }
+
+
+def _iter_strategy_budget_rows(budgets: Mapping[str, Mapping[str, Any]]) -> Iterable[dict[str, str]]:
+    for name in sorted(budgets):
+        entry = _coerce_mapping(budgets.get(name))
+        section = f"strategy_budget:{name}"
+        for key in (
+            "current_notional_usdt",
+            "max_notional_usdt",
+            "current_open_positions",
+            "max_open_positions",
+            "blocked",
+        ):
+            if key in entry:
+                yield {
+                    "section": section,
+                    "key": key,
+                    "value": _stringify(entry.get(key)),
+                }
+
+
+def _iter_strategy_status_rows(statuses: Mapping[str, Mapping[str, Any]]) -> Iterable[dict[str, str]]:
+    for name in sorted(statuses):
+        entry = _coerce_mapping(statuses.get(name))
+        section = f"strategy_status:{name}"
+        for key in (
+            "enabled",
+            "frozen",
+            "freeze_reason",
+            "last_breach",
+            "consecutive_failures",
+            "realized_pnl_today",
+            "realized_pnl_total",
+            "budget_blocked",
+            "max_drawdown_observed",
+        ):
+            if key in entry:
+                yield {
+                    "section": section,
+                    "key": key,
+                    "value": _stringify(entry.get(key)),
                 }
 
 
@@ -273,6 +320,12 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
         writer.writerow(row)
     strategy_payload = _coerce_mapping(report.get("strategy_controls"))
     for row in _iter_strategy_rows(strategy_payload):
+        writer.writerow(row)
+    budget_payload = _coerce_mapping(report.get("strategy_budgets"))
+    for row in _iter_strategy_budget_rows(budget_payload):
+        writer.writerow(row)
+    status_payload = _coerce_mapping(report.get("strategy_status"))
+    for row in _iter_strategy_status_rows(status_payload):
         writer.writerow(row)
     per_strategy_pnl_payload = _coerce_mapping(report.get("per_strategy_pnl"))
     for row in _iter_strategy_pnl_rows(per_strategy_pnl_payload):

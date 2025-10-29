@@ -162,7 +162,12 @@ async def execute(plan_body: ExecutePayload) -> dict:
     if state.control.safe_mode:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
     if isinstance(plan_body, CrossExecuteRequest):
-        can_open, reason = can_open_new_position(plan_body.notion_usdt, plan_body.leverage)
+        can_open, reason = can_open_new_position(
+            plan_body.notion_usdt,
+            plan_body.leverage,
+            strategy=STRATEGY_NAME,
+            requested_positions=1,
+        )
         if not can_open:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
         trade_result = execute_hedged_trade(
@@ -276,7 +281,12 @@ async def confirm(payload: ConfirmPayload) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="opportunity_not_found")
     notional = float(opportunity.get("notional_suggestion", 0.0) or 0.0)
     leverage = float(opportunity.get("leverage_suggestion", 0.0) or 0.0)
-    allowed, reason = can_open_new_position(notional, leverage)
+    allowed, reason = can_open_new_position(
+        notional,
+        leverage,
+        strategy=STRATEGY_NAME,
+        requested_positions=1,
+    )
     if not allowed:
         set_last_opportunity_state(opportunity, "blocked_by_risk")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)

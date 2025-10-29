@@ -55,6 +55,7 @@ from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_risk import get_strategy_risk_manager
+from ..services.strategy_status import build_strategy_status
 from ..orchestrator import orchestrator
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
@@ -118,7 +119,24 @@ def strategy_budget_summary(request: Request) -> dict[str, Any]:
                 "blocked": bool(entry.get("blocked")),
             }
         )
-    return {"strategies": strategies}
+    return {"strategies": strategies, "snapshot": snapshot}
+
+
+@router.get("/strategy_status")
+def strategy_status_summary(request: Request) -> dict[str, Any]:
+    """Return merged per-strategy status including risk, pnl and budgets."""
+
+    token = require_token(request)
+    if token is not None:
+        identity = resolve_operator_identity(token)
+        if not identity:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        _, role = identity
+        if role not in {"viewer", "auditor", "operator"}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    snapshot = build_strategy_status()
+    rows = [dict(entry) for entry in snapshot.values()]
+    return {"strategies": rows, "snapshot": snapshot}
 
 
 def _authorize_operator_action(request: Request, action: Action) -> Optional[OperatorIdentity]:

@@ -1,7 +1,3 @@
-"""Tests for the ops report API endpoints."""
-
-from __future__ import annotations
-
 import csv
 import io
 import json
@@ -10,14 +6,24 @@ from typing import Any
 
 import pytest
 
+from app.strategy_budget import StrategyBudgetManager, reset_strategy_budget_manager_for_tests
+from app.strategy_risk import get_strategy_risk_manager, reset_strategy_risk_manager_for_tests
+from app.strategy_pnl import reset_state_for_tests as reset_strategy_pnl_state
+from positions import create_position, reset_positions
+
 
 class _DummyAutopilot:
     def as_dict(self) -> dict[str, Any]:
         return {
             "enabled": False,
             "last_action": "idle",
+            "last_reason": None,
             "target_mode": "HOLD",
             "target_safe_mode": True,
+            "armed": False,
+            "last_decision": "ready",
+            "last_decision_reason": None,
+            "last_decision_ts": "2024-01-01T02:00:00+00:00",
         }
 
 
@@ -30,27 +36,6 @@ class _DummySafety:
             "hold_since": "2024-01-01T00:00:00+00:00",
             "last_released_ts": None,
             "resume_request": {"pending": True, "requested_by": "alice"},
-        }
-
-
-class _DummyStrategyManager:
-    def full_snapshot(self) -> dict[str, Any]:
-        return {
-            "strategies": {
-                "alpha": {
-                    "enabled": True,
-                    "frozen": True,
-                    "freeze_reason": "limit_breach",
-                    "breach": True,
-                    "breach_reasons": ["limit_exceeded"],
-                    "limits": {"max_notional": 1_000.0},
-                    "state": {
-                        "frozen": True,
-                        "freeze_reason": "limit_breach",
-                        "consecutive_failures": 2,
-                    },
-                }
-            }
         }
 
 
@@ -69,6 +54,43 @@ def ops_report_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.delenv("API_TOKEN", raising=False)
     monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(tmp_path / "runtime.json"))
+    monkeypatch.setenv("STRATEGY_PNL_STATE_PATH", str(tmp_path / "strategy_pnl.json"))
+    monkeypatch.setenv("POSITIONS_STORE_PATH", str(tmp_path / "positions.json"))
+
+    reset_strategy_pnl_state()
+    reset_positions()
+    reset_strategy_risk_manager_for_tests()
+    budget_manager = reset_strategy_budget_manager_for_tests(
+        StrategyBudgetManager(
+            initial_budgets={
+                "alpha": {
+                    "max_notional_usdt": 1_000.0,
+                    "max_open_positions": 3,
+                    "current_notional_usdt": 0.0,
+                    "current_open_positions": 0,
+                }
+            }
+        )
+    )
+
+    create_position(
+        symbol="BTCUSDT",
+        long_venue="binance",
+        short_venue="okx",
+        notional_usdt=1_000.0,
+        entry_spread_bps=12.0,
+        leverage=2.0,
+        entry_long_price=30_000.0,
+        entry_short_price=30_100.0,
+        status="open",
+        simulated=False,
+        strategy="alpha",
+    )
+
+    risk_manager = get_strategy_risk_manager()
+    risk_manager.record_fill("alpha", -50.0)
+    risk_manager.record_failure("alpha", "spread_below_threshold")
 
     dummy_state = SimpleNamespace(
         control=SimpleNamespace(
@@ -115,25 +137,6 @@ def ops_report_environment(monkeypatch, tmp_path):
         },
     )
     monkeypatch.setattr(
-        "app.services.ops_report.get_strategy_risk_manager",
-        lambda: _DummyStrategyManager(),
-    )
-    monkeypatch.setattr(
-        "app.services.ops_report.get_strategy_budget_manager",
-        lambda: SimpleNamespace(snapshot=lambda: {"alpha": {"blocked": True}}),
-    )
-    monkeypatch.setattr(
-        "app.services.ops_report.snapshot_strategy_pnl",
-        lambda: {
-            "alpha": {
-                "realized_pnl_today": -12.5,
-                "realized_pnl_total": 87.5,
-                "realized_pnl_7d": -5.0,
-                "max_drawdown_observed": 42.0,
-            }
-        },
-    )
-    monkeypatch.setattr(
         "app.services.ops_report.list_recent_operator_actions",
         lambda limit=10: [
             {
@@ -158,10 +161,16 @@ def ops_report_environment(monkeypatch, tmp_path):
         ],
     )
 
-    return {
-        "viewer": {"Authorization": "Bearer BBB"},
-        "operator": {"Authorization": "Bearer AAA"},
-    }
+    try:
+        yield {
+            "viewer": {"Authorization": "Bearer BBB"},
+            "operator": {"Authorization": "Bearer AAA"},
+        }
+    finally:
+        reset_strategy_budget_manager_for_tests()
+        reset_strategy_risk_manager_for_tests()
+        reset_strategy_pnl_state()
+        reset_positions()
 
 
 def test_ops_report_requires_token_when_auth_enabled(monkeypatch, client) -> None:
@@ -181,15 +190,16 @@ def test_ops_report_json_accessible_for_viewer_and_operator(
 
     assert payload["runtime"]["mode"] == "HOLD"
     assert payload["runtime"]["safety"]["hold_reason"] == "maintenance"
+    assert payload["autopilot"]["last_decision"] == "ready"
     assert payload["pnl"]["unrealized_pnl_usdt"] == 42.0
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
-    assert payload["strategy_controls"]["alpha"]["freeze_reason"] == "limit_breach"
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
-    assert "per_strategy_pnl" in payload
-    alpha_pnl = payload["per_strategy_pnl"]["alpha"]
-    assert alpha_pnl["realized_pnl_today"] == -12.5
-    assert alpha_pnl["frozen"] is True
-    assert alpha_pnl["budget_blocked"] is True
+
+    assert "strategy_status" in payload
+    alpha_status = payload["strategy_status"]["alpha"]
+    assert alpha_status["strategy"] == "alpha"
+    assert alpha_status["budget_blocked"] is True
+    assert alpha_status["consecutive_failures"] >= 1
 
     operator_response = client.get(
         "/api/ui/ops_report",
@@ -211,14 +221,8 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
     assert rows
     assert any(row["section"] == "runtime" and row["key"] == "mode" for row in rows)
     assert any(
-        row["section"] == "strategy:alpha"
-        and row["key"] == "freeze_reason"
-        and row["value"] == "limit_breach"
-        for row in rows
-    )
-    assert any(
-        row["section"] == "strategy_pnl:alpha"
-        and row["key"] == "frozen"
+        row["section"] == "strategy_status:alpha"
+        and row["key"] == "budget_blocked"
         and row["value"] == "True"
         for row in rows
     )

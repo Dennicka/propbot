@@ -12,7 +12,9 @@ from .runtime import (
     autopilot_mark_action,
     get_autopilot_state,
     get_state,
+    set_autopilot_decision,
 )
+from .strategy_status import build_strategy_status
 
 
 LOGGER = logging.getLogger(__name__)
@@ -56,6 +58,17 @@ def _check_blockers(state) -> str | None:
                     return f"exchange_unreachable:{venue_id}"
             except Exception:
                 return f"exchange_unreachable:{venue_id}"
+    strategy_status = build_strategy_status()
+    frozen = [name for name, entry in strategy_status.items() if entry.get("frozen")]
+    if frozen:
+        return f"strategy_frozen:{','.join(sorted(frozen))}"
+    budget_blocked = [
+        name
+        for name, entry in strategy_status.items()
+        if entry.get("budget_blocked")
+    ]
+    if budget_blocked:
+        return f"strategy_budget_blocked:{','.join(sorted(budget_blocked))}"
     return None
 
 
@@ -65,11 +78,14 @@ async def evaluate_startup() -> None:
     if not autopilot.enabled:
         LOGGER.info("autopilot disabled; startup resume skipped")
         autopilot_mark_action("disabled", "autopilot_disabled", armed=False)
+        set_autopilot_decision("disabled", reason="autopilot_disabled")
         return
     blocker = _check_blockers(state)
     if blocker:
         LOGGER.warning("autopilot refused to arm: %s", blocker)
         autopilot_mark_action("refused", blocker, armed=False)
+        decision_code = "blocked_by_risk" if "strategy_" in blocker or "risk" in blocker or "budget" in blocker else "refused"
+        set_autopilot_decision(decision_code, reason=blocker)
         ledger.record_event(
             level="WARNING",
             code="autopilot_resume_refused",
@@ -83,6 +99,7 @@ async def evaluate_startup() -> None:
     resume_reason = state.safety.hold_reason or "startup"
     result = autopilot_apply_resume(safe_mode=autopilot.target_safe_mode)
     autopilot_mark_action("resume", resume_reason, armed=True)
+    set_autopilot_decision("resumed", reason=resume_reason)
     ledger.record_event(
         level="INFO",
         code="autopilot_resume",
