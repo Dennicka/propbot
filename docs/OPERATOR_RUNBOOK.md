@@ -384,19 +384,17 @@
   стабильна, после чего пройти стандартный двухшаговый RESUME (request +
   approval). Это не обходит two-man rule и не снимает SAFE_MODE автоматически.
 
-### Watchdog alerts in Telegram
+### Telegram watchdog alerts
 
-- Если exchange watchdog фиксирует критический сбой (биржа недоступна или
-  жестко лочит нас по rate limit), бот автоматически включает HOLD/SAFE_MODE.
-- В ops-канал приходит уведомление вида `[ALERT] Exchange watchdog triggered
-  auto-HOLD` с деталями: биржа (`binance` / `okx`), причина (`unreachable` /
-  `rate_limited`) и статус `HOLD active — trading paused`.
-- Действия операторов после тревоги:
-  1. Проверить состояние биржи (heartbeat, статус-доски, аккаунт).
-  2. Устранить первопричину (поднять коннект, дождаться снятия rate limit).
-  3. Выполнить стандартную двухшаговую процедуру RESUME (запрос + подтверждение
-     оператором с APPROVE_TOKEN). HOLD снимать через Telegram разрешено только
-     операторам; viewer остаётся read-only.
+- При критическом падении биржи (unreachable, жёсткий rate limit и т.д.)
+  exchange watchdog автоматически переводит runtime в HOLD и SAFE_MODE —
+  двухшаговый RESUME остаётся обязательным.
+- Ops notifier/Telegram-бот отправляет в операторский чат сообщение
+  `[ALERT] Exchange watchdog triggered AUTO-HOLD` с биржей, причиной и статусом
+  `HOLD active; trading paused`.
+- После авто-HOLD бот ждёт ручного безопасного RESUME: оператор должен убедиться,
+  что проблема устранена, и пройти стандартный workflow (request + approve).
+  Viewer по-прежнему read-only и не может снимать HOLD.
 
 ### Daily report / инвестор апдейт
 

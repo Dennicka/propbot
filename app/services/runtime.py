@@ -1107,29 +1107,27 @@ def evaluate_exchange_watchdog(*, context: str = "runtime") -> str | None:
                 "context": context,
                 "reason": reason_detail,
                 "hold_reason": hold_reason,
+                "hold_active": True,
             }
             if isinstance(entry, Mapping):
                 details["watchdog"] = {str(k): v for k, v in entry.items()}
             event_ts = datetime.now(timezone.utc).isoformat()
-            send_notifier_alert(
-                "watchdog_alert",
-                (
-                    "[ALERT] Exchange watchdog triggered auto-HOLD\n"
-                    f"Exchange: {exchange}\n"
-                    f"Reason: {reason_detail}\n"
-                    "Status: HOLD active — trading paused"
-                ),
-                extra={
-                    "exchange": exchange,
-                    "reason": reason_detail,
-                    "status": "hold_active",
-                    "actor": "system",
-                    "initiated_by": "system",
-                    "timestamp": event_ts,
-                    "context": context,
-                    "hold_reason": hold_reason,
-                },
-            )
+            try:
+                from ..opsbot.notifier import send_watchdog_alert as _send_watchdog_alert
+            except Exception:
+                _send_watchdog_alert = None
+            if _send_watchdog_alert is not None:
+                try:
+                    _send_watchdog_alert(
+                        exchange,
+                        reason_detail,
+                        mode="AUTO_HOLD",
+                        timestamp=event_ts,
+                        hold_reason=hold_reason,
+                        context=context,
+                    )
+                except Exception:
+                    pass
             log_operator_action(
                 "system",
                 "system",
@@ -1140,6 +1138,7 @@ def evaluate_exchange_watchdog(*, context: str = "runtime") -> str | None:
                     "timestamp": event_ts,
                     "initiated_by": "system",
                     "context": context,
+                    "hold_active": True,
                 },
             )
             log_operator_action(
