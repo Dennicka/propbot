@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import ledger
 from .version import APP_VERSION
-from .routers import arb, health, risk, ui, ui_secrets
+from .routers import arb, health, report, risk, ui, ui_secrets
 from .routers import ui_universe
 from .routers import ui_strategy
 from .routers import ui_status
@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(risk.router)
     app.include_router(ui.router)
     app.include_router(ui_secrets.router)
+    app.include_router(report.router)
     app.include_router(ui_universe.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_status.router, prefix="/api/ui/status")
