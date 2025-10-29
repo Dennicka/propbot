@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict
+from datetime import datetime, timezone
 from html import escape
 from typing import Any, Dict, Mapping, Sequence
 
@@ -36,6 +37,7 @@ from services.execution_stats_store import (
 )
 from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
+from ..strategy_risk import get_strategy_risk_manager
 
 
 def _env_int(name: str, default: int) -> int:
@@ -258,6 +260,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
     pnl_snapshot = build_pnl_snapshot(positions_payload)
     risk_snapshot = await build_risk_snapshot()
+    strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
         persisted.get("safety") if isinstance(persisted, Mapping) else None
@@ -367,6 +370,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "daily_report": daily_report or {},
         "risk_snapshot": risk_snapshot,
         "strategy_plan": strategy_plan,
+        "strategy_risk_snapshot": strategy_risk_snapshot,
     }
 
 
@@ -551,6 +555,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     risk_snapshot_score = risk_snapshot.get("risk_score") or "TBD"
     risk_snapshot_per_venue = risk_snapshot.get("per_venue") or {}
 
+    strategy_risk_snapshot = context.get("strategy_risk_snapshot", {}) or {}
+    strategy_risk_strategies = strategy_risk_snapshot.get("strategies") or {}
+    strategy_risk_ts_raw = strategy_risk_snapshot.get("timestamp")
+    if isinstance(strategy_risk_ts_raw, (int, float)):
+        strategy_risk_ts = datetime.fromtimestamp(strategy_risk_ts_raw, tz=timezone.utc).isoformat()
+    else:
+        strategy_risk_ts = str(strategy_risk_ts_raw or "")
+
     operator_info = context.get("operator", {}) or {}
     operator_name = operator_info.get("name") or "unknown"
     operator_role_raw = str(operator_info.get("role") or "viewer").strip().lower()
@@ -581,6 +593,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        ".strategy-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".strategy-risk h2{margin-top:0;}"
+        ".strategy-risk .breach-ok{color:#166534;font-weight:700;}"
+        ".strategy-risk .breach-alert{color:#b91c1c;font-weight:700;}"
         ".pnl-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".pnl-risk h2{margin-top:0;}"
         ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
@@ -651,6 +667,48 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
     parts.append("".join(autopilot_html) + "</div>")
+
+    strategy_risk_html = ["<div class=\"strategy-risk\"><h2>Strategy Risk / Breach status</h2>"]
+    if strategy_risk_ts:
+        strategy_risk_html.append(
+            f"<p class=\"note\">Snapshot at {_fmt(strategy_risk_ts)}</p>"
+        )
+    if not strategy_risk_strategies:
+        strategy_risk_html.append("<p class=\"note\">No strategy risk data available.</p>")
+    else:
+        strategy_risk_html.append(
+            "<table><thead><tr><th>Strategy</th><th>Daily loss (current / limit)</th><th>Consecutive failures (current / limit)</th><th>Status</th></tr></thead><tbody>"
+        )
+        for name in sorted(strategy_risk_strategies):
+            entry = strategy_risk_strategies.get(name) or {}
+            limits = entry.get("limits") or {}
+            state = entry.get("state") or {}
+            breach = bool(entry.get("breach"))
+            daily_limit = limits.get("daily_loss_usdt")
+            realized = state.get("realized_pnl_today")
+            failure_limit = limits.get("max_consecutive_failures")
+            failure_count = state.get("consecutive_failures")
+            status_label = (
+                '<span class="breach-alert">BREACH DETECTED</span>'
+                if breach
+                else '<span class="breach-ok">OK</span>'
+            )
+            if breach:
+                reasons = entry.get("breach_reasons") or []
+                reason_notes = "".join(
+                    f"<div class=\"note\">{_fmt(reason)}</div>" for reason in reasons if reason
+                )
+                status_label = status_label + reason_notes
+            strategy_risk_html.append(
+                "<tr><td>{name}</td><td>{pnl}</td><td>{failures}</td><td>{status}</td></tr>".format(
+                    name=_fmt(name),
+                    pnl=f"{_fmt(realized)} (limit {_fmt(daily_limit)})",
+                    failures=f"{_fmt(failure_count)} (limit {_fmt(failure_limit)})",
+                    status=status_label,
+                )
+            )
+        strategy_risk_html.append("</tbody></table>")
+    parts.append("".join(strategy_risk_html) + "</div>")
 
     pnl_parts = ["<div class=\"pnl-risk\"><h2>PnL / Risk</h2>"]
     pnl_parts.append(
