@@ -66,6 +66,7 @@ def test_dashboard_strategy_orchestrator_plan(monkeypatch, tmp_path, client) -> 
     assert response.status_code == 200
     html = response.text
     assert "Strategy Orchestrator" in html
+    assert "Orchestrator alerts for skip/risk_limit/hold_active and cooldown/fail are forwarded to ops Telegram/audit." in html
     assert "cross_exchange_arb" in html
     assert "decision-skip-critical\">skip" in html
     assert "hold_active" in html

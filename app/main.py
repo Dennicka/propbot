@@ -18,6 +18,7 @@ from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
 from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
 from .services.autopilot import setup_autopilot
+from .services.orchestrator_alerts import setup_orchestrator_alerts
 
 
 def _should_guard(request: Request) -> bool:
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     setup_opportunity_scanner(app)
     setup_auto_hedge_daemon(app)
     setup_autopilot(app)
+    setup_orchestrator_alerts(app)
     return app
 
 
