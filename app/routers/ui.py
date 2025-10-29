@@ -9,12 +9,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse, Response
+from urllib.parse import parse_qs
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
 from ..audit_log import list_recent_operator_actions, log_operator_action
+from ..dashboard_helpers import render_dashboard_response
+from ..universe_manager import UniverseManager
+from ..version import APP_VERSION
 from ..capital_manager import get_capital_manager
 from ..pnl_report import DailyPnLReporter
 from ..rbac import Action, can_execute_action
@@ -197,6 +202,21 @@ class UnfreezeStrategyPayload(BaseModel):
 
     strategy: str = Field(..., min_length=1, description="Strategy identifier")
     reason: str = Field(..., min_length=1, description="Operator supplied reason")
+
+
+def _dashboard_token_dependency(request: Request) -> str | None:
+    return require_token(request)
+
+
+def _parse_dashboard_form(raw: bytes) -> dict[str, str]:
+    if not raw:
+        return {}
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        decoded = raw.decode("latin1", errors="ignore")
+    parsed = parse_qs(decoded, keep_blank_values=True)
+    return {key: values[-1] if values else "" for key, values in parsed.items()}
 
 
 DEFAULT_EVENT_LIMIT = 100
@@ -681,6 +701,23 @@ async def hold(request: Request, payload: HoldPayload | None = None) -> dict:
     return response
 
 
+@router.post("/dashboard-hold", response_class=HTMLResponse)
+async def dashboard_hold_action(
+    request: Request,
+    token: str | None = Depends(_dashboard_token_dependency),
+) -> HTMLResponse:
+    form_data = _parse_dashboard_form(await request.body())
+    reason = form_data.get("reason", "")
+    operator = form_data.get("operator", "")
+    payload = HoldPayload(reason=reason or None, requested_by=operator or "dashboard_ui")
+    result = await hold(request, payload)
+    hold_reason = result.get("safety", {}).get("hold_reason") or (
+        payload.reason or "manual_hold"
+    )
+    message = f"HOLD engaged — reason: {hold_reason}"
+    return await render_dashboard_response(request, token, message=message)
+
+
 @router.post("/resume-request")
 async def resume_request(request: Request, payload: ResumeRequestPayload) -> dict:
     identity = _authorize_operator_action(request, "RESUME")
@@ -706,6 +743,29 @@ async def resume_request(request: Request, payload: ResumeRequestPayload) -> dic
     }
     _log_operator_success(identity, "RESUME")
     return response
+
+
+@router.post("/dashboard-resume-request", response_class=HTMLResponse)
+async def dashboard_resume_request_action(
+    request: Request,
+    token: str | None = Depends(_dashboard_token_dependency),
+) -> HTMLResponse:
+    form_data = _parse_dashboard_form(await request.body())
+    reason = form_data.get("reason", "")
+    operator = form_data.get("operator", "")
+    payload = ResumeRequestPayload(reason=reason, requested_by=operator or "dashboard_ui")
+    result = await resume_request(request, payload)
+    request_id = result.get("resume_request", {}).get("id")
+    message = "Resume request logged"
+    if request_id:
+        message += f" (approval id: {request_id})"
+    message += "; awaiting second-operator approval."
+    return await render_dashboard_response(
+        request,
+        token,
+        message=message,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
 
 
 @router.post("/resume-confirm")
@@ -918,6 +978,106 @@ def unfreeze_strategy(payload: UnfreezeStrategyPayload, request: Request) -> dic
         "strategy": payload.strategy,
         "frozen": manager.is_frozen(payload.strategy),
         "snapshot": snapshot.get("snapshot", {}),
+    }
+
+
+@router.post("/dashboard-unfreeze-strategy", response_class=HTMLResponse)
+async def dashboard_unfreeze_strategy_action(
+    request: Request,
+    token: str | None = Depends(_dashboard_token_dependency),
+) -> HTMLResponse:
+    form_data = _parse_dashboard_form(await request.body())
+    strategy = form_data.get("strategy", "")
+    reason = form_data.get("reason", "")
+    payload = UnfreezeStrategyPayload(strategy=strategy, reason=reason)
+    result = unfreeze_strategy(payload, request)
+    frozen = bool(result.get("frozen"))
+    snapshot = result.get("snapshot", {}) or {}
+    failures = snapshot.get("consecutive_failures")
+    if frozen:
+        message = f"Strategy {strategy} remains frozen — investigate risk counters."
+    else:
+        message = f"Strategy {strategy} unfrozen"
+    message += f" (reason: {reason})"
+    if failures is not None:
+        message += f"; consecutive_failures={failures}"
+    return await render_dashboard_response(request, token, message=message)
+
+
+@router.get("/audit_snapshot")
+async def audit_snapshot(request: Request) -> dict[str, Any]:
+    require_token(request)
+    state = get_state()
+    safety = get_safety_status()
+    control_state = control_as_dict()
+    autopilot_state = getattr(state, "autopilot", None)
+    autopilot_payload: dict[str, Any] = {}
+    if hasattr(autopilot_state, "as_dict") and callable(autopilot_state.as_dict):
+        autopilot_payload = autopilot_state.as_dict()
+
+    positions_source = list_positions()
+    positions_snapshot = await build_positions_snapshot(state, positions_source)
+    positions_payload = {
+        "positions": positions_snapshot.get("positions", []),
+        "exposure": positions_snapshot.get("exposure", {}),
+        "totals": positions_snapshot.get("totals", {}),
+    }
+    positions_list = positions_payload["positions"]
+    open_positions = len(positions_list)
+    partial_positions = sum(
+        1
+        for entry in positions_list
+        if str(entry.get("status") or "").lower() in {"partial", "partially_filled"}
+    )
+
+    strategy_snapshot = get_strategy_risk_manager().full_snapshot()
+
+    universe_manager = UniverseManager()
+    allowed_symbols: dict[str, list[str]] = {}
+    derivatives = getattr(universe_manager, "_derivatives", None)
+    venues = getattr(derivatives, "venues", {}) if derivatives else {}
+    for venue, runtime in (venues or {}).items():
+        config = getattr(runtime, "config", None)
+        symbols = list(getattr(config, "symbols", []) or [])
+        if symbols:
+            allowed_symbols[venue] = symbols
+    universe_snapshot = {
+        "candidates": list(UniverseManager.CANDIDATES),
+        "top_pairs": universe_manager.top_pairs(),
+        "allowed_symbols": allowed_symbols,
+    }
+
+    safety_snapshot = {
+        "hold_active": bool(safety.get("hold_active")),
+        "hold_reason": safety.get("hold_reason"),
+        "hold_since": safety.get("hold_since"),
+        "resume_request": safety.get("resume_request"),
+        "last_released_ts": safety.get("last_released_ts"),
+    }
+    control_snapshot = {
+        "mode": getattr(state.control, "mode", None),
+        "safe_mode": bool(control_state.get("safe_mode")),
+        "dry_run": bool(control_state.get("dry_run_mode") or control_state.get("dry_run")),
+        "two_man_rule": bool(control_state.get("two_man_rule")),
+        "auto_loop": bool(control_state.get("auto_loop")),
+    }
+
+    exposure_snapshot = positions_snapshot.get("exposure", {})
+    totals_snapshot = positions_snapshot.get("totals", {})
+
+    return {
+        "build_version": APP_VERSION,
+        "hold_active": safety_snapshot["hold_active"],
+        "control": control_snapshot,
+        "safety": safety_snapshot,
+        "autopilot": autopilot_payload,
+        "positions": positions_payload,
+        "open_positions": open_positions,
+        "partial_positions": partial_positions,
+        "exposure": exposure_snapshot,
+        "totals": totals_snapshot,
+        "strategy_risk": strategy_snapshot,
+        "universe": universe_snapshot,
     }
 
 
