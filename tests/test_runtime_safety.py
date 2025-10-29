@@ -125,6 +125,55 @@ def test_cancel_counter_triggers_hold(monkeypatch):
     assert is_hold_active() is True
 
 
+def test_watchdog_blocks_order_attempt(monkeypatch):
+    runtime.reset_for_tests()
+    runtime.record_resume_request("watchdog", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
+
+    audit_events: list[dict[str, object]] = []
+
+    def _capture_log(operator: str, role: str, action: str, details=None) -> None:
+        audit_events.append(
+            {
+                "operator": operator,
+                "role": role,
+                "action": action,
+                "details": dict(details or {}),
+            }
+        )
+
+    monkeypatch.setattr(runtime, "log_operator_action", _capture_log)
+    monkeypatch.setattr(runtime, "send_notifier_alert", lambda *_, **__: None)
+
+    class _StubWatchdog:
+        def get_state(self) -> dict[str, dict[str, object]]:
+            return {
+                "binance": {
+                    "reachable": False,
+                    "rate_limited": True,
+                    "error": "rate_limited",
+                }
+            }
+
+        def is_critical(self, name: str) -> bool:
+            return name.lower() == "binance"
+
+    monkeypatch.setattr(runtime, "get_exchange_watchdog", lambda: _StubWatchdog())
+
+    with pytest.raises(HoldActiveError) as excinfo:
+        register_order_attempt(reason="watchdog", source="unit-test")
+
+    assert "exchange_watchdog" in excinfo.value.reason
+    assert runtime.is_hold_active() is True
+    safety = runtime.get_safety_status()
+    assert safety["hold_active"] is True
+    assert safety["hold_reason"].startswith("exchange_watchdog:")
+    assert "rate_limited" in safety["hold_reason"]
+
+    recorded_actions = [entry["action"] for entry in audit_events]
+    assert "AUTO_HOLD_BY_EXCHANGE_WATCHDOG" in recorded_actions
+
+
 def test_hold_reason_persisted_to_runtime_store(monkeypatch, tmp_path):
     runtime_path = tmp_path / "runtime_state.json"
     monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
