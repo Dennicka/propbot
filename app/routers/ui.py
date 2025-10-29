@@ -48,6 +48,7 @@ from ..secrets_store import SecretsStore
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
+from ..strategy_risk import get_strategy_risk_manager
 from ..orchestrator import orchestrator
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
@@ -189,6 +190,13 @@ class CloseExposurePayload(BaseModel):
 
     venue: str | None = Field(default=None, description="Venue of the position to flatten")
     symbol: str | None = Field(default=None, description="Symbol of the position to flatten")
+
+
+class UnfreezeStrategyPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str = Field(..., min_length=1, description="Strategy identifier")
+    reason: str = Field(..., min_length=1, description="Operator supplied reason")
 
 
 DEFAULT_EVENT_LIMIT = 100
@@ -858,6 +866,59 @@ async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     ledger.record_event(level="INFO", code="flatten_requested", payload=event_payload)
     _emit_ops_alert("flatten_requested", "Exposure flatten requested", event_payload)
     return {"result": result, "ts": _ts()}
+
+
+@router.post("/unfreeze-strategy")
+def unfreeze_strategy(payload: UnfreezeStrategyPayload, request: Request) -> dict[str, object]:
+    action_label = "STRATEGY_UNFREEZE_MANUAL"
+    if not is_auth_enabled():
+        operator_name = "local-dev"
+        role = "operator"
+    else:
+        token = require_token(request)
+        if token is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+        identity = _resolve_operator_identity(token)
+        if not identity:
+            log_operator_action(
+                "unknown",
+                "unknown",
+                action_label,
+                details={
+                    "strategy": payload.strategy,
+                    "reason": payload.reason,
+                    "status": "forbidden",
+                },
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        operator_name, role = identity
+        if role != "operator":
+            log_operator_action(
+                operator_name,
+                role,
+                action_label,
+                details={
+                    "strategy": payload.strategy,
+                    "reason": payload.reason,
+                    "status": "forbidden",
+                },
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+
+    manager = get_strategy_risk_manager()
+    manager.unfreeze_strategy(
+        payload.strategy,
+        operator_name=operator_name,
+        role=role,
+        reason=payload.reason,
+    )
+    snapshot = manager.check_limits(payload.strategy)
+    return {
+        "status": "ok",
+        "strategy": payload.strategy,
+        "frozen": manager.is_frozen(payload.strategy),
+        "snapshot": snapshot.get("snapshot", {}),
+    }
 
 
 @router.get("/plan/last")
