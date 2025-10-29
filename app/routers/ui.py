@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, conint, confloat
 
 from .. import ledger
+from ..capital_manager import get_capital_manager
 from ..audit_log import log_operator_action
 from ..rbac import Action, can_execute_action
 from ..services.loop import (
@@ -69,6 +70,15 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+@router.get("/capital")
+def capital_snapshot(request: Request) -> dict[str, Any]:
+    """Return the capital manager snapshot (read-only)."""
+
+    require_token(request)
+    manager = get_capital_manager()
+    return manager.snapshot()
 
 
 OperatorIdentity = Tuple[str, str]

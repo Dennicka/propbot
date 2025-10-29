@@ -58,6 +58,27 @@
 `APPROVE_TOKEN`, оставленные плейсхолдеры в `.env.prod`, отсутствующие пути к файлам
 состояния). После исправления перезапустите `docker compose up -d`.
 
+### CapitalManager snapshot
+
+`GET /api/ui/capital` (с тем же bearer-токеном, что и остальные UI-ручки) возвращает
+снимок CapitalManager: общий капитал в USDT, лимиты по стратегиям и текущий
+используемый notional. Блок `per_strategy_limits` хранит заявленные потолки
+notional'а, например:
+
+```json
+{
+  "cross_exchange_arb": {"max_notional": 50000.0}
+}
+```
+
+`current_usage` — это фактическая загрузка по стратегиям в момент снимка, с ключом
+`open_notional`. Эндпоинт также возвращает `headroom`: оставшийся запас до лимита
+(`max_notional - open_notional`).
+
+⚠️ CapitalManager пока выполняет только учёт и планирование лимитов. Он **не**
+блокирует сделки автоматически и не вмешивается в текущие исполнители ордеров —
+используйте метрики как отчётность и ручной контроль.
+
 # PropBot v0.1.2
 
 Production-ready arbitrage runner with FastAPI, Binance Futures integration, SQLite

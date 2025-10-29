@@ -76,6 +76,20 @@
 8. Не снимайте лимиты по плечу/ноционалу — runaway guard и риск-блокировки
    используют их для защиты.
 
+## CapitalManager snapshot
+
+- `GET /api/ui/capital` (тот же bearer-токен, что и для прочих UI-ручек) показывает
+  текущий снимок CapitalManager: `total_capital_usdt`, `per_strategy_limits` и
+  `current_usage`.
+- `per_strategy_limits` — заявленные потолки notional'а на стратегию, например
+  `{ "cross_exchange_arb": { "max_notional": 50_000 } }`.
+- `current_usage` — фактическая загрузка (`open_notional`) по каждой стратегии.
+- В ответ включён блок `headroom`: оставшийся запас до лимита
+  (`max_notional - open_notional`). Если лимит не задан, значение `null`.
+- Это отчёт и планировщик лимитов: CapitalManager **не** вмешивается в исполнение
+  ордеров и не блокирует сделки автоматически. Используйте метрики для контроля и
+  ручных решений об изменении лимитов.
+
 ## Startup validation / go-live safety
 
 - Контейнер теперь выполняет жёсткий preflight: при старте `app/main.py`

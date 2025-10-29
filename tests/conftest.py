@@ -16,6 +16,7 @@ os.environ.setdefault("OPS_ALERTS_FILE", "/tmp/propbot-tests-ops-alerts.json")
 os.environ.setdefault("PNL_HISTORY_PATH", "/tmp/propbot-tests-pnl.json")
 os.environ.setdefault("OPS_APPROVALS_FILE", "/tmp/propbot-tests-approvals.json")
 os.environ.setdefault("DAILY_REPORTS_PATH", "/tmp/propbot-tests-daily.json")
+os.environ.setdefault("CAPITAL_STATE_PATH", "/tmp/propbot-tests-capital.json")
 
 from app import ledger
 from app.main import app
@@ -24,6 +25,7 @@ from app.services.loop import hold_loop
 from app.services.runtime import reset_for_tests
 from positions import reset_positions
 from pnl_history_store import reset_store as reset_pnl_history_store
+from app.capital_manager import CapitalManager, reset_capital_manager
 
 
 @pytest.fixture
@@ -115,3 +117,12 @@ def override_approvals_store(monkeypatch, tmp_path: Path):
     approvals_store.reset_for_tests()
     yield
     approvals_store.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def override_capital_state(monkeypatch, tmp_path: Path):
+    path = tmp_path / "capital_state.json"
+    monkeypatch.setenv("CAPITAL_STATE_PATH", str(path))
+    reset_capital_manager(CapitalManager(state_path=path))
+    yield
+    reset_capital_manager()
