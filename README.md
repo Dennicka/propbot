@@ -435,6 +435,14 @@ flow to clear HOLD.
   `StrategyRiskManager` (включая `active`/`blocked_by_risk`/`frozen_by_risk`),
   UniverseManager-данные по разрешённым символам и `build_version`. Секреты из
   `secrets_store` не попадают в снимок — только операционные состояния.
+- Новый read-only отчёт `GET /api/ui/ops_report` агрегирует режим runtime,
+  SAFE_MODE/DRY_RUN/автопилот, статус двухфакторного RESUME, экспозиции,
+  снапшот `StrategyRiskManager` (freeze/enable per strategy) и последние
+  операторские действия/alerts. Эндпоинт доступен и `viewer` токенам — для
+  комплаенса и пост-моратория без эскалации привилегий.
+- Для экспорта в Excel/архив используйте `GET /api/ui/ops_report.csv` — тот же
+  отчёт в стабильном CSV (`content-type: text/csv`) с секциями runtime, стратегий
+  и аудита. Поддерживает те же bearer-токены, что и JSON.
 - Используйте экспорт для отчётов инвесторам, расследования инцидентов и
   юридической фиксации «что бот знал и делал» без SSH-доступа к контейнеру.
 
