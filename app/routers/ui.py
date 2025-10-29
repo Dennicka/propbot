@@ -8,7 +8,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional
 
 from urllib.parse import parse_qs
 
@@ -50,7 +50,6 @@ from ..services.runtime import (
 from ..services import portfolio, risk, risk_guard
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
-from ..secrets_store import SecretsStore
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
@@ -58,6 +57,7 @@ from ..strategy_risk import get_strategy_risk_manager
 from ..orchestrator import orchestrator
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
+from ..utils.operators import OperatorIdentity, resolve_operator_identity
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
 from services.daily_reporter import load_latest_report
@@ -90,32 +90,13 @@ def capital_snapshot(request: Request) -> dict[str, Any]:
     return manager.snapshot()
 
 
-OperatorIdentity = Tuple[str, str]
-
-
-def _resolve_operator_identity(token: str) -> Optional[OperatorIdentity]:
-    store: Optional[SecretsStore]
-    try:
-        store = SecretsStore()
-    except Exception:
-        store = None
-    if store:
-        identity = store.get_operator_by_token(token)
-        if identity:
-            return identity
-    expected_token = os.getenv("API_TOKEN")
-    if expected_token and secrets.compare_digest(token, expected_token):
-        return ("api", "operator")
-    return None
-
-
 def _authorize_operator_action(request: Request, action: Action) -> Optional[OperatorIdentity]:
     if not is_auth_enabled():
         return None
     token = require_token(request)
     if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
-    identity = _resolve_operator_identity(token)
+    identity = resolve_operator_identity(token)
     if not identity:
         log_operator_action(
             "unknown",
@@ -343,7 +324,7 @@ async def generate_daily_pnl_report(request: Request) -> dict[str, Any]:
     token = require_token(request)
     identity = None
     if token:
-        identity = _resolve_operator_identity(token)
+        identity = resolve_operator_identity(token)
     if is_auth_enabled():
         if not identity or identity[1] != "operator":
             name = identity[0] if identity else "unknown"
@@ -947,7 +928,7 @@ def unfreeze_strategy(payload: UnfreezeStrategyPayload, request: Request) -> dic
         token = require_token(request)
         if token is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
-        identity = _resolve_operator_identity(token)
+        identity = resolve_operator_identity(token)
         if not identity:
             log_operator_action(
                 "unknown",
@@ -1027,7 +1008,7 @@ async def set_strategy_enabled(request: Request) -> dict[str, object]:
         token = require_token(request)
         if token is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
-        identity = _resolve_operator_identity(token)
+        identity = resolve_operator_identity(token)
         if not identity:
             log_operator_action(
                 "unknown",
