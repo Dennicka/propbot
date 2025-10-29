@@ -290,10 +290,12 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     recent_ops_incidents = list_recent_events(limit=10)
 
     hold_reason = str(safety_payload.get("hold_reason") or "")
+    hold_reason_display = _format_hold_reason(hold_reason)
     risk_throttled = bool(
         safety_payload.get("hold_active")
         and hold_reason.upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX)
     )
+    safety_payload["hold_reason_display"] = hold_reason_display
 
     pnl_history = list_recent_snapshots(limit=5)
     pnl_trend = _trend_summary(pnl_history)
@@ -317,9 +319,10 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
-        "hold_reason": safety_payload.get("hold_reason"),
+        "hold_reason": hold_reason_display or hold_reason,
         "hold_since": safety_payload.get("hold_since"),
         "last_released_ts": safety_payload.get("last_released_ts"),
+        "hold_reason_raw": hold_reason,
     }
     limits_for_advisor = {
         "MAX_TOTAL_NOTIONAL_USDT": risk_limits_env.get("MAX_TOTAL_NOTIONAL_USDT"),
@@ -390,6 +393,19 @@ def _fmt(value: object) -> str:
     if isinstance(value, float):
         return ("{:.6f}".format(value)).rstrip("0").rstrip(".") or "0"
     return escape(str(value))
+
+
+def _format_hold_reason(reason: str) -> str:
+    cleaned = str(reason or "").strip()
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    if lowered.startswith("exchange_watchdog:"):
+        detail = cleaned.split(":", 1)[1].strip() if ":" in cleaned else ""
+        if not detail:
+            detail = "exchange issue"
+        return f"exchange watchdog — {detail}"
+    return cleaned
 
 
 def _status_span(ok: bool) -> str:
@@ -1172,7 +1188,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
 
     hold_active = bool(safety.get("hold_active"))
-    hold_reason = safety.get("hold_reason")
+    hold_reason_raw = safety.get("hold_reason")
+    hold_reason_display = safety.get("hold_reason_display") or hold_reason_raw
     hold_since = safety.get("hold_since")
     parts.append("<h2>Runtime &amp; Safety</h2><table><tbody>")
     mode_value = _fmt(context.get("control", {}).get("mode"))
@@ -1181,8 +1198,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append(f"<tr><th>Mode</th><td>{mode_value}</td></tr>")
     if hold_active:
         detail = "YES"
-        if hold_reason:
-            detail += f" - Reason: {_fmt(hold_reason)}"
+        reason_text = hold_reason_display or hold_reason_raw
+        if reason_text:
+            detail += f" - Reason: {_fmt(reason_text)}"
         if hold_since:
             detail += f" (since {_fmt(hold_since)})"
         hold_cell = f'<span style="color:#b00020;font-weight:700;">{detail}</span>'
