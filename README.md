@@ -407,6 +407,12 @@ flow to clear HOLD.
   dry-run флаги, лимиты), живые и `partial` позиции из `positions_store`,
   очередь two-man approvals, последние метрики исполнения (slippage), активные
   reconciliation alerts и свежий daily report.
+- Для лёгкого JSON-снимка без побочных файлов используйте `GET
+  /api/ui/audit_snapshot` (также требует bearer-токен). Ответ содержит текущий
+  режим (`HOLD`, SAFE_MODE, DRY_RUN), экспозицию/хеджи, состояние
+  `StrategyRiskManager` (включая `active`/`blocked_by_risk`/`frozen_by_risk`),
+  UniverseManager-данные по разрешённым символам и `build_version`. Секреты из
+  `secrets_store` не попадают в снимок — только операционные состояния.
 - Используйте экспорт для отчётов инвесторам, расследования инцидентов и
   юридической фиксации «что бот знал и делал» без SSH-доступа к контейнеру.
 
@@ -504,6 +510,8 @@ profiles and keep `.env` outside version control.
   `AUTH_ENABLED=true`.
 - Aggregates runtime state from `runtime_state.json`, the in-memory safety
   controller, hedge positions store, and the persistent two-man approvals queue.
+- Shows the authenticated operator name and role badge (viewer vs operator) so
+  the desk immediately sees whether HOLD/RESUME actions are available.
 - Shows build version, current HOLD status with reason/since timestamp,
   SAFE_MODE and DRY_RUN flags, runaway guard counters/limits, and the latest
   auto-hedge status (`enabled`, last success timestamp, consecutive failures,
@@ -522,11 +530,19 @@ profiles and keep `.env` outside version control.
   using the same checks as `/healthz`, marking dead/inactive tasks in red.
 - Renders pending approvals from the two-man workflow so the desk can see who
   requested HOLD release, limit changes, resume, or other guarded actions.
-- Includes simple `<form>` controls that post to dedicated `/ui/dashboard/*`
-  proxy routes. These convert operator form submissions into the JSON payloads
-  expected by the guarded API, so HOLD, RESUME request, and kill switch actions
-  stay behind the same token/two-man protections while remaining usable from
-  the browser.
+- Includes simple `<form>` controls that post to dedicated `/api/ui/dashboard-*`
+  helper routes. These wrappers accept form-encoded submissions from the HTML
+  dashboard, translate them into the JSON payloads expected by the guarded API,
+  and call the existing `/api/ui/hold`, `/api/ui/resume-request`, and
+  `/api/ui/unfreeze-strategy` logic. HOLD/RESUME/UNFREEZE actions therefore stay
+  behind the same RBAC/two-man protections while remaining usable from the
+  browser. The kill switch form still proxies to `/ui/dashboard/kill` (no JSON
+  payload required).
+- The Strategy Risk table now highlights each strategy’s risk state:
+  `active`, `blocked_by_risk`, or `frozen_by_risk` (red badges for frozen or
+  blocked strategies, green for active). Consecutive failure counters are shown
+  alongside configured limits, with non-zero counts rendered in red so the desk
+  can watch thaw progress after an unfreeze.
 - Surfaces a read-only **PnL / Risk** card with unrealised PnL, the current
   day's realised PnL stub (currently fixed at `0.0` until settlement reporting
   is wired in), total live exposure, and CapitalManager headroom per strategy.

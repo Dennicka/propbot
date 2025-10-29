@@ -190,6 +190,90 @@ def test_dashboard_risk_snapshot_viewer(monkeypatch, tmp_path, client) -> None:
     assert "READ ONLY: you cannot change HOLD/RESUME/KILL." in html
 
 
+def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
+    class DummyRiskManager:
+        def full_snapshot(self):
+            return {
+                "timestamp": 1713811200,
+                "strategies": {
+                    "cross_exchange_arb": {
+                        "limits": {
+                            "daily_loss_usdt": 500.0,
+                            "max_consecutive_failures": 3,
+                        },
+                        "state": {
+                            "realized_pnl_today": -650.0,
+                            "consecutive_failures": 4,
+                            "frozen": True,
+                            "freeze_reason": "limit_breach",
+                        },
+                        "breach": True,
+                        "breach_reasons": ["realized_pnl_today below limit"],
+                        "frozen": True,
+                    },
+                    "hedger": {
+                        "limits": {
+                            "daily_loss_usdt": 250.0,
+                            "max_consecutive_failures": 2,
+                        },
+                        "state": {
+                            "realized_pnl_today": 12.5,
+                            "consecutive_failures": 0,
+                            "frozen": False,
+                            "freeze_reason": "",
+                        },
+                        "breach": False,
+                        "breach_reasons": [],
+                        "frozen": False,
+                    },
+                    "scalper": {
+                        "limits": {
+                            "daily_loss_usdt": 100.0,
+                            "max_consecutive_failures": 1,
+                        },
+                        "state": {
+                            "realized_pnl_today": -80.0,
+                            "consecutive_failures": 1,
+                            "frozen": False,
+                            "freeze_reason": "risk_guard_block",
+                        },
+                        "breach": True,
+                        "breach_reasons": ["risk guard throttle"],
+                        "frozen": False,
+                    },
+                },
+            }
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.get_strategy_risk_manager",
+        lambda: DummyRiskManager(),
+    )
+
+    secrets_payload = {
+        "operator_tokens": {"viewer": {"token": "VVV", "role": "viewer"}},
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer VVV"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "risk-state risk-state-frozen\">frozen_by_risk" in html
+    assert "risk-state risk-state-active\">active" in html
+    assert "risk-state risk-state-blocked\">blocked_by_risk" in html
+    assert "failure-count failure-count-alert\">4</span> / 3" in html
+    assert "blocked reason" in html
+
+
 def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "dashboard-token")
@@ -337,8 +421,9 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "alice" in html
     assert "reason" in html
 
-    assert "form method=\"post\" action=\"/ui/dashboard/hold\"" in html
-    assert "form method=\"post\" action=\"/ui/dashboard/resume\"" in html
+    assert "form method=\"post\" action=\"/api/ui/dashboard-hold\"" in html
+    assert "form method=\"post\" action=\"/api/ui/dashboard-resume-request\"" in html
+    assert "form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"" in html
     assert "form method=\"post\" action=\"/ui/dashboard/kill\"" in html
     assert "button type=\"submit\" disabled" not in html
 
@@ -424,13 +509,13 @@ def test_dashboard_proxy_routes(monkeypatch, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "dashboard-token")
 
-    unauth = client.post("/ui/dashboard/hold", data={"reason": "panic"})
+    unauth = client.post("/api/ui/dashboard-hold", data={"reason": "panic"})
     assert unauth.status_code in {401, 403}
 
     headers = {"Authorization": "Bearer dashboard-token"}
 
     hold_response = client.post(
-        "/ui/dashboard/hold",
+        "/api/ui/dashboard-hold",
         headers=headers,
         data={"reason": "panic", "operator": "alice"},
     )
@@ -439,7 +524,7 @@ def test_dashboard_proxy_routes(monkeypatch, client) -> None:
     assert is_hold_active()
 
     resume_response = client.post(
-        "/ui/dashboard/resume",
+        "/api/ui/dashboard-resume-request",
         headers=headers,
         data={"reason": "ready", "operator": "bob"},
     )
@@ -451,6 +536,14 @@ def test_dashboard_proxy_routes(monkeypatch, client) -> None:
     assert pending[0]["action"] == "resume"
     assert pending[0]["parameters"].get("reason") == "ready"
     assert is_hold_active()
+
+    unfreeze_response = client.post(
+        "/api/ui/dashboard-unfreeze-strategy",
+        headers=headers,
+        data={"strategy": "cross_exchange_arb", "reason": "manual override"},
+    )
+    assert unfreeze_response.status_code == 200
+    assert "Strategy cross_exchange_arb" in unfreeze_response.text
 
 
 def test_dashboard_renders_execution_quality(monkeypatch, client) -> None:

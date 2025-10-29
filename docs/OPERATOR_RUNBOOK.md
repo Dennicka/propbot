@@ -21,9 +21,11 @@
 - **viewer**: имеет доступ к `/ui/dashboard` после успешной аутентификации и
   видит всю телеметрию — статус демонов (`healthz`), открытую и частичную
   экспозицию, runtime flags (SAFE_MODE/HOLD/DRY_RUN/autopilot и причину HOLD),
-  pending approvals, build_version, последние алерты. Управляющие формы HOLD /
-  RESUME-request / KILL / raise-limits недоступны: элементы отображаются как
-  read-only и действия инициировать нельзя.
+  pending approvals, build_version, последние алерты. В верхнем блоке отображается
+  имя и роль (бейдж `viewer`/`operator`), чтобы сразу понимать, какие кнопки
+  доступны. Управляющие формы HOLD / RESUME-request / KILL / raise-limits для
+  viewer остаются read-only — элементы отображаются выключенными и действия
+  инициировать нельзя.
 - **operator**: помимо чтения статуса может инициировать HOLD,
   RESUME-request, KILL, запрос повышения лимитов и подтверждать второй шаг
   (approve) в двухоператорном флоу. Каждое такое действие попадает в
@@ -123,15 +125,19 @@
 ## Strategy risk monitor
 
 - На `/ui/dashboard` добавлен блок «Strategy Risk / Breach status». Он показывает
-  текущий дневной реализованный PnL и счётчик подряд идущих ошибок по каждой
-  стратегии рядом с лимитами (`daily_loss_usdt`, `max_consecutive_failures`).
-- Если колонка `Status` подсвечена красным и `breach=true`, оператор должен
-  вручную остановить соответствующую стратегию и разобраться в причине. Торговый
-  код пока не выключается автоматически.
+  текущий дневной реализованный PnL, счётчик подряд идущих ошибок и цветной
+  бейдж состояния по каждой стратегии (`active`, `blocked_by_risk`,
+  `frozen_by_risk`) рядом с лимитами (`daily_loss_usdt`,
+  `max_consecutive_failures`).
+- Стратегии в состоянии `frozen_by_risk`/`blocked_by_risk` подсвечены красным,
+  счётчик `consecutive_failures` для них отображается жирным — следите за
+  динамикой после ручного UNFREEZE. Активные стратегии отмечены зелёным бейджем
+  `active`.
 - `/api/ui/risk_status` (тот же bearer-токен) отдаёт тот же снимок в JSON для
   внешних дашбордов и алертеров.
-- Авто-заморозка стратегий появится в будущих релизах — в этом коммите только
-  мониторинг и визуализация без изменения поведения торговли.
+- Форму UNFREEZE можно отправить прямо с дашборда (постит на
+  `/api/ui/dashboard-unfreeze-strategy`), либо через `POST /api/ui/unfreeze-strategy`
+  с JSON. Оба пути проходят RBAC/аудит и сбрасывают счётчик ошибок.
 
 ## Startup validation / go-live safety
 
@@ -326,8 +332,11 @@
 - `GET /api/ui/positions` — активные ноги хеджа, экспозиция и unrealized PnL.
 - HTML-панель `/ui/dashboard` (через bearer-токен) — сводка build версии,
   HOLD/SAFE_MODE/DRY_RUN, runaway guard, авто-хедж, живой риск, pending approvals
-  и формы HOLD/RESUME/kill (через прокси `/ui/dashboard/*`, чтобы не ломать
-  JSON-контракты API и двухшаговую защиту).
+  и формы HOLD/RESUME/UNFREEZE/kill. Формы HOLD и RESUME-request постят в
+  `/api/ui/dashboard-hold` и `/api/ui/dashboard-resume-request`, UNFREEZE — в
+  `/api/ui/dashboard-unfreeze-strategy`; эти обёртки собирают JSON-пейлоады и
+  вызывают существующие guarded эндпоинты, не обходя RBAC/два оператора. Kill
+  продолжает ходить на `/ui/dashboard/kill` (JSON не нужен).
 - Telegram-бот дублирует критичные события (HOLD, runaway guard, kill switch,
   auto-hedge, двухшаговый RESUME).
 
@@ -368,6 +377,12 @@
   лимиты, последние таймштампы), живые и `partial` позиции, очередь two-man
   approvals, последние execution stats (slippage), актуальные reconciliation
   alerts и свежий daily report.
+- Если нужен лёгкий отчёт без записи файла — вызовите `GET /api/ui/audit_snapshot`
+  с тем же токеном. Там только операционное состояние: режимы (HOLD/SAFE_MODE/
+  DRY_RUN), живые позиции/экспозиция, состояние StrategyRiskManager
+  (`active`/`blocked_by_risk`/`frozen_by_risk`), UniverseManager (кандидаты и
+  разрешённые символы) и `build_version`. Никаких секретов из `secrets_store` в
+  ответ не попадает.
 - Используйте снапшоты для инвесторских апдейтов, ретроспектив и юридической
   фиксации инцидентов — экспорт показывает «что бот видел и делал» без SSH к
   контейнеру.

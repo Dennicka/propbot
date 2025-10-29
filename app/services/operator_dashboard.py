@@ -619,7 +619,15 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-risk .breach-ok{color:#166534;font-weight:700;}"
         ".strategy-risk .breach-alert{color:#b91c1c;font-weight:700;}"
         ".strategy-risk .freeze-alert{color:#b91c1c;font-weight:700;margin-top:0.35rem;}"
-        ".strategy-risk .frozen-pill{display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;background:#fee2e2;color:#991b1b;font-weight:700;text-transform:uppercase;}"
+        ".strategy-risk .risk-state{display:inline-block;font-weight:700;text-transform:uppercase;}"
+        ".strategy-risk .risk-state-active{color:#166534;}"
+        ".strategy-risk .risk-state-blocked{color:#b91c1c;}"
+        ".strategy-risk .risk-state-frozen{color:#b91c1c;}"
+        ".strategy-risk .risk-note{font-size:0.85rem;color:#4b5563;margin-top:0.35rem;}"
+        ".strategy-risk .risk-note-alert{color:#b91c1c;font-weight:600;}"
+        ".strategy-risk .failure-count{font-weight:700;}"
+        ".strategy-risk .failure-count-alert{color:#b91c1c;}"
+        ".strategy-risk .failure-count-ok{color:#166534;}"
         ".pnl-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".pnl-risk h2{margin-top:0;}"
         ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
@@ -691,6 +699,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
     parts.append("".join(autopilot_html) + "</div>")
 
+
     strategy_risk_html = ["<div class=\"strategy-risk\"><h2>Strategy Risk / Breach status</h2>"]
     if strategy_risk_ts:
         strategy_risk_html.append(
@@ -700,7 +709,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         strategy_risk_html.append("<p class=\"note\">No strategy risk data available.</p>")
     else:
         strategy_risk_html.append(
-            "<table><thead><tr><th>Strategy</th><th>Daily loss (current / limit)</th><th>Consecutive failures (current / limit)</th><th>Frozen</th><th>Status</th></tr></thead><tbody>"
+            "<table><thead><tr><th>Strategy</th><th>Risk state</th><th>Daily loss (current / limit)</th>"
+            "<th>Consecutive failures</th><th>Notes</th></tr></thead><tbody>"
         )
         for name in sorted(strategy_risk_strategies):
             entry = strategy_risk_strategies.get(name) or {}
@@ -713,39 +723,69 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             failure_count = state.get("consecutive_failures")
             frozen = bool(state.get("frozen") or entry.get("frozen"))
             freeze_reason = state.get("freeze_reason") or entry.get("reason") or ""
+            risk_state = "active"
+            if frozen:
+                risk_state = "frozen_by_risk"
+            elif freeze_reason:
+                risk_state = "blocked_by_risk"
+            elif breach:
+                risk_state = "blocked_by_risk"
+            risk_state_class = {
+                "active": "risk-state risk-state-active",
+                "blocked_by_risk": "risk-state risk-state-blocked",
+                "frozen_by_risk": "risk-state risk-state-frozen",
+            }.get(risk_state, "risk-state risk-state-blocked")
+            risk_state_cell = f'<span class="{risk_state_class}">{risk_state}</span>'
             status_label_parts: list[str] = []
             if breach:
                 status_label_parts.append('<span class="breach-alert">BREACH DETECTED</span>')
                 reasons = entry.get("breach_reasons") or []
                 status_label_parts.extend(
-                    f"<div class=\"note\">{_fmt(reason)}</div>" for reason in reasons if reason
+                    f"<div class=\"risk-note\">{_fmt(reason)}</div>" for reason in reasons if reason
                 )
             else:
                 status_label_parts.append('<span class="breach-ok">OK</span>')
-            if frozen:
-                reason_text = freeze_reason or "manual_override"
-                status_label_parts.append(
-                    f"<div class=\"freeze-alert\">FROZEN by risk: {_fmt(reason_text)}</div>"
-                )
+            if freeze_reason:
+                if frozen:
+                    status_label_parts.append(
+                        f"<div class=\"freeze-alert\">FROZEN by risk: {_fmt(freeze_reason)}</div>"
+                    )
+                else:
+                    status_label_parts.append(
+                        f"<div class=\"risk-note risk-note-alert\">blocked reason: {_fmt(freeze_reason)}</div>"
+                    )
+            failure_class = "failure-count"
+            failure_display = "n/a"
+            if isinstance(failure_count, (int, float)):
+                if failure_count:
+                    failure_class += " failure-count-alert"
+                else:
+                    failure_class += " failure-count-ok"
+                failure_display = _fmt(failure_count)
+            failure_cell = f'<span class="{failure_class}">{failure_display}</span>'
+            if failure_limit is not None:
+                failure_cell = f"{failure_cell} / {_fmt(failure_limit)}"
+            pnl_cell = _fmt(realized)
+            if daily_limit is not None:
+                pnl_cell = f"{pnl_cell} (limit {_fmt(daily_limit)})"
             status_label = "".join(status_label_parts)
-            frozen_label = (
-                '<span class="frozen-pill">FROZEN</span>' if frozen else '<span class="breach-ok">no</span>'
-            )
             strategy_risk_html.append(
-                "<tr><td>{name}</td><td>{pnl}</td><td>{failures}</td><td>{frozen}</td><td>{status}</td></tr>".format(
+                "<tr><td>{name}</td><td>{risk}</td><td>{pnl}</td><td>{failures}</td><td>{status}</td></tr>".format(
                     name=_fmt(name),
-                    pnl=f"{_fmt(realized)} (limit {_fmt(daily_limit)})",
-                    failures=f"{_fmt(failure_count)} (limit {_fmt(failure_limit)})",
-                    frozen=frozen_label,
+                    risk=risk_state_cell,
+                    pnl=pnl_cell,
+                    failures=failure_cell,
                     status=status_label,
                 )
             )
         strategy_risk_html.append("</tbody></table>")
         if is_operator:
             strategy_risk_html.append(
-                "<div class=\"note\"><strong>Manual override:</strong> send <code>POST /api/ui/unfreeze-strategy</code> with JSON <code>{&quot;strategy&quot;: &quot;cross_exchange_arb&quot;, &quot;reason&quot;: &quot;operator override&quot;}</code> to clear a frozen strategy.</div>"
+                "<div class=\"note\"><strong>Manual override:</strong> use the dashboard form below or send <code>POST /api/ui/unfreeze-strategy</code> with JSON <code>{&quot;strategy&quot;: &quot;cross_exchange_arb&quot;, &quot;reason&quot;: &quot;operator override&quot;}</code> to clear a frozen strategy.</div>"
             )
     parts.append("".join(strategy_risk_html) + "</div>")
+
+
 
     pnl_parts = ["<div class=\"pnl-risk\"><h2>PnL / Risk</h2>"]
     pnl_parts.append(
@@ -1466,19 +1506,27 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">Controls require operator role. Requests cannot be initiated from viewer accounts.</p>"
         )
     controls_parts.append(
-        "<form method=\"post\" action=\"/ui/dashboard/hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
+        "<form method=\"post\" action=\"/api/ui/dashboard-hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
         f"<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\"{disabled_attr} />"
         "<label for=\"hold-operator\">Operator (optional)</label>"
         f"<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
         f"<button type=\"submit\"{disabled_attr}>Enable HOLD</button></form>"
     )
     controls_parts.append(
-        "<form method=\"post\" action=\"/ui/dashboard/resume\"><label for=\"resume-reason\">Request RESUME</label>"
+        "<form method=\"post\" action=\"/api/ui/dashboard-resume-request\"><label for=\"resume-reason\">Request RESUME</label>"
         f"<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required{disabled_attr} />"
         "<label for=\"resume-operator\">Operator (optional)</label>"
         f"<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
         "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
         f"<button type=\"submit\"{disabled_attr}>Request RESUME</button></form>"
+    )
+    controls_parts.append(
+        "<form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"><label for=\"unfreeze-strategy\">Unfreeze strategy</label>"
+        f"<input id=\"unfreeze-strategy\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required{disabled_attr} />"
+        "<label for=\"unfreeze-reason\">Reason</label>"
+        f"<input id=\"unfreeze-reason\" name=\"reason\" type=\"text\" placeholder=\"Why override is safe\" required{disabled_attr} />"
+        "<div class=\"note\">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded.</div>"
+        f"<button type=\"submit\"{disabled_attr}>Unfreeze strategy</button></form>"
     )
     controls_parts.append(
         "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
