@@ -122,26 +122,15 @@
   ордеров и не блокирует сделки автоматически. Используйте метрики для контроля и
   ручных решений об изменении лимитов.
 
-## Exchange watchdog (draft)
+## Exchange watchdog
 
 - `GET /api/ui/exchange_health` показывает агрегированное состояние биржевых
   клиентов: `reachable`, `rate_limited`, `last_ok_ts`, `error`. Роль `viewer`
   имеет read-only доступ, `operator` видит тот же JSON.
-- Когда watchdog видит, что `binance` или `okx` находятся в критическом
-  состоянии (`reachable=false` или длительный `rate_limited`), runtime
-  автоматически включает HOLD через стандартный механизм безопасности.
-
-### Exchange watchdog auto-HOLD
-
-- Критическое состояние биржи приводит к операции
-  `AUTO_HOLD_BY_EXCHANGE_WATCHDOG` в audit log и к включению HOLD/SAFE_MODE с
-  причиной вида `exchange watchdog — binance unreachable` или
-  `exchange watchdog — okx ratelimit`.
-- На `/ui/dashboard` и в API статусе HOLD отображается эта причина — оператору
-  видно, что торговля приостановлена именно из-за watchdog.
-- Manual RESUME с двухэтапным подтверждением остаётся обязательным: снимайте
-  HOLD только после того, как убедитесь, что биржа снова здорова и риск
-  приемлем (доступ восстановлен, лимиты восстановлены, нет rate-limit бана).
+- Watchdog — каркас мониторинга: он не выполняет пинги самостоятельно и не
+  включает HOLD автоматически. Клиенты бирж должны звать
+  `update_from_client(...)`, чтобы обновить состояние; операторы читают этот
+  снимок и принимают решения о HOLD/RESUME вручную.
 
 ## Strategy risk monitor
 

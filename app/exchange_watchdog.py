@@ -1,29 +1,74 @@
 """Exchange watchdog state manager.
 
-This module provides a lightweight in-memory registry that records health
-information for exchange clients.  The watchdog is intentionally decoupled from
-runtime orchestration so that other services can poll the current view of the
-world without triggering automatic trading stops.
+This module exposes an in-memory registry that records health information for
+exchange clients.  The goal is to provide a single source of truth for
+operator-facing dashboards and monitoring without forcing every caller to track
+its own view of exchange connectivity.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 _DEFAULT_RATE_LIMIT_CRITICAL_SEC = 60.0
+_DEFAULT_EXCHANGES = ("binance", "okx")
+
+
+def _build_default_entry() -> Dict[str, Any]:
+    return {
+        "reachable": True,
+        "rate_limited": False,
+        "last_ok_ts": 0.0,
+        "error": "",
+    }
 
 
 class ExchangeWatchdog:
     """Track connectivity and throttling state for exchange clients."""
 
-    def __init__(self, *, critical_rate_limit_seconds: float | None = None) -> None:
-        self._state: Dict[str, Dict[str, Any]] = {}
-        self._lock = threading.RLock()
+    def __init__(
+        self,
+        *,
+        critical_rate_limit_seconds: float | None = None,
+        exchanges: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
         if critical_rate_limit_seconds is None:
             critical_rate_limit_seconds = _DEFAULT_RATE_LIMIT_CRITICAL_SEC
         self._critical_rate_limit_seconds = float(critical_rate_limit_seconds)
+        self._lock = threading.RLock()
+        self._state: Dict[str, Dict[str, Any]] = {}
+        self._rate_limited_since: Dict[str, float | None] = {}
+
+        initial = dict(exchanges or {})
+        for name in _DEFAULT_EXCHANGES:
+            if name not in initial:
+                initial[name] = {}
+        for name, payload in initial.items():
+            self._state[name] = self._normalise_entry(payload)
+            self._rate_limited_since[name] = None
+
+    def _normalise_entry(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        entry = _build_default_entry()
+        if "reachable" in payload:
+            entry["reachable"] = bool(payload.get("reachable"))
+        if "rate_limited" in payload:
+            entry["rate_limited"] = bool(payload.get("rate_limited"))
+        if "last_ok_ts" in payload:
+            try:
+                entry["last_ok_ts"] = float(payload.get("last_ok_ts", 0.0))
+            except (TypeError, ValueError):
+                entry["last_ok_ts"] = 0.0
+        if "error" in payload and payload.get("error") is not None:
+            entry["error"] = str(payload.get("error", ""))
+        return entry
+
+    def _ensure_entry(self, name: str) -> Dict[str, Any]:
+        if name not in self._state:
+            self._state[name] = _build_default_entry()
+            self._rate_limited_since[name] = None
+        return self._state[name]
 
     def update_from_client(
         self,
@@ -39,24 +84,24 @@ class ExchangeWatchdog:
         ``error`` stores a human-readable description of the last failure.
         """
 
-        now = time.time()
-        entry = {
-            "name": name,
-            "reachable": bool(ok),
-            "rate_limited": bool(rate_limited),
-            "last_ok_ts": None,
-            "error": error,
-        }
+        timestamp = time.time()
+        normalised_error = "" if error is None else str(error)
         with self._lock:
-            previous = self._state.get(name)
-            if previous and previous.get("last_ok_ts") is not None:
-                entry["last_ok_ts"] = float(previous["last_ok_ts"])
+            entry = self._ensure_entry(name)
+            entry["reachable"] = bool(ok)
+            entry["rate_limited"] = bool(rate_limited)
+            entry["error"] = normalised_error
             if ok:
-                entry["last_ok_ts"] = now
-            self._state[name] = entry
+                entry["last_ok_ts"] = float(timestamp)
+            if rate_limited:
+                since = self._rate_limited_since.get(name)
+                if since is None:
+                    self._rate_limited_since[name] = float(timestamp)
+            else:
+                self._rate_limited_since[name] = None
 
     def get_state(self) -> Dict[str, Dict[str, Any]]:
-        """Return a shallow copy of the current exchange state."""
+        """Return a snapshot of the current exchange state."""
 
         with self._lock:
             return {name: data.copy() for name, data in self._state.items()}
@@ -64,19 +109,21 @@ class ExchangeWatchdog:
     def is_critical(self, name: str) -> bool:
         """Return ``True`` when ``name`` is considered unhealthy."""
 
+        now = time.time()
         with self._lock:
             entry = self._state.get(name)
             if entry is None:
                 return False
-            reachable = bool(entry.get("reachable"))
-            if not reachable:
+            if not bool(entry.get("reachable")):
                 return True
             if not bool(entry.get("rate_limited")):
                 return False
-            last_ok_ts = entry.get("last_ok_ts")
-            if last_ok_ts is None:
-                return True
-            return (time.time() - float(last_ok_ts)) > self._critical_rate_limit_seconds
+            since = self._rate_limited_since.get(name)
+            if since is None:
+                # Rate limiting just started. Give it time to recover.
+                self._rate_limited_since[name] = now
+                return False
+            return (now - float(since)) >= self._critical_rate_limit_seconds
 
     def reset(self) -> None:
         """Clear the internal state.
@@ -85,7 +132,10 @@ class ExchangeWatchdog:
         """
 
         with self._lock:
-            self._state.clear()
+            known = set(self._state) | set(_DEFAULT_EXCHANGES)
+            self._state = {name: _build_default_entry() for name in known}
+            for name in known:
+                self._rate_limited_since[name] = None
 
 
 _watchdog: Optional[ExchangeWatchdog] = None
