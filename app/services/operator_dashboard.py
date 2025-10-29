@@ -339,6 +339,17 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "last_released_ts": safety_payload.get("last_released_ts"),
         "hold_reason_raw": hold_reason,
     }
+    summary_highlights: list[str] = []
+    exchange_watchdog_hold_reason = ""
+    lowered_reason = hold_reason.lower()
+    if lowered_reason.startswith("exchange_watchdog:"):
+        detail = hold_reason.split(":", 1)[1].strip() if ":" in hold_reason else ""
+        display_detail = detail or hold_reason_display or hold_reason
+        exchange_watchdog_hold_reason = display_detail
+        if display_detail:
+            summary_highlights.append(
+                f"Auto-HOLD by exchange watchdog: {display_detail}"
+            )
     limits_for_advisor = {
         "MAX_TOTAL_NOTIONAL_USDT": risk_limits_env.get("MAX_TOTAL_NOTIONAL_USDT"),
         "MAX_OPEN_POSITIONS": risk_limits_env.get("MAX_OPEN_POSITIONS"),
@@ -396,6 +407,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "risk_snapshot": risk_snapshot,
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
+        "summary_highlights": summary_highlights,
+        "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
     }
 
 
@@ -622,6 +635,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     operator_role = "operator" if operator_role_raw == "operator" else "viewer"
     operator_role_label = operator_role.upper()
     is_operator = operator_role == "operator"
+    summary_highlights = [
+        str(item)
+        for item in context.get("summary_highlights", [])
+        if isinstance(item, str) and item.strip()
+    ]
 
     parts: list[str] = []
     parts.append(
@@ -708,6 +726,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     for message in flash_messages:
         parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
+    for highlight in summary_highlights:
+        parts.append(
+            "<div class=\"flash\" style=\"background:#fee2e2;border-color:#f87171;color:#7f1d1d;\">"
+            f"{_fmt(highlight)}"
+            "</div>"
+        )
 
     autopilot_details = [
         f"autopilot_status: <strong>{_fmt('enabled' if autopilot_enabled else 'disabled')}</strong>",

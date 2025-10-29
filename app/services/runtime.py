@@ -1005,6 +1005,14 @@ def approve_exit_dry_run(request_id: str, *, actor: str | None = None) -> Dict[s
     return {"control": snapshot, "request": record}
 
 
+def ensure_exchange_watchdog_all_clear(*, context: str = "runtime") -> None:
+    """Raise ``HoldActiveError`` when the exchange watchdog is critical."""
+
+    reason = evaluate_exchange_watchdog(context=context)
+    if reason:
+        raise HoldActiveError(reason)
+
+
 def _register_action_counter(
     action: str,
     delta: int,
@@ -1012,6 +1020,7 @@ def _register_action_counter(
     reason: str,
     source: str,
 ) -> None:
+    ensure_exchange_watchdog_all_clear(context=f"{source}:{action}")
     triggered_hold = False
     detail = ""
     hold_blocked = False

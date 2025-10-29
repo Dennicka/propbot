@@ -369,6 +369,21 @@
 - Telegram-бот дублирует критичные события (HOLD, runaway guard, kill switch,
   auto-hedge, двухшаговый RESUME).
 
+### Exchange watchdog auto-HOLD
+
+- Runtime safety опрашивает `ExchangeWatchdog` перед любым реальным исполнением.
+- Если `binance` или `okx` помечены как критические (биржа умерла или нас душат
+  rate limit > 60 секунд), бот автоматически включает HOLD и SAFE_MODE через
+  штатный механизм аварий.
+- Причина фиксируется как `exchange_watchdog:<биржа> <деталь>` и отображается в
+  `/ui/dashboard` в summary-блоке — оператор сразу видит, что HOLD включён
+  автоматически из-за биржи.
+- Audit log получает запись `AUTO_HOLD_BY_EXCHANGE_WATCHDOG`, которая видна в
+  дашборде и telemetry.
+- Перед возобновлением торговли оператор должен убедиться, что биржа снова
+  стабильна, после чего пройти стандартный двухшаговый RESUME (request +
+  approval). Это не обходит two-man rule и не снимает SAFE_MODE автоматически.
+
 ### Watchdog alerts in Telegram
 
 - Если exchange watchdog фиксирует критический сбой (биржа недоступна или
