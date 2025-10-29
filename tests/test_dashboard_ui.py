@@ -206,10 +206,12 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
                             "consecutive_failures": 4,
                             "frozen": True,
                             "freeze_reason": "limit_breach",
+                            "enabled": False,
                         },
                         "breach": True,
                         "breach_reasons": ["realized_pnl_today below limit"],
                         "frozen": True,
+                        "enabled": False,
                     },
                     "hedger": {
                         "limits": {
@@ -221,10 +223,12 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
                             "consecutive_failures": 0,
                             "frozen": False,
                             "freeze_reason": "",
+                            "enabled": True,
                         },
                         "breach": False,
                         "breach_reasons": [],
                         "frozen": False,
+                        "enabled": True,
                     },
                     "scalper": {
                         "limits": {
@@ -236,10 +240,12 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
                             "consecutive_failures": 1,
                             "frozen": False,
                             "freeze_reason": "risk_guard_block",
+                            "enabled": True,
                         },
                         "breach": True,
                         "breach_reasons": ["risk guard throttle"],
                         "frozen": False,
+                        "enabled": True,
                     },
                 },
             }
@@ -272,6 +278,11 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
     assert "risk-state risk-state-blocked\">blocked_by_risk" in html
     assert "failure-count failure-count-alert\">4</span> / 3" in html
     assert "blocked reason" in html
+    assert "enabled: yes" in html
+    assert "enabled: no" in html
+    assert "MANUAL DISABLED (operator override)" in html
+    assert "Strategy enable/disable controls require operator role" in html
+    assert "Update strategy toggle" not in html
 
 
 def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> None:
