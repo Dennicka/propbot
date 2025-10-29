@@ -24,7 +24,7 @@ async def _ensure_viewer_access(request: Request) -> None:
         # Global API tokens are treated as operator-level access.
         return
     _, role = identity
-    if role not in {"viewer", "operator"}:
+    if role not in {"viewer", "auditor", "operator"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
 

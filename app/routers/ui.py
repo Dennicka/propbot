@@ -101,7 +101,7 @@ def strategy_budget_summary(request: Request) -> dict[str, Any]:
         if not identity:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
         _, role = identity
-        if role not in {"viewer", "operator"}:
+        if role not in {"viewer", "auditor", "operator"}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     manager = get_strategy_budget_manager()
     snapshot = manager.snapshot()

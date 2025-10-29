@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+_VALID_OPERATOR_ROLES = {"viewer", "auditor", "operator"}
+
 _SECRETS_STORE_SINGLETON: "SecretsStore" | None = None
 
 
@@ -34,6 +36,14 @@ class SecretsStore:
         with self._path.open("r", encoding="utf-8") as handle:
             return json.load(handle)
 
+    def _normalize_role(self, value: object) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        role = value.strip().lower()
+        if role in _VALID_OPERATOR_ROLES:
+            return role
+        return None
+
     def _operator_entries(self) -> Tuple[Tuple[str, Optional[str], Optional[str]], ...]:
         operators = self._data.get("operator_tokens", {})
         if not isinstance(operators, dict):
@@ -44,12 +54,12 @@ class SecretsStore:
             if not isinstance(payload, dict):
                 continue
             token = payload.get("token")
-            role = payload.get("role")
+            role = self._normalize_role(payload.get("role"))
             entries.append(
                 (
                     name,
                     token if isinstance(token, str) else None,
-                    role if isinstance(role, str) else None,
+                    role,
                 )
             )
         return tuple(entries)

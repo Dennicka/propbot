@@ -661,9 +661,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     operator_info = context.get("operator", {}) or {}
     operator_name = operator_info.get("name") or "unknown"
     operator_role_raw = str(operator_info.get("role") or "viewer").strip().lower()
-    operator_role = "operator" if operator_role_raw == "operator" else "viewer"
+    if operator_role_raw not in {"operator", "auditor", "viewer"}:
+        operator_role = "viewer"
+    else:
+        operator_role = operator_role_raw
     operator_role_label = operator_role.upper()
     is_operator = operator_role == "operator"
+    is_auditor = operator_role == "auditor"
     summary_highlights = [
         str(item)
         for item in context.get("summary_highlights", [])
@@ -692,6 +696,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".role-badge{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;text-transform:uppercase;}"
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
+        ".role-auditor{background:#e0f2fe;color:#1d4ed8;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
         ".strategy-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".strategy-risk h2{margin-top:0;}"
@@ -761,8 +766,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     )
 
     if not is_operator:
+        if is_auditor:
+            banner_text = "AUDITOR ROLE — READ ONLY: trading controls are hidden."
+        else:
+            banner_text = "READ ONLY: you cannot change HOLD/RESUME/KILL."
         parts.append(
-            "<div class=\"read-only-banner\">READ ONLY: you cannot change HOLD/RESUME/KILL.</div>"
+            f"<div class=\"read-only-banner\">{_fmt(banner_text)}</div>"
         )
 
     for message in flash_messages:
@@ -1774,42 +1783,54 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         parts.append("<p>No pending approvals.</p>")
 
-    controls_disabled = not is_operator
-    disabled_attr = " disabled" if controls_disabled else ""
     controls_parts = ["<div class=\"controls\"><h2>Controls</h2>"]
-    if controls_disabled:
+
+    def _controls_form_markup(disabled_attr: str) -> list[str]:
+        return [
+            (
+                "<form method=\"post\" action=\"/api/ui/dashboard-hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
+                f"<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\"{disabled_attr} />"
+                "<label for=\"hold-operator\">Operator (optional)</label>"
+                f"<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
+                f"<button type=\"submit\"{disabled_attr}>Enable HOLD</button></form>"
+            ),
+            (
+                "<form method=\"post\" action=\"/api/ui/dashboard-resume-request\"><label for=\"resume-reason\">Request RESUME</label>"
+                f"<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required{disabled_attr} />"
+                "<label for=\"resume-operator\">Operator (optional)</label>"
+                f"<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
+                "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
+                f"<button type=\"submit\"{disabled_attr}>Request RESUME</button></form>"
+            ),
+            (
+                "<form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"><label for=\"unfreeze-strategy\">Unfreeze strategy</label>"
+                f"<input id=\"unfreeze-strategy\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required{disabled_attr} />"
+                "<label for=\"unfreeze-reason\">Reason</label>"
+                f"<input id=\"unfreeze-reason\" name=\"reason\" type=\"text\" placeholder=\"Why override is safe\" required{disabled_attr} />"
+                "<div class=\"note\">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded.</div>"
+                f"<button type=\"submit\"{disabled_attr}>Unfreeze strategy</button></form>"
+            ),
+            (
+                "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
+                f"<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\"{disabled_attr} />"
+                "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
+                f"<button type=\"submit\"{disabled_attr}>Emergency CANCEL ALL</button></form>"
+            ),
+        ]
+
+    if is_operator:
+        controls_parts.extend(_controls_form_markup(""))
+    elif is_auditor:
+        controls_parts.append(
+            "<p class=\"note\" style=\"color:#1f2937;font-weight:600;\">Auditor role: read only. Trading controls are hidden.</p>"
+        )
+    else:
+        disabled_attr = " disabled"
         controls_parts.append(
             "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">Controls require operator role. Requests cannot be initiated from viewer accounts.</p>"
         )
-    controls_parts.append(
-        "<form method=\"post\" action=\"/api/ui/dashboard-hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
-        f"<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\"{disabled_attr} />"
-        "<label for=\"hold-operator\">Operator (optional)</label>"
-        f"<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
-        f"<button type=\"submit\"{disabled_attr}>Enable HOLD</button></form>"
-    )
-    controls_parts.append(
-        "<form method=\"post\" action=\"/api/ui/dashboard-resume-request\"><label for=\"resume-reason\">Request RESUME</label>"
-        f"<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required{disabled_attr} />"
-        "<label for=\"resume-operator\">Operator (optional)</label>"
-        f"<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
-        "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
-        f"<button type=\"submit\"{disabled_attr}>Request RESUME</button></form>"
-    )
-    controls_parts.append(
-        "<form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"><label for=\"unfreeze-strategy\">Unfreeze strategy</label>"
-        f"<input id=\"unfreeze-strategy\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required{disabled_attr} />"
-        "<label for=\"unfreeze-reason\">Reason</label>"
-        f"<input id=\"unfreeze-reason\" name=\"reason\" type=\"text\" placeholder=\"Why override is safe\" required{disabled_attr} />"
-        "<div class=\"note\">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded.</div>"
-        f"<button type=\"submit\"{disabled_attr}>Unfreeze strategy</button></form>"
-    )
-    controls_parts.append(
-        "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
-        f"<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\"{disabled_attr} />"
-        "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
-        f"<button type=\"submit\"{disabled_attr}>Emergency CANCEL ALL</button></form>"
-    )
+        controls_parts.extend(_controls_form_markup(disabled_attr))
+
     controls_parts.append("</div>")
     parts.append("".join(controls_parts))
 
