@@ -15,6 +15,11 @@
 - **RBAC для операторов**: токены в `SecretsStore` содержат роль (viewer/operator), критические действия (HOLD / RESUME / KILL / raise-limits) доступны только оператору и логируются в `audit_log`, а HTML-дэшборд показывает имя и роль и скрывает опасные элементы от viewer. Это закрывает часть секьюрити-требований spec_archive по операционной сегрегации ролей. 【F:app/routers/dashboard.py†L1-L140】【F:app/services/operator_dashboard.py†L520-L735】
 - **Healthz и build metadata**: `/healthz` возвращает `{"ok": true}`, а статус и UI показывают `build_version`, что подтверждает готовность сервисов. 【F:app/main.py†L86-L128】【F:app/services/status.py†L83-L182】
 
+## Strategy orchestrator
+- Введён модуль `StrategyOrchestrator`, который хранит список активных стратегий и доступен через REST-ручки `/api/ui/strategy/*`.
+- Все переключения стратегий (enable/disable) требуют operator-токен и автоматически логируются в `audit_log` с каналом `orchestrator`.
+- Операторы обязаны указывать причину переключения в API-запросе и документировать решение в операционном журнале.
+
 ## [missing] Нереализованные требования из spec_archive
 
 ### Execution Layer
