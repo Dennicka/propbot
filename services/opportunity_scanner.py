@@ -15,6 +15,8 @@ from app.services.runtime import get_state, set_last_opportunity_state
 from services.cross_exchange_arb import check_spread
 from services.risk_manager import can_open_new_position
 
+STRATEGY_NAME = "cross_exchange_arb"
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,6 +98,8 @@ class OpportunityScanner:
         allowed, reason = can_open_new_position(
             float(candidate["notional_suggestion"]),
             float(candidate["leverage_suggestion"]),
+            strategy=STRATEGY_NAME,
+            requested_positions=1,
         )
         if not allowed:
             candidate["blocked_reason"] = reason

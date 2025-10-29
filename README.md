@@ -116,6 +116,37 @@ notional'а, например:
   персистентного PnL-трекера. Как и раньше, ручной UNFREEZE возможен
   оператором, но действие фиксируется в audit log.
 
+### Strategy status API & Dashboard
+
+- `GET /api/ui/strategy_status` (роли `viewer`/`auditor`/`operator`) возвращает
+  объединённый снимок риска, бюджета и PnL по каждой стратегии. В ответе есть
+  `frozen`, `freeze_reason`, `budget_blocked`, `realized_pnl_today`,
+  `max_drawdown_observed`, `consecutive_failures` и исходные лимиты.
+- `/ui/dashboard` теперь использует этот же snapshot для блока «Strategy
+  Performance / Risk» и подсвечивает стратегии, которые заморожены или
+  уткнулись в бюджет. Это основной источник правды: таблица синхронизирована с
+  runtime и ops_report.
+
+### Autopilot resume safety
+
+- Автопилот больше не снимает HOLD автоматически, если стратегия заморожена
+  или пер-стратегийный бюджет исчерпан. Решение (`last_decision`) и причина
+  (`last_decision_reason`) записываются в runtime state, `/api/ui/ops_report`, и
+  отображаются в «Autopilot mode» на `/ui/dashboard`.
+- Баннер на дашборде информирует, что автопилот заблокирован риском, и подскажет
+  причину, если последняя попытка была отклонена.
+
+### Ops report coverage
+
+- JSON `GET /api/ui/ops_report` и CSV-экспорт включают:
+  - глобальное состояние (`mode`, `safe_mode`, `dry_run`, активный HOLD),
+  - `strategy_status` с полным снапшотом риска/бюджета/PnL,
+  - текущие позиции/экспозицию и частично закрытые хеджи,
+  - журнал операторских действий и аудит событий,
+  - `autopilot` с полями `last_decision`, `armed`, причиной последнего решения.
+- Тест `tests/test_ops_report_endpoint.py` поднимает реальные менеджеры риска,
+  бюджета и PnL на временном сторе, чтобы отчёт всегда отражал боевые данные.
+
 ### Exchange watchdog
 
 `GET /api/ui/exchange_health` (bearer-токен тот же, что и для остальных `/api/ui/*`

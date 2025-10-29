@@ -49,7 +49,8 @@ def test_cross_execute_endpoint(client, monkeypatch):
     state = get_state()
     state.control.safe_mode = False
     monkeypatch.setattr(
-        "app.routers.arb.can_open_new_position", lambda notion, leverage: (True, "")
+        "app.routers.arb.can_open_new_position",
+        lambda notion, leverage, **_: (True, ""),
     )
     trade_result = {
         "symbol": "ETHUSDT",
@@ -113,7 +114,8 @@ def test_runaway_breaker_triggers_hold(client, monkeypatch):
     state = get_state()
     state.control.safe_mode = False
     monkeypatch.setattr(
-        "app.routers.arb.can_open_new_position", lambda notion, leverage: (True, "")
+        "app.routers.arb.can_open_new_position",
+        lambda notion, leverage, **_: (True, ""),
     )
 
     def fake_spread(symbol: str) -> dict:

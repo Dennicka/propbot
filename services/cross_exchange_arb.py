@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Tuple
@@ -15,11 +16,15 @@ from app.services.runtime import (
     register_order_attempt,
 )
 from app.strategy_budget import get_strategy_budget_manager
+from app.strategy_risk import get_strategy_risk_manager
 from positions import create_position
 from exchanges import BinanceFuturesClient, OKXFuturesClient
 from .execution_router import choose_venue
 from .execution_stats_store import append_entry as store_execution_stat
 from .edge_guard import allowed_to_trade as guard_allowed_to_trade
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _ts() -> str:
@@ -477,6 +482,7 @@ def execute_hedged_trade(
     spread_value = float(spread_info["spread"])
 
     if spread_value < float(min_spread):
+        _record_failure("spread_below_threshold")
         return {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
@@ -498,8 +504,46 @@ def execute_hedged_trade(
 
     dry_run_mode = is_dry_run_mode()
     budget_manager = get_strategy_budget_manager()
+    risk_manager = get_strategy_risk_manager()
 
-    def _record_and_return(reason: str) -> dict:
+    if not risk_manager.is_enabled(STRATEGY_NAME):
+        return {
+            "ok": False,
+            "executed": False,
+            "state": "DISABLED_BY_OPERATOR",
+            "reason": "disabled_by_operator",
+            "strategy": STRATEGY_NAME,
+        }
+    if risk_manager.is_frozen(STRATEGY_NAME):
+        return {
+            "ok": False,
+            "executed": False,
+            "state": "BLOCKED",
+            "reason": "blocked_by_risk_freeze",
+            "strategy": STRATEGY_NAME,
+        }
+
+    def _record_failure(reason: str) -> None:
+        try:
+            risk_manager.record_failure(STRATEGY_NAME, reason)
+        except Exception:
+            LOGGER.exception(
+                "failed to record strategy failure",
+                extra={"strategy": STRATEGY_NAME, "reason": reason},
+            )
+
+    def _record_success() -> None:
+        try:
+            risk_manager.record_success(STRATEGY_NAME)
+        except Exception:
+            LOGGER.exception(
+                "failed to record strategy success",
+                extra={"strategy": STRATEGY_NAME},
+            )
+
+    def _record_and_return(reason: str, *, record_failure: bool = True) -> dict:
+        if record_failure:
+            _record_failure(reason)
         _record_execution_stat(
             symbol=spread_info["symbol"],
             side="long",
@@ -532,7 +576,7 @@ def execute_hedged_trade(
     if not dry_run_mode and not budget_manager.can_allocate(
         STRATEGY_NAME, notional, requested_positions=1
     ):
-        result = _record_and_return("strategy_budget_exceeded")
+        result = _record_and_return("strategy_budget_exceeded", record_failure=False)
         result.update(
             {
                 "ok": False,
@@ -563,6 +607,7 @@ def execute_hedged_trade(
     guard_allowed, guard_reason = guard_allowed_to_trade(spread_info["symbol"])
     if not guard_allowed:
         guard_code = f"edge_guard:{guard_reason or 'blocked'}"
+        _record_failure(guard_code)
         _record_execution_stat(
             symbol=spread_info["symbol"],
             side="long",
@@ -710,6 +755,7 @@ def execute_hedged_trade(
             "long_plan": long_plan,
             "short_plan": short_plan,
         }
+        _record_failure(exc.reason or "hold_active")
     except Exception as exc:
         reason = str(exc)
         error_reason = reason
@@ -750,6 +796,7 @@ def execute_hedged_trade(
             "long_plan": long_plan,
             "short_plan": short_plan,
         }
+        _record_failure(result.get("reason") or reason or "order_failed")
     finally:
         long_success = _leg_successful(long_leg)
         short_success = _leg_successful(short_leg)
@@ -772,7 +819,7 @@ def execute_hedged_trade(
             failure_reason=None if short_success else error_reason,
         )
 
-    return result or {
+    final_result = result or {
         "symbol": spread_info["symbol"],
         "min_spread": float(min_spread),
         "spread": spread_value,
@@ -782,3 +829,6 @@ def execute_hedged_trade(
         "long_plan": long_plan,
         "short_plan": short_plan,
     }
+    if final_result.get("success") and not final_result.get("simulated"):
+        _record_success()
+    return final_result

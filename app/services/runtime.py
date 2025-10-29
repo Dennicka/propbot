@@ -368,6 +368,9 @@ class AutopilotState:
     armed: bool = False
     target_mode: str = "HOLD"
     target_safe_mode: bool = True
+    last_decision: str = "unknown"
+    last_decision_reason: str | None = None
+    last_decision_ts: str | None = None
 
     def as_dict(self) -> Dict[str, object | None]:
         return {
@@ -378,6 +381,9 @@ class AutopilotState:
             "armed": self.armed,
             "target_mode": self.target_mode,
             "target_safe_mode": self.target_safe_mode,
+            "last_decision": self.last_decision,
+            "last_decision_reason": self.last_decision_reason,
+            "last_decision_ts": self.last_decision_ts,
         }
 
 
@@ -1349,6 +1355,19 @@ def autopilot_mark_action(action: str, reason: str | None, *, armed: bool) -> Au
     return _STATE.autopilot
 
 
+def set_autopilot_decision(decision: str, *, reason: str | None = None) -> AutopilotState:
+    decision_value = str(decision or "unknown")
+    timestamp = _ts()
+    with _STATE_LOCK:
+        autopilot = _STATE.autopilot
+        autopilot.last_decision = decision_value
+        autopilot.last_decision_reason = reason
+        autopilot.last_decision_ts = timestamp
+        snapshot = autopilot.as_dict()
+    _persist_autopilot_snapshot(snapshot)
+    return _STATE.autopilot
+
+
 def autopilot_apply_resume(*, safe_mode: bool) -> Dict[str, object]:
     persist_control: Dict[str, object] | None = None
     persist_safety: Dict[str, object] | None = None
@@ -1869,6 +1888,14 @@ def _load_persisted_state(state: RuntimeState) -> None:
             autopilot_state.target_mode = str(target_mode).upper()
         if "target_safe_mode" in autopilot_payload:
             autopilot_state.target_safe_mode = bool(autopilot_payload.get("target_safe_mode"))
+        last_decision = autopilot_payload.get("last_decision")
+        if last_decision is not None:
+            autopilot_state.last_decision = str(last_decision)
+        autopilot_state.last_decision_reason = (
+            autopilot_payload.get("last_decision_reason") or None
+        )
+        decision_ts = autopilot_payload.get("last_decision_ts")
+        autopilot_state.last_decision_ts = str(decision_ts) if decision_ts else None
     safety_payload = payload.get("safety")
     safety = state.safety
     if isinstance(safety_payload, Mapping):

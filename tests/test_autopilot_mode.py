@@ -29,6 +29,7 @@ async def test_autopilot_resumes_on_clean_start(monkeypatch):
     assert is_hold_active() is False
     autopilot_state = get_autopilot_state()
     assert autopilot_state.last_action == "resume"
+    assert autopilot_state.last_decision == "resumed"
     assert autopilot_state.armed is True
 
 
@@ -48,6 +49,7 @@ async def test_autopilot_refuses_when_guard_blocks(monkeypatch):
     autopilot_state = get_autopilot_state()
     assert autopilot_state.last_action == "refused"
     assert "runaway_guard" in str(autopilot_state.last_reason)
+    assert autopilot_state.last_decision in {"refused", "blocked_by_risk"}
     assert autopilot_state.armed is False
 
 
@@ -65,4 +67,5 @@ async def test_autopilot_disabled_keeps_manual_resume(monkeypatch):
     assert is_hold_active() is True
     autopilot_state = get_autopilot_state()
     assert autopilot_state.last_action in {"disabled", "none"}
+    assert autopilot_state.last_decision == "disabled"
     assert autopilot_state.armed is False

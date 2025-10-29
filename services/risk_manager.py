@@ -6,6 +6,8 @@ import os
 from typing import Dict, Iterable, Tuple
 
 from positions import list_open_positions, reset_positions
+from app.strategy_budget import get_strategy_budget_manager
+from app.strategy_risk import get_strategy_risk_manager
 
 
 def _env_float(name: str, default: float) -> float:
@@ -54,11 +56,30 @@ def _total_open_notional(open_positions: Iterable[Dict[str, object]]) -> float:
     return total
 
 
-def can_open_new_position(notion_usdt: float, leverage: float | None = None) -> Tuple[bool, str]:
+def can_open_new_position(
+    notion_usdt: float,
+    leverage: float | None = None,
+    *,
+    strategy: str = "cross_exchange_arb",
+    requested_positions: int = 1,
+) -> Tuple[bool, str]:
     """Check whether a new hedge can be opened under the configured limits."""
 
     if notion_usdt <= 0:
         return False, "invalid_notional"
+    strategy_name = strategy.strip() or "cross_exchange_arb"
+    risk_manager = get_strategy_risk_manager()
+    if not risk_manager.is_enabled(strategy_name):
+        return False, "disabled_by_operator"
+    if risk_manager.is_frozen(strategy_name):
+        return False, "blocked_by_risk_freeze"
+    budget_manager = get_strategy_budget_manager()
+    if not budget_manager.can_allocate(
+        strategy_name,
+        notion_usdt,
+        requested_positions=max(1, int(requested_positions or 0)),
+    ):
+        return False, "strategy_budget_exceeded"
     max_per_position = _max_notional_per_position()
     if max_per_position > 0 and notion_usdt > max_per_position:
         return False, "per_position_limit_exceeded"

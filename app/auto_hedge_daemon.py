@@ -315,7 +315,12 @@ class AutoHedgeDaemon:
 
         notional = _coerce_float(candidate.get("notional_suggestion"))
         leverage = _coerce_float(candidate.get("leverage_suggestion"))
-        allowed, reason = can_open_new_position(notional, leverage)
+        allowed, reason = can_open_new_position(
+            notional,
+            leverage,
+            strategy=STRATEGY_NAME,
+            requested_positions=1,
+        )
         if not allowed:
             self._register_failure(reason=f"risk:{reason}", candidate=candidate, timestamp=_ts())
             set_last_opportunity_state(candidate, "blocked_by_risk")

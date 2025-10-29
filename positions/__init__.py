@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping
 
+import logging
+
 from app.services import runtime
 from app.strategy_budget import get_strategy_budget_manager
+from app.strategy_risk import get_strategy_risk_manager
 from positions_store import append_record, list_records, mark_closed, reset_store
 
 
@@ -97,7 +100,7 @@ def create_position(
             manager = get_strategy_budget_manager()
             manager.reserve(strategy_name, notional_usdt, positions=1)
         except Exception:
-            pass
+            LOGGER.exception("failed to reserve strategy budget", extra={"strategy": strategy_name})
     return record
 
 
@@ -117,16 +120,25 @@ def close_position(
     runtime.set_positions_state(list_records())
     strategy_name = str(updated.get("strategy") or "").strip()
     simulated_flag = bool(updated.get("simulated"))
+    pnl_value = float(updated.get("pnl_usdt") or 0.0)
     if strategy_name and not simulated_flag:
+        notional_value = float(updated.get("notional_usdt") or 0.0)
         try:
             manager = get_strategy_budget_manager()
-            manager.release(
-                strategy_name,
-                float(updated.get("notional_usdt") or 0.0),
-                positions=1,
-            )
+            manager.release(strategy_name, notional_value, positions=1)
         except Exception:
-            pass
+            LOGGER.exception(
+                "failed to release strategy budget",
+                extra={"strategy": strategy_name, "notional": notional_value},
+            )
+        try:
+            risk_manager = get_strategy_risk_manager()
+            risk_manager.record_fill(strategy_name, pnl_value)
+        except Exception:
+            LOGGER.exception(
+                "failed to record strategy pnl",
+                extra={"strategy": strategy_name, "pnl": pnl_value},
+            )
     return updated
 
 
@@ -157,3 +169,6 @@ def validate_record_structure(entries: Iterable[Dict[str, Any]]) -> None:
             missing_leg = required_leg - set(leg)
             if missing_leg:
                 raise ValueError(f"position leg missing fields: {', '.join(sorted(missing_leg))}")
+LOGGER = logging.getLogger(__name__)
+
+
