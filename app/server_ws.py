@@ -23,6 +23,7 @@ from .routers import (
     metrics_latency,
     ui_approvals,
     ui_limits,
+    ui_risk,
     ui_universe,
     arb,
     deriv,
@@ -56,6 +57,7 @@ app.include_router(ui_control_state.router, prefix="/api/ui")
 app.include_router(ui_approvals.router, prefix="/api/ui")
 app.include_router(ui_limits.router, prefix="/api/ui")
 app.include_router(ui_universe.router, prefix="/api/ui")
+app.include_router(ui_risk.router, prefix="/api/ui")
 app.include_router(metrics_latency.router, prefix="/metrics")
 app.include_router(arb.router, prefix="/api/arb")
 app.include_router(deriv.router, prefix="/api/deriv")
