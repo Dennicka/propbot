@@ -31,8 +31,8 @@ def resolve_operator(request: Request, token: str | None) -> dict[str, str]:
                 raw_name, raw_role = resolved
                 operator_name = (str(raw_name).strip() or "operator")
                 normalized_role = str(raw_role or "").strip().lower()
-                if normalized_role == "operator":
-                    operator_role = "operator"
+                if normalized_role in {"operator", "auditor", "viewer"}:
+                    operator_role = normalized_role
             else:
                 operator_name = "token"
         else:

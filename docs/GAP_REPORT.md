@@ -12,7 +12,7 @@
 - **Risk snapshot сервис**: модуль `app/risk_snapshot.py` агрегирует позиции, экспозицию и статусы автопилота в единый снимок риска для UI и других потребителей. 【F:app/risk_snapshot.py†L1-L74】
 - **Realtime риск-сводка в панели**: `/ui/dashboard` теперь встраивает risk snapshot, отображая суммарный notional, разбивку по биржам и outstanding partial hedges, что приближает нас к требованиям spec_archive по много-биржевому мониторингу и подготовке VaR/RPI. 【F:app/services/operator_dashboard.py†L520-L735】
 - **Централизованный план оркестратора**: `/ui/dashboard` выводит `compute_next_plan()` из глобального оркестратора, показывая решение по каждой стратегии и статус risk-gates. Это закрывает требования spec_archive про многостратегийный контроль, единый scheduler и прозрачные risk gates для мультивеню арбитража без ручного запуска. 【F:app/services/operator_dashboard.py†L520-L760】【F:app/orchestrator.py†L137-L221】
-- **RBAC для операторов**: токены в `SecretsStore` содержат роль (viewer/operator), критические действия (HOLD / RESUME / KILL / raise-limits) доступны только оператору и логируются в `audit_log`, а HTML-дэшборд показывает имя и роль и скрывает опасные элементы от viewer. Это закрывает часть секьюрити-требований spec_archive по операционной сегрегации ролей. 【F:app/routers/dashboard.py†L1-L140】【F:app/services/operator_dashboard.py†L520-L735】
+- **RBAC для операторов**: токены в `SecretsStore` содержат роль (viewer/auditor/operator), критические действия (HOLD / RESUME / KILL / raise-limits) доступны только оператору и логируются в `audit_log`, а HTML-дэшборд показывает имя и роль, скрывая опасные элементы от viewer/auditor и полностью пряча формы для аудиторов. Это закрывает часть секьюрити-требований spec_archive по операционной сегрегации ролей. 【F:app/routers/dashboard.py†L1-L140】【F:app/services/operator_dashboard.py†L520-L735】
 - **Healthz и build metadata**: `/healthz` возвращает `{"ok": true}`, а статус и UI показывают `build_version`, что подтверждает готовность сервисов. 【F:app/main.py†L86-L128】【F:app/services/status.py†L83-L182】
 
 ## Strategy orchestrator
@@ -64,7 +64,7 @@
 - **End-of-day wrap / Night summary**: хотя есть daily_reporter, нет автоматического wrap-up с flattening/архивом и рассылаемым summary.
 
 ### Governance / Compliance
-- **RBAC роли и signed configs**: двухоператорная схема есть, но отсутствует ролевая модель, подписи конфигов и аудит изменений. Нужно ввести роли (Operator/Reviewer/Viewer), хранение подписей и журнал изменений.
+- **RBAC роли и signed configs**: двухоператорная схема есть, базовые роли viewer/auditor/operator реализованы, но отсутствуют подписи конфигов и аудит изменений. Нужно внедрить хранение подписей и журнал изменений.
 - **Withdrawal whitelist и capital partitions**: нет политики вывода средств и сегментации капиталов; реализовать в сервисах управления балансами, с двухэтапным одобрением и алертами `WITHDRAWAL_REQUEST`.
 - **Investor-safe reporting & legal freeze**: добавить экспорт отчётов, возможность freeze логов по запросу compliance.
 

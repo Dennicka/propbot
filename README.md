@@ -95,8 +95,9 @@ notional'а, например:
 `DRY_RUN_MODE` и двухфакторное RESUME продолжают работать без изменений —
 пер-стратегийный бюджет добавляет дополнительный уровень защиты капитала.
 
-Мониторить состояние можно через `GET /api/ui/strategy_budget` (роль `viewer`
-имеет read-only доступ) и новую таблицу «Strategy Budgets» на `/ui/dashboard`.
+Мониторить состояние можно через `GET /api/ui/strategy_budget` (роли `viewer`
+и `auditor` имеют read-only доступ — auditor видит весь бюджет без права
+управления) и новую таблицу «Strategy Budgets» на `/ui/dashboard`.
 Там отображается текущий notional и количество открытых позиций против лимитов,
 а исчерпанные бюджеты подсвечиваются красным.
 
@@ -121,8 +122,8 @@ notional'а, например:
 ручек) возвращает агрегированное состояние подключённых бирж. Каждая запись в
 ответе содержит флаги `reachable`/`rate_limited`, отметку `last_ok_ts`
 (`float` с timestamp последнего успешного запроса) и текст `error`, если
-клиент недавно упал. Роль `viewer` имеет read-only доступ, `operator` видит тот
-же JSON.
+клиент недавно упал. Роли `viewer` и `auditor` имеют read-only доступ,
+`operator` видит тот же JSON.
 
 Watchdog — единый источник правды о живости Binance и OKX. Он не выполняет
 сетевых проверок сам по себе и не гасит торговлю автоматически: это каркас,
@@ -294,8 +295,15 @@ below:
   `BINANCE_API_SECRET`, `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_API_PASSPHRASE`), что
   упрощает локальную разработку. Для OKX добавьте поле `"okx_passphrase"` в JSON,
   если нужно хранить passphrase рядом с ключами.
-- Вводятся роли операторов: `viewer` (только просмотр) и `operator`
-  (привилегированные действия). Проверки прав выполняет `app/rbac.py`.
+- Вводятся роли операторов:
+  - `viewer` — базовый read-only доступ для наблюдения за режимом и здоровьем
+    сервисов без глубоких отчётов.
+  - `auditor` — ревизор: видит `/ui/dashboard`, `ops_report`,
+    `audit_snapshot`, бюджеты, PnL и аудит, но не может инициировать HOLD,
+    RESUME, UNFREEZE, KILL и не обязан иметь доступ к чувствительным ключам.
+  - `operator` — полный доступ к управлению ботом, включая все защищённые
+    POST-ручки и двухоператорный флоу.
+  Проверки прав выполняет `app/rbac.py`.
 - Любые привилегированные действия должны записываться в аудит через
   `app/audit_log.log_operator_action`, чтобы фиксировать, кто и откуда инициировал
   операцию. Логи сохраняются в `data/audit.log`.
@@ -488,8 +496,9 @@ flow to clear HOLD.
 - Новый read-only отчёт `GET /api/ui/ops_report` агрегирует режим runtime,
   SAFE_MODE/DRY_RUN/автопилот, статус двухфакторного RESUME, экспозиции,
   снапшот `StrategyRiskManager` (freeze/enable per strategy) и последние
-  операторские действия/alerts. Эндпоинт доступен и `viewer` токенам — для
-  комплаенса и пост-моратория без эскалации привилегий.
+  операторские действия/alerts. Эндпоинт доступен токенам `viewer` и
+  `auditor` — для комплаенса, пост-моратория и ревизии без эскалации
+  привилегий.
 - Для экспорта в Excel/архив используйте `GET /api/ui/ops_report.csv` — тот же
   отчёт в стабильном CSV (`content-type: text/csv`) с секциями runtime, стратегий
   и аудита. Поддерживает те же bearer-токены, что и JSON.
@@ -590,8 +599,9 @@ profiles and keep `.env` outside version control.
   `AUTH_ENABLED=true`.
 - Aggregates runtime state from `runtime_state.json`, the in-memory safety
   controller, hedge positions store, and the persistent two-man approvals queue.
-- Shows the authenticated operator name and role badge (viewer vs operator) so
-  the desk immediately sees whether HOLD/RESUME actions are available.
+- Shows the authenticated operator name and role badge (viewer vs
+  auditor vs operator) so the desk immediately sees whether HOLD/RESUME
+  actions are available.
 - Shows build version, current HOLD status with reason/since timestamp,
   SAFE_MODE and DRY_RUN flags, runaway guard counters/limits, and the latest
   auto-hedge status (`enabled`, last success timestamp, consecutive failures,
@@ -616,8 +626,10 @@ profiles and keep `.env` outside version control.
   and call the existing `/api/ui/hold`, `/api/ui/resume-request`, and
   `/api/ui/unfreeze-strategy` logic. HOLD/RESUME/UNFREEZE actions therefore stay
   behind the same RBAC/two-man protections while remaining usable from the
-  browser. The kill switch form still proxies to `/ui/dashboard/kill` (no JSON
-  payload required).
+  browser. Auditor accounts see a dedicated "auditor role: read only" banner
+  and the control block is hidden entirely so they cannot submit HOLD/RESUME or
+  KILL forms. The kill switch form still proxies to `/ui/dashboard/kill` (no
+  JSON payload required).
 - The Strategy Risk table now highlights each strategy’s risk state:
   `active`, `blocked_by_risk`, or `frozen_by_risk` (red badges for frozen or
   blocked strategies, green for active). Consecutive failure counters are shown
