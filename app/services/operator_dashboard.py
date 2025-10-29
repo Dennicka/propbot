@@ -11,6 +11,7 @@ from fastapi import Request
 from ..opsbot import notifier
 from ..runtime_state_store import load_runtime_payload
 from ..version import APP_VERSION
+from ..orchestrator import orchestrator as strategy_orchestrator
 from .approvals_store import list_requests as list_pending_requests
 from .audit_log import list_recent_events
 from . import risk_alerts, risk_guard
@@ -299,6 +300,11 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     reconciliation_status = get_reconciliation_status()
     autopilot_state = state.autopilot.as_dict()
 
+    try:
+        strategy_plan = strategy_orchestrator.compute_next_plan()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        strategy_plan = {"error": str(exc)}
+
     hold_info = {
         "hold_active": safety_payload.get("hold_active"),
         "hold_reason": safety_payload.get("hold_reason"),
@@ -357,6 +363,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "execution_quality": execution_quality,
         "daily_report": daily_report or {},
         "risk_snapshot": risk_snapshot,
+        "strategy_plan": strategy_plan,
     }
 
 
@@ -505,6 +512,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_attempt = autopilot.get("last_attempt_ts") or ""
     autopilot_armed = bool(autopilot.get("armed"))
 
+    strategy_plan = context.get("strategy_plan", {}) or {}
+    strategy_entries = strategy_plan.get("strategies") or []
+    strategy_plan_ts = strategy_plan.get("ts") or ""
+    strategy_plan_error = strategy_plan.get("error")
+    strategy_risk = strategy_plan.get("risk_gates") or {}
+
     risk_snapshot = context.get("risk_snapshot", {}) or {}
     risk_snapshot_total = risk_snapshot.get("total_notional_usd")
     risk_snapshot_partial = risk_snapshot.get("partial_hedges_count")
@@ -542,6 +555,17 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        ".strategy-orchestrator{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".strategy-orchestrator h2{margin-top:0;}"
+        ".strategy-orchestrator table{margin-top:1rem;}"
+        ".strategy-orchestrator-readonly{margin-bottom:0.75rem;font-weight:700;color:#b91c1c;}"
+        ".strategy-orchestrator .decision-run{color:#166534;font-weight:700;}"
+        ".strategy-orchestrator .decision-cooldown{color:#92400e;font-weight:700;}"
+        ".strategy-orchestrator .decision-skip{color:#1f2937;font-weight:700;}"
+        ".strategy-orchestrator .decision-skip-critical{color:#991b1b;font-weight:700;}"
+        ".strategy-orchestrator .reason-critical{color:#991b1b;font-weight:700;}"
+        ".strategy-orchestrator .reason-cooldown{color:#92400e;font-weight:600;}"
+        ".strategy-orchestrator .meta{font-size:0.9rem;color:#4b5563;margin-top:0.5rem;}"
         ".risk-snapshot{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".risk-snapshot h2{margin-top:0;}"
         ".risk-snapshot table{margin-top:1rem;}"
@@ -597,6 +621,76 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
     parts.append("".join(autopilot_html) + "</div>")
+
+    parts.append("<div class=\"strategy-orchestrator\"><h2>Strategy Orchestrator</h2>")
+    if not is_operator:
+        parts.append("<div class=\"strategy-orchestrator-readonly\">READ ONLY</div>")
+    if strategy_plan_error:
+        parts.append(
+            "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">"
+            f"Unable to compute plan: {_fmt(strategy_plan_error)}"
+            "</p>"
+        )
+    else:
+        if strategy_plan_ts:
+            parts.append(
+                f"<div class=\"meta\">Plan computed at <strong>{_fmt(strategy_plan_ts)}</strong></div>"
+            )
+        if strategy_risk:
+            risk_ok = bool(strategy_risk.get("risk_caps_ok", True))
+            if risk_ok:
+                risk_summary_html = (
+                    "<div class=\"meta\"><strong style=\"color:#166534;\">Risk gates: clear</strong></div>"
+                )
+            else:
+                reason_text = _fmt(strategy_risk.get("reason_if_blocked") or "blocked")
+                risk_summary_html = (
+                    "<div class=\"meta\"><strong style=\"color:#b91c1c;\">Risk gates blocking</strong>"
+                    f" — {reason_text}</div>"
+                )
+            parts.append(risk_summary_html)
+        parts.append(
+            "<table><thead><tr><th>Strategy</th><th>Decision</th><th>Reason</th><th>Last Result</th>"
+            "<th>Last Error</th><th>Last Run</th></tr></thead><tbody>"
+        )
+        if not strategy_entries:
+            parts.append("<tr><td colspan=\"6\">No strategies registered.</td></tr>")
+        else:
+            for entry in strategy_entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                name = _fmt(entry.get("name"))
+                decision_raw = str(entry.get("decision") or "").strip().lower()
+                reason_raw = str(entry.get("reason") or "")
+                decision_class = "decision-skip"
+                if decision_raw == "run":
+                    decision_class = "decision-run"
+                elif decision_raw == "cooldown":
+                    decision_class = "decision-cooldown"
+                elif decision_raw == "skip" and reason_raw in {"hold_active", "risk_limit"}:
+                    decision_class = "decision-skip-critical"
+                reason_class = ""
+                if decision_raw == "cooldown":
+                    reason_class = "reason-cooldown"
+                if decision_raw == "skip" and reason_raw in {"hold_active", "risk_limit"}:
+                    reason_class = "reason-critical"
+                decision_html = f"<span class=\"{decision_class}\">{_fmt(decision_raw or 'n/a')}</span>"
+                reason_html = (
+                    f"<span class=\"{reason_class}\">{_fmt(reason_raw)}</span>" if reason_class else _fmt(reason_raw)
+                )
+                parts.append(
+                    "<tr><td>{name}</td><td>{decision}</td><td>{reason}</td><td>{last_result}</td><td>{last_error}</td>"
+                    "<td>{last_run}</td></tr>".format(
+                        name=name,
+                        decision=decision_html,
+                        reason=reason_html,
+                        last_result=_fmt(entry.get("last_result")),
+                        last_error=_fmt(entry.get("last_error")),
+                        last_run=_fmt(entry.get("last_run_ts")),
+                    )
+                )
+        parts.append("</tbody></table>")
+    parts.append("</div>")
 
     if risk_throttled:
         reason_clause = (

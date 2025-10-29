@@ -19,6 +19,61 @@ def test_dashboard_requires_token(monkeypatch, client) -> None:
     assert response.status_code in {401, 403}
 
 
+def test_dashboard_strategy_orchestrator_plan(monkeypatch, tmp_path, client) -> None:
+    class DummyOrchestrator:
+        def compute_next_plan(self):
+            return {
+                "ts": "2024-01-02T03:04:05+00:00",
+                "risk_gates": {"risk_caps_ok": False, "reason_if_blocked": "hold_active"},
+                "strategies": [
+                    {
+                        "name": "cross_exchange_arb",
+                        "decision": "skip",
+                        "reason": "hold_active",
+                        "last_error": "blocked",
+                        "last_run_ts": "2024-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "name": "hedger",
+                        "decision": "cooldown",
+                        "reason": "recent_fail",
+                        "last_result": "error",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.strategy_orchestrator",
+        DummyOrchestrator(),
+    )
+
+    secrets_payload = {
+        "operator_tokens": {"viewer": {"token": "VVV", "role": "viewer"}},
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer VVV"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Strategy Orchestrator" in html
+    assert "cross_exchange_arb" in html
+    assert "decision-skip-critical\">skip" in html
+    assert "hold_active" in html
+    assert "decision-cooldown\">cooldown" in html
+    assert "recent_fail" in html
+    assert "strategy-orchestrator-readonly\">READ ONLY" in html
+
+
 def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:
     secrets_payload = {
         "operator_tokens": {
