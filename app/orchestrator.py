@@ -1,0 +1,221 @@
+from __future__ import annotations
+
+import os
+import threading
+import time
+from collections.abc import Mapping as ABCMapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Dict, Mapping, Optional
+
+from .runtime_state_store import load_runtime_payload
+from .services.runtime import get_state
+
+
+def _env_int(name: str) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _env_float(name: str) -> Optional[float]:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass
+class StrategyState:
+    name: str
+    cooldown_sec: int = 0
+    last_result: str | None = None
+    last_error: str | None = None
+    last_run_ts: float | None = None
+    cooldown_until: float | None = None
+    status_reason: str | None = None
+
+
+def check_risk_gates() -> Dict[str, object | None]:
+    """Aggregate runtime safety flags and basic risk-cap checks."""
+
+    state = get_state()
+    safety = getattr(state, "safety", None)
+    control = getattr(state, "control", None)
+    autopilot = getattr(state, "autopilot", None)
+
+    hold_active = bool(getattr(safety, "hold_active", False))
+    safe_mode = bool(getattr(control, "safe_mode", False))
+    dry_run_mode = bool(getattr(control, "dry_run_mode", False) or getattr(control, "dry_run", False))
+    autopilot_enabled = bool(getattr(autopilot, "enabled", False))
+
+    runtime_payload = load_runtime_payload()
+    positions_payload = runtime_payload.get("positions") if isinstance(runtime_payload, Mapping) else None
+
+    open_positions = 0
+    total_notional = 0.0
+
+    risk_snapshot = getattr(safety, "risk_snapshot", {}) if safety is not None else {}
+    if isinstance(risk_snapshot, Mapping):
+        snapshot_notional = risk_snapshot.get("total_notional_usd")
+        if isinstance(snapshot_notional, (int, float)):
+            total_notional = float(snapshot_notional)
+        per_venue = risk_snapshot.get("per_venue")
+        if isinstance(per_venue, Mapping):
+            counted = 0
+            for payload in per_venue.values():
+                if not isinstance(payload, Mapping):
+                    continue
+                count_value = payload.get("open_positions_count")
+                try:
+                    counted += int(float(count_value))
+                except (TypeError, ValueError):
+                    continue
+            if counted:
+                open_positions = counted
+
+    if open_positions == 0 or total_notional == 0.0:
+        if isinstance(positions_payload, list):
+            for entry in positions_payload:
+                if not isinstance(entry, ABCMapping):
+                    continue
+                status = str(entry.get("status") or "").lower()
+                if status not in {"open", "partial"}:
+                    continue
+                if bool(entry.get("simulated")):
+                    continue
+                open_positions += 1
+                legs = entry.get("legs")
+                if isinstance(legs, list):
+                    for leg in legs:
+                        if not isinstance(leg, ABCMapping):
+                            continue
+                        try:
+                            leg_notional = float(leg.get("notional_usdt") or 0.0)
+                        except (TypeError, ValueError):
+                            continue
+                        total_notional += abs(leg_notional)
+                else:
+                    try:
+                        total_notional += abs(float(entry.get("notional_usdt") or 0.0))
+                    except (TypeError, ValueError):
+                        continue
+
+    max_open_positions = _env_int("MAX_OPEN_POSITIONS")
+    max_total_notional = _env_float("MAX_TOTAL_NOTIONAL_USDT")
+
+    risk_caps_ok = True
+    reason_if_blocked: str | None = None
+
+    if hold_active or safe_mode:
+        risk_caps_ok = False
+        reason_if_blocked = "hold_active"
+    elif max_open_positions and max_open_positions > 0 and open_positions > max_open_positions:
+        risk_caps_ok = False
+        reason_if_blocked = "risk_limit"
+    elif max_total_notional and max_total_notional > 0 and total_notional > max_total_notional:
+        risk_caps_ok = False
+        reason_if_blocked = "risk_limit"
+
+    return {
+        "hold_active": hold_active,
+        "safe_mode": safe_mode,
+        "dry_run_mode": dry_run_mode,
+        "autopilot_enabled": autopilot_enabled,
+        "risk_caps_ok": risk_caps_ok,
+        "reason_if_blocked": reason_if_blocked,
+    }
+
+
+class StrategyOrchestrator:
+    """Simple in-memory registry of strategy execution state."""
+
+    def __init__(self, strategies: Optional[Mapping[str, int]] = None) -> None:
+        base_registry = strategies or {
+            "hedger": 5,
+            "cross_exchange_arb": 10,
+            "scanner": 15,
+        }
+        self._lock = threading.RLock()
+        self._strategies: Dict[str, StrategyState] = {
+            name: StrategyState(name=name, cooldown_sec=max(0, int(cooldown)))
+            for name, cooldown in base_registry.items()
+        }
+
+    def register_strategy(self, name: str, *, cooldown_sec: int = 0) -> None:
+        with self._lock:
+            self._strategies[name] = StrategyState(
+                name=name,
+                cooldown_sec=max(0, int(cooldown_sec)),
+            )
+
+    def compute_next_plan(self) -> Dict[str, object]:
+        with self._lock:
+            risk_summary = check_risk_gates()
+            now = time.time()
+            timestamp = datetime.now(timezone.utc).isoformat()
+            entries = []
+            for name, state in self._strategies.items():
+                decision = "run"
+                reason = "ok"
+
+                if not risk_summary.get("risk_caps_ok", True):
+                    decision = "skip"
+                    reason = str(risk_summary.get("reason_if_blocked") or "risk_blocked")
+                    state.status_reason = reason
+                elif state.cooldown_until and state.cooldown_until > now:
+                    decision = "cooldown"
+                    reason = state.status_reason or "cooldown_active"
+                else:
+                    state.status_reason = None
+                    if state.cooldown_until and state.cooldown_until <= now:
+                        state.cooldown_until = None
+
+                entry = {
+                    "name": name,
+                    "decision": decision,
+                    "reason": reason,
+                    "status_reason": state.status_reason,
+                    "last_result": state.last_result,
+                    "last_error": state.last_error,
+                    "last_run_ts": state.last_run_ts,
+                    "cooldown_sec": state.cooldown_sec,
+                }
+                if state.cooldown_until and state.cooldown_until > now:
+                    entry["cooldown_remaining_sec"] = max(0, int(state.cooldown_until - now))
+                entries.append(entry)
+            return {"strategies": entries, "ts": timestamp, "risk_gates": risk_summary}
+
+    def record_result(self, name: str, outcome: str, error: str | None = None) -> None:
+        outcome_norm = str(outcome).lower()
+        now = time.time()
+        with self._lock:
+            state = self._strategies.get(name)
+            if state is None:
+                state = StrategyState(name=name, cooldown_sec=0)
+                self._strategies[name] = state
+            state.last_result = outcome_norm
+            state.last_error = error if error is None else str(error)
+            state.last_run_ts = now
+            if outcome_norm != "ok":
+                state.status_reason = state.last_error or outcome_norm
+                if state.cooldown_sec > 0:
+                    state.cooldown_until = now + state.cooldown_sec
+            else:
+                state.status_reason = None
+                state.cooldown_until = None
+
+    def reset(self) -> None:
+        with self._lock:
+            for name, state in list(self._strategies.items()):
+                self._strategies[name] = StrategyState(name=name, cooldown_sec=state.cooldown_sec)
+
+
+orchestrator = StrategyOrchestrator()

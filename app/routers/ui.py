@@ -45,6 +45,7 @@ from ..secrets_store import SecretsStore
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
+from ..orchestrator import orchestrator
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
 from pnl_history_store import list_recent as list_recent_snapshots
@@ -244,6 +245,14 @@ async def risk_snapshot(request: Request) -> dict:
 
     require_token(request)
     return await build_risk_snapshot()
+
+
+@router.get("/orchestrator_plan")
+def orchestrator_plan(request: Request) -> dict:
+    """Expose the orchestrator's latest scheduling plan."""
+
+    require_token(request)
+    return orchestrator.compute_next_plan()
 
 
 @router.get("/pnl_history")
