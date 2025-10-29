@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -8,6 +9,7 @@ from app import ledger
 from app.broker.binance import BinanceTestnetBroker
 from app.services import runtime
 from app.services.runtime import get_state
+from app.secrets_store import reset_secrets_store_cache
 
 
 def test_ui_state_and_controls(client, monkeypatch):
@@ -280,7 +282,18 @@ def test_ui_state_uses_binance_account_when_testnet(client, monkeypatch):
     assert any(entry.get("venue_type") == "binance-testnet" for entry in exposures)
 
 
-def test_kill_switch_cancels_orders(client):
+def test_kill_switch_cancels_orders(client, monkeypatch, tmp_path):
+    secrets_payload = {
+        "operator_tokens": {"ops": {"token": "OPS", "role": "operator"}},
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("APPROVE_TOKEN", "ZZZ")
+    reset_secrets_store_cache()
+
     state = get_state()
     state.control.safe_mode = False
     order_id = ledger.record_order(
@@ -294,11 +307,31 @@ def test_kill_switch_cancels_orders(client):
         exchange_ts=None,
         idemp_key="kill-switch-order",
     )
-    resp = client.post("/api/ui/kill")
+    headers = {"Authorization": "Bearer OPS"}
+    kill_request = client.post(
+        "/api/ui/kill-request",
+        headers=headers,
+        json={"reason": "test", "requested_by": "ops"},
+    )
+    assert kill_request.status_code == 202
+    request_id = kill_request.json()["request_id"]
+
+    async def _fake_cancel_all_orders(venue=None):
+        return {"orders_cancelled": True, "order_ids": [order_id]}
+
+    monkeypatch.setattr("app.routers.ui.cancel_all_orders", _fake_cancel_all_orders)
+
+    resp = client.post(
+        "/api/ui/kill",
+        headers=headers,
+        json={"request_id": request_id, "token": "ZZZ"},
+    )
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["safe_mode"] is True
     assert payload["mode"] == "HOLD"
+    assert payload["request_id"] == request_id
+    reset_secrets_store_cache()
 
 
 def test_patch_control_rejects_in_live_or_unsafe(client):

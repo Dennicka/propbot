@@ -11,7 +11,11 @@ from fastapi.responses import HTMLResponse
 from ..dashboard_helpers import render_dashboard_response, resolve_operator
 from ..security import require_token
 from ..services.operator_dashboard import build_dashboard_context, render_dashboard_html
-from .ui import dashboard_hold_action, dashboard_resume_request_action, kill_switch as kill_action
+from .ui import (
+    dashboard_hold_action,
+    dashboard_kill_request_action,
+    dashboard_resume_request_action,
+)
 
 
 router = APIRouter()
@@ -77,8 +81,11 @@ async def dashboard_kill(
 ) -> HTMLResponse:
     form_data = _parse_form_payload(await request.body())
     operator = form_data.get("operator", "")
-    await kill_action(request)
-    operator_label = operator or "dashboard_ui"
-    message = f"Kill switch engaged by {operator_label}"
-    return await render_dashboard_response(request, token, message=message)
+    reason = form_data.get("reason", "")
+    return await dashboard_kill_request_action(
+        request,
+        token=token,
+        operator=operator,
+        reason=reason,
+    )
 

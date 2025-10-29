@@ -19,7 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, conint, conf
 from .. import ledger
 from ..audit_log import list_recent_operator_actions, log_operator_action
 from ..dashboard_helpers import render_dashboard_response
-from ..universe_manager import UniverseManager
 from ..version import APP_VERSION
 from ..capital_manager import get_capital_manager
 from ..pnl_report import DailyPnLReporter
@@ -47,7 +46,7 @@ from ..services.runtime import (
     set_mode,
     set_open_orders,
 )
-from ..services import portfolio, risk, risk_guard
+from ..services import approvals_store, portfolio, risk, risk_guard
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
@@ -62,6 +61,7 @@ from ..utils import redact_sensitive_data
 from ..utils.operators import OperatorIdentity, resolve_operator_identity
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
+from services.audit_snapshot import get_recent_audit_snapshot
 from services.daily_reporter import load_latest_report
 from services.snapshotter import create_snapshot
 
@@ -139,6 +139,26 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     return {"strategies": rows, "snapshot": snapshot}
 
 
+def _log_operator_event(
+    identity: OperatorIdentity | None,
+    action: str,
+    *,
+    status: str,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    name = "unknown"
+    role = "unknown"
+    if identity:
+        name, role = identity
+    details: Dict[str, Any] = {"status": status}
+    if extra:
+        for key, value in extra.items():
+            if key == "status":
+                continue
+            details[key] = value
+    log_operator_action(name, role, action, details=details)
+
+
 def _authorize_operator_action(request: Request, action: Action) -> Optional[OperatorIdentity]:
     if not is_auth_enabled():
         return None
@@ -147,30 +167,25 @@ def _authorize_operator_action(request: Request, action: Action) -> Optional[Ope
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
     identity = resolve_operator_identity(token)
     if not identity:
-        log_operator_action(
-            "unknown",
-            "unknown",
-            action,
-            details={"status": "forbidden"},
-        )
+        _log_operator_event(None, action, status="forbidden")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     name, role = identity
     if not can_execute_action(role, action):
-        log_operator_action(
-            name,
-            role,
-            action,
-            details={"status": "forbidden"},
-        )
+        _log_operator_event(identity, action, status="forbidden")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
     return identity
 
 
-def _log_operator_success(identity: Optional[OperatorIdentity], action: Action) -> None:
+def _log_operator_success(
+    identity: Optional[OperatorIdentity],
+    action: Action,
+    *,
+    status: str = "approved",
+    extra: Mapping[str, Any] | None = None,
+) -> None:
     if not identity:
         return
-    name, role = identity
-    log_operator_action(name, role, action, details={"status": "ok"})
+    _log_operator_event(identity, action, status=status, extra=extra)
 
 
 class HoldPayload(BaseModel):
@@ -228,11 +243,34 @@ class CloseExposurePayload(BaseModel):
     symbol: str | None = Field(default=None, description="Symbol of the position to flatten")
 
 
+class KillRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    reason: str | None = Field(default=None, description="Why the kill switch should be armed")
+    requested_by: str | None = Field(default=None, description="Operator initiating the request")
+
+
+class KillConfirmPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(..., min_length=1, description="Approval request identifier")
+    token: str = Field(..., min_length=1, description="Second-operator approval token")
+    actor: str | None = Field(default=None, description="Operator confirming the kill switch")
+
+
 class UnfreezeStrategyPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy: str = Field(..., min_length=1, description="Strategy identifier")
     reason: str = Field(..., min_length=1, description="Operator supplied reason")
+
+
+class UnfreezeStrategyConfirmPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(..., min_length=1, description="Approval request identifier")
+    token: str = Field(..., min_length=1, description="Second-operator approval token")
+    actor: str | None = Field(default=None, description="Operator confirming the unfreeze")
 
 
 class SetStrategyEnabledPayload(BaseModel):
@@ -736,7 +774,11 @@ async def hold(request: Request, payload: HoldPayload | None = None) -> dict:
     state = get_state()
     safety = get_safety_status()
     response = {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "safety": safety, "ts": _ts()}
-    _log_operator_success(identity, "HOLD")
+    _log_operator_success(
+        identity,
+        "HOLD",
+        extra={"reason": reason, "requested_by": requested_by or "ui"},
+    )
     return response
 
 
@@ -759,7 +801,7 @@ async def dashboard_hold_action(
 
 @router.post("/resume-request")
 async def resume_request(request: Request, payload: ResumeRequestPayload) -> dict:
-    identity = _authorize_operator_action(request, "RESUME")
+    identity = _authorize_operator_action(request, "RESUME_REQUEST")
     reason = payload.reason.strip()
     if not reason:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="reason_required")
@@ -780,7 +822,16 @@ async def resume_request(request: Request, payload: ResumeRequestPayload) -> dic
         "hold_active": True,
         "ts": _ts(),
     }
-    _log_operator_success(identity, "RESUME")
+    _log_operator_success(
+        identity,
+        "RESUME_REQUEST",
+        status="requested",
+        extra={
+            "reason": reason,
+            "request_id": request_snapshot.get("id"),
+            "requested_by": payload.requested_by or "ui",
+        },
+    )
     return response
 
 
@@ -807,9 +858,43 @@ async def dashboard_resume_request_action(
     )
 
 
+@router.post("/dashboard-kill", response_class=HTMLResponse)
+async def dashboard_kill_request_action(
+    request: Request,
+    token: str | None = Depends(_dashboard_token_dependency),
+    *,
+    operator: str = "",
+    reason: str = "",
+) -> HTMLResponse:
+    payload = KillRequestPayload(reason=reason or None, requested_by=operator or "dashboard_ui")
+    response = await kill_request(request, payload)
+    if isinstance(response, Response):
+        try:
+            result_payload = json.loads(response.body.decode("utf-8")) if response.body else {}
+        except json.JSONDecodeError:
+            result_payload = {}
+    else:
+        result_payload = dict(response)
+    request_id = result_payload.get("request_id")
+    message = "Kill switch request recorded"
+    if operator:
+        message += f" by {operator}"
+    if reason:
+        message += f" (reason: {reason})"
+    if request_id:
+        message += f"; approval id: {request_id}"
+    message += "; awaiting second-operator approval."
+    return await render_dashboard_response(
+        request,
+        token,
+        message=message,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+
+
 @router.post("/resume-confirm")
 async def resume_confirm(request: Request, payload: ResumeConfirmPayload) -> dict:
-    identity = _authorize_operator_action(request, "RESUME")
+    identity = _authorize_operator_action(request, "RESUME_APPROVE")
     if not is_hold_active():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="hold_not_active")
     safety_snapshot = get_safety_status()
@@ -818,8 +903,10 @@ async def resume_confirm(request: Request, payload: ResumeConfirmPayload) -> dic
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="resume_request_missing")
     expected_token = os.getenv("APPROVE_TOKEN")
     if not expected_token:
+        _log_operator_event(identity, "RESUME_APPROVE", status="denied", extra={"reason": "approve_token_missing"})
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
     if not secrets.compare_digest(payload.token, expected_token):
+        _log_operator_event(identity, "RESUME_APPROVE", status="denied", extra={"reason": "invalid_token"})
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
     request_id = resume_info.get("id") or resume_info.get("request_id")
     result = approve_resume(request_id=request_id, actor=payload.actor)
@@ -840,13 +927,17 @@ async def resume_confirm(request: Request, payload: ResumeConfirmPayload) -> dic
         "safety": safety,
         "ts": _ts(),
     }
-    _log_operator_success(identity, "RESUME")
+    _log_operator_success(
+        identity,
+        "RESUME_APPROVE",
+        extra={"request_id": request_id, "reason": resume_info.get("reason"), "hold_cleared": result.get("hold_cleared", False)},
+    )
     return response
 
 
 @router.post("/resume")
 async def resume(request: Request) -> dict:
-    identity = _authorize_operator_action(request, "RESUME")
+    identity = _authorize_operator_action(request, "RESUME_EXECUTE")
     if is_hold_active():
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="hold_active")
     state = get_state()
@@ -859,7 +950,7 @@ async def resume(request: Request) -> dict:
     state = get_state()
     safety = get_safety_status()
     response = {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "ts": _ts()}
-    _log_operator_success(identity, "RESUME")
+    _log_operator_success(identity, "RESUME_EXECUTE", extra={"source": "manual_resume"})
     return response
 
 
@@ -917,9 +1008,7 @@ async def cancel_all(request: Request, payload: CancelAllPayload | None = None) 
     return result
 
 
-@router.post("/kill")
-async def kill_switch(request: Request) -> dict:
-    identity = _authorize_operator_action(request, "KILL")
+async def _execute_kill(*, reason: str | None = None, request_id: str | None = None) -> dict[str, Any]:
     state = get_state()
     state.control.safe_mode = True
     set_mode("HOLD")
@@ -930,16 +1019,87 @@ async def kill_switch(request: Request) -> dict:
         safety = get_safety_status()
         detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
-    ledger.record_event(level="CRITICAL", code="kill_switch", payload=result)
-    _emit_ops_alert("kill_switch", "Kill switch engaged", result)
+    event_payload = dict(result)
+    if reason:
+        event_payload["reason"] = reason
+    if request_id:
+        event_payload["request_id"] = request_id
+    ledger.record_event(level="CRITICAL", code="kill_switch", payload=event_payload)
+    _emit_ops_alert("kill_switch", "Kill switch engaged", event_payload)
     risk.refresh_runtime_state()
-    response = {
+    response: dict[str, Any] = {
         "ts": _ts(),
         "result": result,
         "safe_mode": True,
         "mode": state.control.mode,
     }
-    _log_operator_success(identity, "KILL")
+    if reason:
+        response["reason"] = reason
+    if request_id:
+        response["request_id"] = request_id
+    return response
+
+
+@router.post("/kill-request")
+async def kill_request(request: Request, payload: KillRequestPayload | None = None) -> dict[str, Any]:
+    identity = _authorize_operator_action(request, "KILL_REQUEST")
+    reason = ""
+    requested_by = None
+    if payload:
+        reason = (payload.reason or "").strip()
+        requested_by = (payload.requested_by or "").strip() or None
+    operator_name = identity[0] if identity else None
+    record = approvals_store.create_request(
+        "kill_switch",
+        requested_by=requested_by or operator_name,
+        parameters={"reason": reason} if reason else {},
+    )
+    _log_operator_success(
+        identity,
+        "KILL_REQUEST",
+        status="requested",
+        extra={"reason": reason, "request_id": record.get("id"), "requested_by": requested_by or operator_name},
+    )
+    response_payload = {
+        "status": "pending",
+        "request_id": record.get("id"),
+        "action": record.get("action"),
+        "reason": reason,
+    }
+    return JSONResponse(response_payload, status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post("/kill")
+@router.post("/kill-confirm")
+async def kill_switch(request: Request, payload: KillConfirmPayload) -> dict:
+    identity = _authorize_operator_action(request, "KILL_APPROVE")
+    expected_token = os.getenv("APPROVE_TOKEN")
+    if not expected_token:
+        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "approve_token_missing"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
+    if not secrets.compare_digest(payload.token, expected_token):
+        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "invalid_token"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    try:
+        record = approvals_store.approve_request(payload.request_id, actor=payload.actor)
+    except KeyError as exc:
+        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "request_not_found", "request_id": payload.request_id})
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request_not_found") from exc
+    except ValueError as exc:
+        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "request_not_pending", "request_id": payload.request_id})
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="request_not_pending") from exc
+    parameters = record.get("parameters") if isinstance(record, Mapping) else {}
+    reason = None
+    if isinstance(parameters, Mapping):
+        raw_reason = parameters.get("reason")
+        if isinstance(raw_reason, str):
+            reason = raw_reason
+    response = await _execute_kill(reason=reason, request_id=str(record.get("id")))
+    _log_operator_success(
+        identity,
+        "KILL_APPROVE",
+        extra={"request_id": record.get("id"), "reason": reason},
+    )
     return response
 
 
@@ -968,56 +1128,88 @@ async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
 
 
 @router.post("/unfreeze-strategy")
-def unfreeze_strategy(payload: UnfreezeStrategyPayload, request: Request) -> dict[str, object]:
-    action_label = "STRATEGY_UNFREEZE_MANUAL"
-    if not is_auth_enabled():
-        operator_name = "local-dev"
-        role = "operator"
-    else:
-        token = require_token(request)
-        if token is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
-        identity = resolve_operator_identity(token)
-        if not identity:
-            log_operator_action(
-                "unknown",
-                "unknown",
-                action_label,
-                details={
-                    "strategy": payload.strategy,
-                    "reason": payload.reason,
-                    "status": "forbidden",
-                },
-            )
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
-        operator_name, role = identity
-        if role != "operator":
-            log_operator_action(
-                operator_name,
-                role,
-                action_label,
-                details={
-                    "strategy": payload.strategy,
-                    "reason": payload.reason,
-                    "status": "forbidden",
-                },
-            )
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+def unfreeze_strategy_request(payload: UnfreezeStrategyPayload, request: Request) -> Response:
+    identity = _authorize_operator_action(request, "UNFREEZE_STRATEGY_REQUEST")
+    strategy = payload.strategy.strip()
+    reason = payload.reason.strip()
+    operator_name = identity[0] if identity else None
+    record = approvals_store.create_request(
+        "unfreeze_strategy",
+        requested_by=operator_name,
+        parameters={"strategy": strategy, "reason": reason},
+    )
+    _log_operator_success(
+        identity,
+        "UNFREEZE_STRATEGY_REQUEST",
+        status="requested",
+        extra={"strategy": strategy, "reason": reason, "request_id": record.get("id")},
+    )
+    payload_out = {
+        "status": "pending",
+        "request_id": record.get("id"),
+        "strategy": strategy,
+        "reason": reason,
+    }
+    return JSONResponse(payload_out, status_code=status.HTTP_202_ACCEPTED)
 
+
+@router.post("/unfreeze-strategy/confirm")
+def unfreeze_strategy_confirm(payload: UnfreezeStrategyConfirmPayload, request: Request) -> dict[str, object]:
+    identity = _authorize_operator_action(request, "UNFREEZE_STRATEGY_APPROVE")
+    expected_token = os.getenv("APPROVE_TOKEN")
+    if not expected_token:
+        _log_operator_event(identity, "UNFREEZE_STRATEGY_APPROVE", status="denied", extra={"reason": "approve_token_missing"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
+    if not secrets.compare_digest(payload.token, expected_token):
+        _log_operator_event(identity, "UNFREEZE_STRATEGY_APPROVE", status="denied", extra={"reason": "invalid_token"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    try:
+        record = approvals_store.approve_request(payload.request_id, actor=payload.actor)
+    except KeyError as exc:
+        _log_operator_event(
+            identity,
+            "UNFREEZE_STRATEGY_APPROVE",
+            status="denied",
+            extra={"reason": "request_not_found", "request_id": payload.request_id},
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request_not_found") from exc
+    except ValueError as exc:
+        _log_operator_event(
+            identity,
+            "UNFREEZE_STRATEGY_APPROVE",
+            status="denied",
+            extra={"reason": "request_not_pending", "request_id": payload.request_id},
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="request_not_pending") from exc
+    parameters = record.get("parameters") if isinstance(record, Mapping) else {}
+    if not isinstance(parameters, Mapping):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="missing_parameters")
+    strategy = parameters.get("strategy")
+    reason = parameters.get("reason") or ""
+    if not isinstance(strategy, str) or not strategy:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_strategy")
     manager = get_strategy_risk_manager()
+    operator_name, role = identity or ("unknown", "unknown")
     manager.unfreeze_strategy(
-        payload.strategy,
+        strategy,
         operator_name=operator_name,
         role=role,
-        reason=payload.reason,
+        reason=str(reason),
     )
-    snapshot = manager.check_limits(payload.strategy)
-    return {
-        "status": "ok",
-        "strategy": payload.strategy,
-        "frozen": manager.is_frozen(payload.strategy),
+    snapshot = manager.check_limits(strategy)
+    response = {
+        "status": "approved",
+        "strategy": strategy,
+        "frozen": manager.is_frozen(strategy),
         "snapshot": snapshot.get("snapshot", {}),
+        "request_id": record.get("id"),
     }
+    _log_operator_success(
+        identity,
+        "UNFREEZE_STRATEGY_APPROVE",
+        extra={"strategy": strategy, "reason": reason, "request_id": record.get("id")},
+    )
+    return response
 
 
 @router.post("/set-strategy-enabled")
@@ -1049,42 +1241,8 @@ async def set_strategy_enabled(request: Request) -> dict[str, object]:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=exc.errors(),
         ) from exc
-    action_label = "STRATEGY_MANUAL_ENABLE" if payload.enabled else "STRATEGY_MANUAL_DISABLE"
-    if not is_auth_enabled():
-        operator_name = "local-dev"
-        role = "operator"
-    else:
-        token = require_token(request)
-        if token is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
-        identity = resolve_operator_identity(token)
-        if not identity:
-            log_operator_action(
-                "unknown",
-                "unknown",
-                action_label,
-                details={
-                    "strategy": payload.strategy,
-                    "enabled": payload.enabled,
-                    "reason": payload.reason,
-                    "status": "forbidden",
-                },
-            )
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
-        operator_name, role = identity
-        if role != "operator":
-            log_operator_action(
-                operator_name,
-                role,
-                action_label,
-                details={
-                    "strategy": payload.strategy,
-                    "enabled": payload.enabled,
-                    "reason": payload.reason,
-                    "status": "forbidden",
-                },
-            )
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    identity = _authorize_operator_action(request, "SET_STRATEGY_ENABLED")
+    operator_name, role = identity or ("local-dev", "operator")
 
     manager = get_strategy_risk_manager()
     manager.set_enabled(
@@ -1096,7 +1254,7 @@ async def set_strategy_enabled(request: Request) -> dict[str, object]:
     )
     snapshot = manager.check_limits(payload.strategy)
     state_snapshot = snapshot.get("snapshot", {}) or {}
-    return {
+    response = {
         "status": "ok",
         "strategy": payload.strategy,
         "enabled": manager.is_enabled(payload.strategy),
@@ -1106,6 +1264,16 @@ async def set_strategy_enabled(request: Request) -> dict[str, object]:
         "snapshot": state_snapshot,
         "limits": snapshot.get("limits", {}),
     }
+    _log_operator_success(
+        identity,
+        "SET_STRATEGY_ENABLED",
+        extra={
+            "strategy": payload.strategy,
+            "enabled": payload.enabled,
+            "reason": payload.reason,
+        },
+    )
+    return response
 
 
 @router.post("/dashboard-unfreeze-strategy", response_class=HTMLResponse)
@@ -1117,94 +1285,45 @@ async def dashboard_unfreeze_strategy_action(
     strategy = form_data.get("strategy", "")
     reason = form_data.get("reason", "")
     payload = UnfreezeStrategyPayload(strategy=strategy, reason=reason)
-    result = unfreeze_strategy(payload, request)
-    frozen = bool(result.get("frozen"))
-    snapshot = result.get("snapshot", {}) or {}
-    failures = snapshot.get("consecutive_failures")
-    if frozen:
-        message = f"Strategy {strategy} remains frozen — investigate risk counters."
+    response = unfreeze_strategy_request(payload, request)
+    if isinstance(response, Response):
+        try:
+            result_payload = json.loads(response.body.decode("utf-8")) if response.body else {}
+        except json.JSONDecodeError:
+            result_payload = {}
     else:
-        message = f"Strategy {strategy} unfrozen"
-    message += f" (reason: {reason})"
-    if failures is not None:
-        message += f"; consecutive_failures={failures}"
-    return await render_dashboard_response(request, token, message=message)
+        result_payload = dict(response)
+    request_id = result_payload.get("request_id")
+    message = f"Unfreeze request logged for {strategy}"
+    if reason:
+        message += f" (reason: {reason})"
+    if request_id:
+        message += f"; approval id: {request_id}"
+    message += "; awaiting second-operator approval."
+    return await render_dashboard_response(
+        request,
+        token,
+        message=message,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
 
 
 @router.get("/audit_snapshot")
-async def audit_snapshot(request: Request) -> dict[str, Any]:
-    require_token(request)
-    state = get_state()
-    safety = get_safety_status()
-    control_state = control_as_dict()
-    autopilot_state = getattr(state, "autopilot", None)
-    autopilot_payload: dict[str, Any] = {}
-    if hasattr(autopilot_state, "as_dict") and callable(autopilot_state.as_dict):
-        autopilot_payload = autopilot_state.as_dict()
-
-    positions_source = list_positions()
-    positions_snapshot = await build_positions_snapshot(state, positions_source)
-    positions_payload = {
-        "positions": positions_snapshot.get("positions", []),
-        "exposure": positions_snapshot.get("exposure", {}),
-        "totals": positions_snapshot.get("totals", {}),
-    }
-    positions_list = positions_payload["positions"]
-    open_positions = len(positions_list)
-    partial_positions = sum(
-        1
-        for entry in positions_list
-        if str(entry.get("status") or "").lower() in {"partial", "partially_filled"}
-    )
-
-    strategy_snapshot = get_strategy_risk_manager().full_snapshot()
-
-    universe_manager = UniverseManager()
-    allowed_symbols: dict[str, list[str]] = {}
-    derivatives = getattr(universe_manager, "_derivatives", None)
-    venues = getattr(derivatives, "venues", {}) if derivatives else {}
-    for venue, runtime in (venues or {}).items():
-        config = getattr(runtime, "config", None)
-        symbols = list(getattr(config, "symbols", []) or [])
-        if symbols:
-            allowed_symbols[venue] = symbols
-    universe_snapshot = {
-        "candidates": list(UniverseManager.CANDIDATES),
-        "top_pairs": universe_manager.top_pairs(),
-        "allowed_symbols": allowed_symbols,
-    }
-
-    safety_snapshot = {
-        "hold_active": bool(safety.get("hold_active")),
-        "hold_reason": safety.get("hold_reason"),
-        "hold_since": safety.get("hold_since"),
-        "resume_request": safety.get("resume_request"),
-        "last_released_ts": safety.get("last_released_ts"),
-    }
-    control_snapshot = {
-        "mode": getattr(state.control, "mode", None),
-        "safe_mode": bool(control_state.get("safe_mode")),
-        "dry_run": bool(control_state.get("dry_run_mode") or control_state.get("dry_run")),
-        "two_man_rule": bool(control_state.get("two_man_rule")),
-        "auto_loop": bool(control_state.get("auto_loop")),
-    }
-
-    exposure_snapshot = positions_snapshot.get("exposure", {})
-    totals_snapshot = positions_snapshot.get("totals", {})
-
+async def audit_snapshot(request: Request, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+    token = require_token(request)
+    if token is not None:
+        identity = resolve_operator_identity(token)
+        if not identity:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        _, role = identity
+        if role not in {"viewer", "auditor", "operator"}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    entries = get_recent_audit_snapshot(limit=limit)
     return {
+        "entries": entries,
+        "count": len(entries),
+        "limit": limit,
         "build_version": APP_VERSION,
-        "hold_active": safety_snapshot["hold_active"],
-        "control": control_snapshot,
-        "safety": safety_snapshot,
-        "autopilot": autopilot_payload,
-        "positions": positions_payload,
-        "open_positions": open_positions,
-        "partial_positions": partial_positions,
-        "exposure": exposure_snapshot,
-        "totals": totals_snapshot,
-        "strategy_risk": strategy_snapshot,
-        "universe": universe_snapshot,
     }
 
 

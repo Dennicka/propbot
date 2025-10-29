@@ -328,16 +328,25 @@ below:
   если нужно хранить passphrase рядом с ключами.
 - Вводятся роли операторов:
   - `viewer` — базовый read-only доступ для наблюдения за режимом и здоровьем
-    сервисов без глубоких отчётов.
+    сервисов. Управляющие формы в дэшборде не рендерятся.
   - `auditor` — ревизор: видит `/ui/dashboard`, `ops_report`,
-    `audit_snapshot`, бюджеты, PnL и аудит, но не может инициировать HOLD,
-    RESUME, UNFREEZE, KILL и не обязан иметь доступ к чувствительным ключам.
+    `audit_snapshot`, бюджеты, PnL, risk/freeze и audit trail, но не может
+    инициировать HOLD, RESUME, UNFREEZE, KILL и не обязан иметь доступ к
+    чувствительным ключам.
   - `operator` — полный доступ к управлению ботом, включая все защищённые
     POST-ручки и двухоператорный флоу.
   Проверки прав выполняет `app/rbac.py`.
-- Любые привилегированные действия должны записываться в аудит через
+- Все критические действия (`RESUME`, снятие HOLD, kill-switch / cancel-all,
+  `UNFREEZE_STRATEGY`) проходят двухшаговый approval: оператор A создаёт
+  запрос (`/api/ui/*-request`), оператор B подтверждает через
+  `/api/ui/*-confirm` с `APPROVE_TOKEN`. Dashboard использует только эти
+  безопасные wrapper-ручки и отображает статус "ожидает второго
+  подтверждения".
+- Любые привилегированные действия пишутся в аудит через
   `app/audit_log.log_operator_action`, чтобы фиксировать, кто и откуда инициировал
-  операцию. Логи сохраняются в `data/audit.log`.
+  операцию. Логи сохраняются в `data/audit.log`, а `/api/ui/audit_snapshot`
+  возвращает последние записи с пометкой `status` (`requested` / `approved` /
+  `denied` / `forbidden`) для всех ролей.
 
 ## Secrets & Rotation Policy
 
@@ -659,8 +668,9 @@ profiles and keep `.env` outside version control.
   behind the same RBAC/two-man protections while remaining usable from the
   browser. Auditor accounts see a dedicated "auditor role: read only" banner
   and the control block is hidden entirely so they cannot submit HOLD/RESUME or
-  KILL forms. The kill switch form still proxies to `/ui/dashboard/kill` (no
-  JSON payload required).
+  KILL forms. The kill switch form now posts to `/api/ui/dashboard-kill` and
+  records a request that still requires second-operator approval via
+  `/api/ui/kill` with `APPROVE_TOKEN`.
 - The Strategy Risk table now highlights each strategy’s risk state:
   `active`, `blocked_by_risk`, or `frozen_by_risk` (red badges for frozen or
   blocked strategies, green for active). Consecutive failure counters are shown

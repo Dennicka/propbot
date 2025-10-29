@@ -57,8 +57,8 @@ def test_auditor_read_only_access(monkeypatch, tmp_path, client):
     )
     assert operator_hold.status_code == 200
 
-    assert ("auditor_user", "auditor", "HOLD", {"status": "forbidden"}) in calls
-    assert any(entry == ("operator_user", "operator", "HOLD", {"status": "ok"}) for entry in calls)
+    assert any(entry[:3] == ("auditor_user", "auditor", "HOLD") and entry[3]["status"] == "forbidden" for entry in calls)
+    assert any(entry[:3] == ("operator_user", "operator", "HOLD") and entry[3]["status"] == "approved" for entry in calls)
 
     # Auditor dashboard is read-only and hides control forms
     dashboard = client.get("/ui/dashboard", headers=auditor_headers)
@@ -67,6 +67,6 @@ def test_auditor_read_only_access(monkeypatch, tmp_path, client):
     assert "Auditor role: read only" in html
     assert "/api/ui/dashboard-hold" not in html
     assert "/api/ui/dashboard-resume-request" not in html
-    assert "/ui/dashboard/kill" not in html
+    assert "/api/ui/dashboard-kill" not in html
 
     reset_secrets_store_cache()

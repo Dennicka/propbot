@@ -99,8 +99,34 @@ def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:
     html = response.text
     assert "READ ONLY: you cannot change HOLD/RESUME/KILL." in html
     assert "role-badge role-viewer" in html
-    assert html.count("button type=\"submit\"") >= 3
-    assert "button type=\"submit\" disabled" in html
+    assert "form method=\"post\"" not in html
+
+
+def test_dashboard_auditor_read_only(monkeypatch, tmp_path, client) -> None:
+    secrets_payload = {
+        "operator_tokens": {
+            "alice": {"token": "AAA", "role": "operator"},
+            "carol": {"token": "CCC", "role": "auditor"},
+        },
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer CCC"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Auditor role: read only" in html
+    assert "role-badge role-auditor" in html
+    assert "form method=\"post\"" not in html
 
 
 def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
@@ -420,7 +446,7 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "Pending Approvals" in html
     assert "Controls" in html
     assert "Request RESUME" in html
-    assert "Emergency CANCEL ALL" in html
+    assert "Request emergency CANCEL ALL" in html
     assert "OUTSTANDING RISK" in html
     assert "SIMULATED" in html
     assert "NEAR LIMIT" in html
@@ -437,7 +463,7 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "form method=\"post\" action=\"/api/ui/dashboard-hold\"" in html
     assert "form method=\"post\" action=\"/api/ui/dashboard-resume-request\"" in html
     assert "form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"" in html
-    assert "form method=\"post\" action=\"/ui/dashboard/kill\"" in html
+    assert "form method=\"post\" action=\"/api/ui/dashboard-kill\"" in html
     assert "button type=\"submit\" disabled" not in html
 
     assert "Risk &amp; PnL trend" in html
@@ -568,8 +594,10 @@ def test_dashboard_proxy_routes(monkeypatch, client) -> None:
         headers=headers,
         data={"strategy": "cross_exchange_arb", "reason": "manual override"},
     )
-    assert unfreeze_response.status_code == 200
-    assert "Strategy cross_exchange_arb" in unfreeze_response.text
+    assert unfreeze_response.status_code == 202
+    assert "Unfreeze request logged" in unfreeze_response.text
+    approvals = approvals_store.list_requests()
+    assert any(entry.get("action") == "unfreeze_strategy" for entry in approvals)
 
 
 def test_dashboard_renders_execution_quality(monkeypatch, client) -> None:

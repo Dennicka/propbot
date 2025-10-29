@@ -150,13 +150,25 @@ def test_unfreeze_endpoint_enforces_operator_role(monkeypatch, tmp_path, client)
     assert viewer_response.status_code == 403
     assert manager.is_frozen("test_strategy") is True
 
-    operator_response = client.post(
+    monkeypatch.setenv("APPROVE_TOKEN", "APPROVE")
+
+    operator_request = client.post(
         "/api/ui/unfreeze-strategy",
         json={"strategy": "test_strategy", "reason": "operator override"},
         headers={"Authorization": "Bearer OPER"},
     )
-    assert operator_response.status_code == 200
-    payload = operator_response.json()
+    assert operator_request.status_code == 202
+    request_id = operator_request.json()["request_id"]
+    assert manager.is_frozen("test_strategy") is True
+
+    confirm_response = client.post(
+        "/api/ui/unfreeze-strategy/confirm",
+        json={"request_id": request_id, "token": "APPROVE", "actor": "oper"},
+        headers={"Authorization": "Bearer OPER"},
+    )
+    assert confirm_response.status_code == 200
+    payload = confirm_response.json()
+    assert payload["status"] == "approved"
     assert payload["frozen"] is False
     assert manager.is_frozen("test_strategy") is False
     assert any(call["action"] == "STRATEGY_UNFREEZE_MANUAL" for call in calls)
@@ -196,17 +208,10 @@ def test_set_strategy_enabled_requires_operator_role(monkeypatch, tmp_path, clie
     assert response.status_code == 403
     manager = get_strategy_risk_manager()
     assert manager.is_enabled("cross_exchange_arb") is True
-    assert (
-        "viewer",
-        "viewer",
-        "STRATEGY_MANUAL_DISABLE",
-        {
-            "strategy": "cross_exchange_arb",
-            "enabled": False,
-            "reason": "viewer attempt",
-            "status": "forbidden",
-        },
-    ) in calls
+    assert any(
+        entry == ("viewer", "viewer", "SET_STRATEGY_ENABLED", {"status": "forbidden"})
+        for entry in calls
+    )
 
 
 def test_operator_toggle_strategy_execution(monkeypatch, tmp_path, client) -> None:
