@@ -516,6 +516,19 @@ def test_dashboard_shows_risk_throttle_banner(monkeypatch, client) -> None:
     assert "Manual two-step RESUME approval required" in html
 
 
+def test_dashboard_shows_exchange_watchdog_reason(monkeypatch, client) -> None:
+    runtime.reset_for_tests()
+    runtime.engage_safety_hold("exchange_watchdog:binance unreachable", source="pytest")
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+
+    response = client.get("/ui/dashboard")
+
+    assert response.status_code == 200
+    html = response.text.lower()
+    assert "exchange watchdog" in html
+    assert "binance unreachable" in html
+
+
 def test_dashboard_proxy_routes(monkeypatch, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "dashboard-token")

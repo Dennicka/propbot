@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 import threading
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
+from ..audit_log import log_operator_action
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
+from ..exchange_watchdog import get_exchange_watchdog
 from ..runtime_state_store import (
     load_runtime_payload as _store_load_runtime_payload,
     write_runtime_payload as _store_write_runtime_payload,
@@ -1048,6 +1050,57 @@ def register_order_attempt(delta: int = 1, *, reason: str, source: str) -> None:
 
 def register_cancel_attempt(delta: int = 1, *, reason: str, source: str) -> None:
     _register_action_counter("cancels", delta, reason=reason, source=source)
+
+
+def _exchange_watchdog_detail(exchange: str, entry: Mapping[str, Any] | None) -> str:
+    label = str(exchange or "").strip() or "exchange"
+    lowered = label.lower()
+    if not entry:
+        return f"{lowered} unavailable"
+    reachable = bool(entry.get("reachable"))
+    rate_limited = bool(entry.get("rate_limited"))
+    error_text = str(entry.get("error") or "").strip()
+    if not reachable:
+        detail = error_text or "unreachable"
+    elif rate_limited:
+        detail = error_text or "ratelimit"
+    else:
+        detail = error_text or "degraded"
+    summary = f"{lowered} {detail}".strip()
+    return summary or lowered
+
+
+def evaluate_exchange_watchdog(*, context: str = "runtime") -> str | None:
+    """Engage HOLD when the exchange watchdog reports a critical failure."""
+
+    watchdog = get_exchange_watchdog()
+    snapshot = watchdog.get_state()
+    for exchange in ("binance", "okx"):
+        if not watchdog.is_critical(exchange):
+            continue
+        entry = snapshot.get(exchange, {}) if isinstance(snapshot, Mapping) else {}
+        reason_detail = _exchange_watchdog_detail(exchange, entry)
+        hold_reason = f"exchange_watchdog:{reason_detail}"
+        with _STATE_LOCK:
+            previous_reason = _STATE.safety.hold_reason or ""
+        engaged = engage_safety_hold(hold_reason, source=f"exchange_watchdog:{exchange}")
+        if engaged or previous_reason != hold_reason:
+            details: Dict[str, object] = {
+                "exchange": exchange,
+                "context": context,
+                "reason": reason_detail,
+                "hold_reason": hold_reason,
+            }
+            if isinstance(entry, Mapping):
+                details["watchdog"] = {str(k): v for k, v in entry.items()}
+            log_operator_action(
+                "system",
+                "system",
+                "AUTO_HOLD_BY_EXCHANGE_WATCHDOG",
+                details=details,
+            )
+        return hold_reason
+    return None
 
 
 def update_clock_skew(skew_seconds: float | None, *, source: str = "clock_skew_checker") -> None:

@@ -220,6 +220,9 @@ async def validate(*, context: str = "runtime") -> Optional[str]:
     """Validate risk posture and engage HOLD when limits are breached."""
 
     state = runtime.get_state()
+    watchdog_reason = runtime.evaluate_exchange_watchdog(context=context)
+    if watchdog_reason:
+        return watchdog_reason
     limits = _load_limits()
     maintenance_active, maintenance_venues = _check_maintenance(state)
     if maintenance_active:
