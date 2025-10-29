@@ -10,6 +10,7 @@ from fastapi import Request
 
 from ..opsbot import notifier
 from ..runtime_state_store import load_runtime_payload
+from ..pnl_report import build_pnl_snapshot
 from ..version import APP_VERSION
 from ..orchestrator import orchestrator as strategy_orchestrator
 from .approvals_store import list_requests as list_pending_requests
@@ -255,6 +256,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     auto_state = get_auto_hedge_state()
     positions_snapshot_source = list_positions()
     positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
+    pnl_snapshot = build_pnl_snapshot(positions_payload)
     risk_snapshot = await build_risk_snapshot()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
@@ -359,6 +361,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         },
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
+        "pnl_snapshot": pnl_snapshot,
         "risk_advice": risk_advice,
         "execution_quality": execution_quality,
         "daily_report": daily_report or {},
@@ -512,6 +515,29 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_attempt = autopilot.get("last_attempt_ts") or ""
     autopilot_armed = bool(autopilot.get("armed"))
 
+    pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
+    pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
+    unrealized_pnl_value = pnl_snapshot.get("unrealized_pnl_usdt")
+    realised_pnl_value = pnl_snapshot.get("realised_pnl_today_usdt")
+    total_exposure_value = pnl_snapshot.get("total_exposure_usdt")
+    headroom_payload = pnl_snapshot.get("capital_headroom_per_strategy")
+    headroom_map = headroom_payload if isinstance(headroom_payload, Mapping) else {}
+    capital_snapshot_payload = pnl_snapshot.get("capital_snapshot")
+    if isinstance(capital_snapshot_payload, Mapping):
+        per_strategy_limits = (
+            capital_snapshot_payload.get("per_strategy_limits")
+            if isinstance(capital_snapshot_payload.get("per_strategy_limits"), Mapping)
+            else {}
+        )
+        current_usage = (
+            capital_snapshot_payload.get("current_usage")
+            if isinstance(capital_snapshot_payload.get("current_usage"), Mapping)
+            else {}
+        )
+    else:
+        per_strategy_limits = {}
+        current_usage = {}
+
     strategy_plan = context.get("strategy_plan", {}) or {}
     strategy_entries = strategy_plan.get("strategies") or []
     strategy_plan_ts = strategy_plan.get("ts") or ""
@@ -555,6 +581,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        ".pnl-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".pnl-risk h2{margin-top:0;}"
+        ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
+        ".pnl-risk table{margin-top:1rem;}"
         ".strategy-orchestrator{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".strategy-orchestrator h2{margin-top:0;}"
         ".strategy-orchestrator table{margin-top:1rem;}"
@@ -621,6 +651,42 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
     parts.append("".join(autopilot_html) + "</div>")
+
+    pnl_parts = ["<div class=\"pnl-risk\"><h2>PnL / Risk</h2>"]
+    pnl_parts.append(
+        f"<p class=\"metric\"><strong>Unrealised PnL:</strong> {_fmt(unrealized_pnl_value)}</p>"
+    )
+    pnl_parts.append(
+        f"<p class=\"metric\"><strong>Realised PnL (today):</strong> {_fmt(realised_pnl_value)}</p>"
+    )
+    pnl_parts.append(
+        f"<p class=\"metric\"><strong>Total exposure (USDT):</strong> {_fmt(total_exposure_value)}</p>"
+    )
+    if headroom_map:
+        pnl_parts.append(
+            "<table><thead><tr><th>Strategy</th><th>Headroom (USDT)</th><th>Limit</th><th>Open notional</th></tr></thead><tbody>"
+        )
+        for strategy in sorted(headroom_map):
+            entry = headroom_map.get(strategy)
+            entry_mapping = entry if isinstance(entry, Mapping) else {}
+            limit_entry = per_strategy_limits.get(strategy)
+            limit_mapping = limit_entry if isinstance(limit_entry, Mapping) else {}
+            usage_entry = current_usage.get(strategy)
+            usage_mapping = usage_entry if isinstance(usage_entry, Mapping) else {}
+            pnl_parts.append(
+                "<tr><td>{strategy}</td><td>{headroom}</td><td>{limit}</td><td>{usage}</td></tr>".format(
+                    strategy=_fmt(strategy),
+                    headroom=_fmt(entry_mapping.get("headroom_notional")),
+                    limit=_fmt(limit_mapping.get("max_notional")),
+                    usage=_fmt(usage_mapping.get("open_notional")),
+                )
+            )
+        pnl_parts.append("</tbody></table>")
+    else:
+        pnl_parts.append(
+            "<p class=\"note\">Capital headroom data unavailable.</p>"
+        )
+    parts.append("".join(pnl_parts) + "</div>")
 
     parts.append("<div class=\"strategy-orchestrator\"><h2>Strategy Orchestrator</h2>")
     if not is_operator:
