@@ -133,6 +133,7 @@ def _alert_action(kind: str) -> tuple[str, str]:
         "manual_hedge_confirm": ("Manual hedge confirm", "approved"),
         "auto_hedge_failure": ("Auto hedge failure", "applied"),
         "auto_hedge_executed": ("Auto hedge executed", "applied"),
+        "watchdog_alert": ("Watchdog alert", "applied"),
     }
     default_action = kind.replace("_", " ").title() if kind else "Event"
     default_status = "applied"

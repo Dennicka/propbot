@@ -82,7 +82,11 @@ def _env_optional_float(name: str) -> float | None:
         return None
 
 
-def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
+def send_notifier_alert(
+    kind: str, text: str, extra: Mapping[str, object] | None = None
+) -> None:
+    """Send an ops notifier alert while swallowing notifier errors."""
+
     try:
         from ..opsbot.notifier import emit_alert
     except Exception:
@@ -91,6 +95,10 @@ def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = N
         emit_alert(kind=kind, text=text, extra=extra or None)
     except Exception:
         pass
+
+
+def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
+    send_notifier_alert(kind, text, extra)
 
 
 def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
@@ -1093,6 +1101,38 @@ def evaluate_exchange_watchdog(*, context: str = "runtime") -> str | None:
             }
             if isinstance(entry, Mapping):
                 details["watchdog"] = {str(k): v for k, v in entry.items()}
+            event_ts = datetime.now(timezone.utc).isoformat()
+            send_notifier_alert(
+                "watchdog_alert",
+                (
+                    "[ALERT] Exchange watchdog triggered auto-HOLD\n"
+                    f"Exchange: {exchange}\n"
+                    f"Reason: {reason_detail}\n"
+                    "Status: HOLD active — trading paused"
+                ),
+                extra={
+                    "exchange": exchange,
+                    "reason": reason_detail,
+                    "status": "hold_active",
+                    "actor": "system",
+                    "initiated_by": "system",
+                    "timestamp": event_ts,
+                    "context": context,
+                    "hold_reason": hold_reason,
+                },
+            )
+            log_operator_action(
+                "system",
+                "system",
+                "WATCHDOG_ALERT",
+                details={
+                    "exchange": exchange,
+                    "reason": reason_detail,
+                    "timestamp": event_ts,
+                    "initiated_by": "system",
+                    "context": context,
+                },
+            )
             log_operator_action(
                 "system",
                 "system",
