@@ -153,6 +153,17 @@ def emit_alert(
     return record
 
 
+def alert_ops(
+    text: str,
+    *,
+    kind: str = "ops_alert",
+    extra: Mapping[str, object] | None = None,
+) -> Dict[str, object]:
+    """Lightweight helper for operator-facing alerts."""
+
+    return emit_alert(kind=kind, text=text, extra=extra or None)
+
+
 def _enqueue_telegram(record: Mapping[str, object]) -> None:
     config = TelegramConfig.from_env()
     if not config.is_ready:
@@ -278,4 +289,11 @@ def setup_notifier(app: FastAPI) -> None:
         stop_worker()
 
 
-__all__ = ["emit_alert", "get_recent_alerts", "setup_notifier", "start_worker", "stop_worker"]
+__all__ = [
+    "alert_ops",
+    "emit_alert",
+    "get_recent_alerts",
+    "setup_notifier",
+    "start_worker",
+    "stop_worker",
+]

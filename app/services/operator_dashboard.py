@@ -625,6 +625,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append("<div class=\"strategy-orchestrator\"><h2>Strategy Orchestrator</h2>")
     if not is_operator:
         parts.append("<div class=\"strategy-orchestrator-readonly\">READ ONLY</div>")
+    parts.append(
+        "<p class=\"meta\">Orchestrator alerts for skip/risk_limit/hold_active and cooldown/fail "
+        "are forwarded to ops Telegram/audit.</p>"
+    )
     if strategy_plan_error:
         parts.append(
             "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">"

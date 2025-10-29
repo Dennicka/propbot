@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping as ABCMapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Tuple
 
 from .runtime_state_store import load_runtime_payload
 from .services.runtime import get_state
@@ -148,6 +148,7 @@ class StrategyOrchestrator:
             name: StrategyState(name=name, cooldown_sec=max(0, int(cooldown)))
             for name, cooldown in base_registry.items()
         }
+        self._last_alert_signature: Dict[str, Tuple[str, str, str, str]] = {}
 
     def register_strategy(self, name: str, *, cooldown_sec: int = 0) -> None:
         with self._lock:
@@ -216,6 +217,92 @@ class StrategyOrchestrator:
         with self._lock:
             for name, state in list(self._strategies.items()):
                 self._strategies[name] = StrategyState(name=name, cooldown_sec=state.cooldown_sec)
+            self._last_alert_signature.clear()
+
+    def emit_alerts_if_needed(self, notifier) -> None:
+        """Emit operator alerts when orchestration decisions block trading."""
+
+        if notifier is None:
+            return
+
+        send_alert = getattr(notifier, "alert_ops", None)
+        if not callable(send_alert):
+            emit_alert = getattr(notifier, "emit_alert", None)
+
+            if not callable(emit_alert):
+                return
+
+            def _fallback_alert(*, text: str, kind: str = "ops_alert", extra: Mapping[str, object] | None = None) -> None:
+                emit_alert(kind=kind, text=text, extra=extra or None)
+
+            send_alert = _fallback_alert
+
+        plan = self.compute_next_plan()
+        risk_summary = plan.get("risk_gates") or {}
+        autopilot_enabled = bool(risk_summary.get("autopilot_enabled"))
+        autopilot_label = "ON" if autopilot_enabled else "OFF"
+
+        strategies = plan.get("strategies") or []
+        alerts: list[tuple[str, str, str, str, Dict[str, object]]] = []
+
+        with self._lock:
+            for entry in strategies:
+                if not isinstance(entry, Mapping):
+                    continue
+
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    continue
+
+                decision = str(entry.get("decision") or "").lower()
+                raw_reason = str(entry.get("reason") or "").strip() or str(entry.get("status_reason") or "").strip()
+                last_result = str(entry.get("last_result") or "").lower()
+
+                reason = raw_reason or "ok"
+                should_alert = False
+
+                if decision == "skip":
+                    if bool(risk_summary.get("safe_mode")):
+                        reason = "safe_mode"
+                    elif bool(risk_summary.get("hold_active")):
+                        reason = "hold_active"
+                    elif raw_reason:
+                        reason = raw_reason
+                    if reason in {"hold_active", "risk_limit", "safe_mode"}:
+                        should_alert = True
+                elif decision == "cooldown" and last_result == "fail":
+                    reason = raw_reason or "cooldown"
+                    should_alert = True
+
+                signature = (decision, reason, autopilot_label, last_result)
+
+                if should_alert:
+                    if self._last_alert_signature.get(name) == signature:
+                        continue
+                    self._last_alert_signature[name] = signature
+                    extra: Dict[str, object] = {
+                        "strategy": name,
+                        "decision": decision,
+                        "reason": reason,
+                        "autopilot": autopilot_label,
+                    }
+                    if last_result:
+                        extra["last_result"] = last_result
+                    alerts.append((name, decision, reason, autopilot_label, extra))
+                else:
+                    if name in self._last_alert_signature:
+                        del self._last_alert_signature[name]
+
+        for name, decision, reason, autopilot_text, extra in alerts:
+            try:
+                send_alert(
+                    text=f"[orchestrator] strategy={name} decision={decision} "
+                    f"reason={reason} autopilot={autopilot_text}",
+                    kind="orchestrator_alert",
+                    extra=extra,
+                )
+            except Exception:
+                continue
 
 
 orchestrator = StrategyOrchestrator()
