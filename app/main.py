@@ -13,6 +13,7 @@ from .routers import ui_universe
 from .routers import ui_strategy
 from .routers import ui_status
 from .routers import ui_risk
+from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_secrets.router)
     app.include_router(ui_universe.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_ops_report.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_status.router, prefix="/api/ui/status")
     app.include_router(ui_risk.router, prefix="/api/ui", tags=["ui"])
