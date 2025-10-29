@@ -218,11 +218,32 @@ below:
     loop follows strategy defaults.
 - `ENABLE_PLACE_TEST_ORDERS` — allow real order placement on testnet.
 
-## Secrets store & RBAC (draft)
+## Secrets store & RBAC
 
-- Секреты постепенно переносятся из `.env` в JSON-хранилище, которое читает
-  `SecretsStore`. Путь задаётся через `SECRETS_STORE_PATH` (см. `.env.example`).
-  ПРИМЕЧАНИЕ: структура сейчас черновая и не задействована в рантайме.
+- Биржевые ключи и operator-токены читаются из JSON-хранилища, которое обрабатывает
+  `SecretsStore`. Путь задаётся через `SECRETS_STORE_PATH` (см. `.env.example`). В
+  production этот JSON монтируется в контейнер (например, через `docker secrets`
+  или файловый volume) и **никогда** не коммитится в репозиторий.
+- Формат файла:
+
+  ```json
+  {
+    "binance_key": "...",
+    "binance_secret": "...",
+    "okx_key": "...",
+    "okx_secret": "...",
+    "operator_tokens": {
+      "alice": { "token": "AAA", "role": "operator" }
+    }
+  }
+  ```
+
+  Секреты могут быть зашифрованы placeholder-кодеком `SECRETS_ENC_KEY`. При
+  запуске клиент сначала читает значения из `SecretsStore`; если ключи отсутствуют,
+  используется резервный путь с переменными окружения (`BINANCE_API_KEY`,
+  `BINANCE_API_SECRET`, `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_API_PASSPHRASE`), что
+  упрощает локальную разработку. Для OKX добавьте поле `"okx_passphrase"` в JSON,
+  если нужно хранить passphrase рядом с ключами.
 - Вводятся роли операторов: `viewer` (только просмотр) и `operator`
   (привилегированные действия). Проверки прав выполняет `app/rbac.py`.
 - Любые привилегированные действия должны записываться в аудит через
@@ -294,10 +315,11 @@ flow to clear HOLD.
     UM testnet credentials (`BINANCE_UM_BASE_TESTNET` override optional).
   - `BINANCE_LV_API_KEY` / `BINANCE_LV_API_SECRET` — Binance Futures live keys
     for the legacy router (kept for completeness).
-  - `BINANCE_API_KEY` / `BINANCE_API_SECRET` — primary credentials used by the
-    new Binance USDⓈ-M hedge client.
-  - `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_API_PASSPHRASE` — OKX perpetual
-    hedge client credentials (use a restricted sub-account and IP whitelist).
+  - `BINANCE_API_KEY` / `BINANCE_API_SECRET` — fallback variables for the new
+    Binance USDⓈ-M hedge client. В production ключи читаются из `SecretsStore`.
+  - `OKX_API_KEY` / `OKX_API_SECRET` / `OKX_API_PASSPHRASE` — fallback для OKX
+    perpetual hedge клиента. В production ключи читаются из `SecretsStore`
+    (используйте ограниченный sub-account и IP whitelist).
 
 ## Deployment / prod
 

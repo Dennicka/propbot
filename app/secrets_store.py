@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+_SECRETS_STORE_SINGLETON: "SecretsStore" | None = None
+
 
 class SecretsStore:
     """Access secrets stored in a JSON file.
@@ -110,21 +112,34 @@ class SecretsStore:
         token = self._data.get("approve_token")
         return token if isinstance(token, str) else None
 
-    def get_exchange_keys(self) -> Dict[str, Dict[str, Optional[str]]]:
-        """Return the exchange API credentials that are available.
+    def _get_exchange_value(self, exchange: str, field: str) -> Optional[str]:
+        value = self._data.get(f"{exchange}_{field}")
+        decrypted = self.decrypt_secret(value if isinstance(value, str) else None)
+        return decrypted if isinstance(decrypted, str) else None
 
-        The structure mirrors the base exchange names from the secrets store.
-        Each entry maps to a ``{"key": str | None, "secret": str | None}``.
+    def get_exchange_credentials(self, exchange: str) -> Dict[str, Optional[str]]:
+        """Return the credentials dictionary for ``exchange``.
+
+        Keys include ``key`` and ``secret``. Some exchanges (e.g. OKX) may also
+        define additional fields such as ``passphrase``.
         """
+
+        exchange_lower = exchange.lower()
+        credentials: Dict[str, Optional[str]] = {
+            "key": self._get_exchange_value(exchange_lower, "key"),
+            "secret": self._get_exchange_value(exchange_lower, "secret"),
+        }
+        passphrase = self._get_exchange_value(exchange_lower, "passphrase")
+        if passphrase is not None:
+            credentials["passphrase"] = passphrase
+        return credentials
+
+    def get_exchange_keys(self) -> Dict[str, Dict[str, Optional[str]]]:
+        """Return the exchange API credentials that are available."""
 
         exchanges: Dict[str, Dict[str, Optional[str]]] = {}
         for exchange in ("binance", "okx"):
-            key = self.decrypt_secret(self._data.get(f"{exchange}_key"))
-            secret = self.decrypt_secret(self._data.get(f"{exchange}_secret"))
-            exchanges[exchange] = {
-                "key": key if isinstance(key, str) else None,
-                "secret": secret if isinstance(secret, str) else None,
-            }
+            exchanges[exchange] = self.get_exchange_credentials(exchange)
         return exchanges
 
     def _rotation_metadata(self) -> Dict[str, str]:
@@ -159,4 +174,24 @@ class SecretsStore:
         return result
 
 
-__all__ = ["SecretsStore"]
+def get_secrets_store() -> SecretsStore:
+    """Return a cached ``SecretsStore`` instance.
+
+    The secrets store is loaded once to avoid repeatedly parsing the JSON file
+    on every credentials lookup.
+    """
+
+    global _SECRETS_STORE_SINGLETON
+    if _SECRETS_STORE_SINGLETON is None:
+        _SECRETS_STORE_SINGLETON = SecretsStore()
+    return _SECRETS_STORE_SINGLETON
+
+
+def reset_secrets_store_cache() -> None:
+    """Reset the cached ``SecretsStore`` instance (useful for tests)."""
+
+    global _SECRETS_STORE_SINGLETON
+    _SECRETS_STORE_SINGLETON = None
+
+
+__all__ = ["SecretsStore", "get_secrets_store", "reset_secrets_store_cache"]
