@@ -47,6 +47,50 @@ def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:
     assert "button type=\"submit\" disabled" in html
 
 
+def test_dashboard_risk_snapshot_viewer(monkeypatch, tmp_path, client) -> None:
+    async def fake_risk_snapshot() -> dict[str, object]:
+        return {
+            "total_notional_usd": 12345.6,
+            "per_venue": {
+                "binance": {
+                    "net_exposure_usd": 1000.0,
+                    "unrealised_pnl_usd": -42.0,
+                    "open_positions_count": 2,
+                }
+            },
+            "partial_hedges_count": 3,
+            "autopilot_enabled": False,
+            "risk_score": "TBD",
+        }
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.build_risk_snapshot",
+        fake_risk_snapshot,
+    )
+
+    secrets_payload = {
+        "operator_tokens": {"viewer": {"token": "VVV", "role": "viewer"}},
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer VVV"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Risk snapshot" in html
+    assert "partial_hedges_count" in html
+    assert "READ ONLY: you cannot change HOLD/RESUME/KILL." in html
+
+
 def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "dashboard-token")
