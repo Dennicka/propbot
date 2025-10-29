@@ -283,6 +283,8 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
     assert "MANUAL DISABLED (operator override)" in html
     assert "Strategy enable/disable controls require operator role" in html
     assert "Update strategy toggle" not in html
+    assert "Strategy Performance" in html
+    assert "Realised PnL (today)" in html
 
 
 def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> None:

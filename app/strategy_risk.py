@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-from . import audit_log
+from . import audit_log, strategy_pnl
 from .runtime_state_store import load_runtime_payload, write_runtime_payload
 
 DEFAULT_LIMITS: Dict[str, Dict[str, float | int]] = {
@@ -29,7 +29,12 @@ class StrategyState:
 class StrategyRiskManager:
     """In-memory tracker for per-strategy risk counters."""
 
-    def __init__(self, limits: Optional[Mapping[str, Mapping[str, float | int]]] = None) -> None:
+    def __init__(
+        self,
+        limits: Optional[Mapping[str, Mapping[str, float | int]]] = None,
+        *,
+        pnl_store: Any | None = None,
+    ) -> None:
         # Using plain dict copies keeps the object mutable but decoupled from callers.
         self.limits: Dict[str, Dict[str, float | int]] = {
             name: dict(spec)
@@ -40,6 +45,7 @@ class StrategyRiskManager:
             name: StrategyState() for name in self.limits
         }
         self._load_persistent_state()
+        self._pnl_store = pnl_store or strategy_pnl
 
     def _load_persistent_state(self) -> None:
         payload = load_runtime_payload()
@@ -74,8 +80,15 @@ class StrategyRiskManager:
 
     def record_fill(self, strategy_name: str, pnl_delta_usdt: float) -> None:
         state = self._ensure_strategy(strategy_name)
-        state.realized_pnl_today += float(pnl_delta_usdt or 0.0)
+        try:
+            pnl_snapshot = self._pnl_store.record_fill(strategy_name, pnl_delta_usdt)
+        except Exception:  # pragma: no cover - defensive persistence guard
+            pnl_snapshot = {}
         state.last_update_ts = time.time()
+        realized_today = _coerce_float(pnl_snapshot.get("realized_pnl_today"))
+        if realized_today is not None:
+            # Retain the field for backwards compatibility with snapshots/tests.
+            state.realized_pnl_today = realized_today
         self.check_limits(strategy_name)
 
     def record_failure(self, strategy_name: str, failure_reason: str) -> None:
@@ -101,13 +114,22 @@ class StrategyRiskManager:
     def check_limits(self, strategy_name: str) -> Dict[str, object]:
         state = self._ensure_strategy(strategy_name)
         limits = self.limits.get(strategy_name, {})
+        try:
+            pnl_snapshot = self._pnl_store.snapshot(strategy_name)
+        except Exception:  # pragma: no cover - defensive persistence guard
+            pnl_snapshot = {}
+        realized_today = _coerce_float(pnl_snapshot.get("realized_pnl_today")) or 0.0
+        realized_total = _coerce_float(pnl_snapshot.get("realized_pnl_total")) or 0.0
+        realized_7d = _coerce_float(pnl_snapshot.get("realized_pnl_7d")) or 0.0
+        max_drawdown = _coerce_float(pnl_snapshot.get("max_drawdown_observed")) or 0.0
+        state.realized_pnl_today = realized_today
         breach_reasons: list[str] = []
         breach = False
         freeze_reason: str | None = None
 
         daily_limit = _coerce_float(limits.get("daily_loss_usdt"))
         if daily_limit is not None:
-            pnl_today = state.realized_pnl_today
+            pnl_today = realized_today
             if pnl_today < 0 and abs(pnl_today) > daily_limit:
                 breach = True
                 breach_reasons.append(
@@ -132,7 +154,10 @@ class StrategyRiskManager:
             )
 
         snapshot = {
-            "realized_pnl_today": state.realized_pnl_today,
+            "realized_pnl_today": realized_today,
+            "realized_pnl_total": realized_total,
+            "realized_pnl_7d": realized_7d,
+            "max_drawdown_observed": max_drawdown,
             "consecutive_failures": state.consecutive_failures,
             "frozen": state.frozen,
             "freeze_reason": state.freeze_reason,
@@ -147,6 +172,7 @@ class StrategyRiskManager:
             "breach_reasons": breach_reasons,
             "snapshot": snapshot,
             "limits": dict(limits),
+            "pnl": dict(pnl_snapshot),
         }
 
     def full_snapshot(self) -> Dict[str, object]:
@@ -300,6 +326,7 @@ def get_strategy_risk_manager() -> StrategyRiskManager:
 
 def reset_strategy_risk_manager_for_tests() -> None:
     global _STRATEGY_RISK_MANAGER
+    strategy_pnl.reset_state_for_tests()
     _STRATEGY_RISK_MANAGER = StrategyRiskManager()
 
 

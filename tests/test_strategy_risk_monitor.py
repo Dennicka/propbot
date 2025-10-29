@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from app import strategy_pnl
 from app.strategy_risk import (
     DEFAULT_LIMITS,
     StrategyRiskManager,
@@ -27,6 +28,8 @@ def test_strategy_risk_manager_breach_detection() -> None:
     loss_breach = manager.check_limits("cross_exchange_arb")
     assert loss_breach["breach"] is True
     assert any("realized_pnl_today" in reason for reason in loss_breach["breach_reasons"])
+
+    strategy_pnl.reset_state_for_tests()
 
     tuned_limits = {
         "cross_exchange_arb": {

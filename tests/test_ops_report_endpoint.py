@@ -44,6 +44,11 @@ class _DummyStrategyManager:
                     "breach": True,
                     "breach_reasons": ["limit_exceeded"],
                     "limits": {"max_notional": 1_000.0},
+                    "state": {
+                        "frozen": True,
+                        "freeze_reason": "limit_breach",
+                        "consecutive_failures": 2,
+                    },
                 }
             }
         }
@@ -114,6 +119,21 @@ def ops_report_environment(monkeypatch, tmp_path):
         lambda: _DummyStrategyManager(),
     )
     monkeypatch.setattr(
+        "app.services.ops_report.get_strategy_budget_manager",
+        lambda: SimpleNamespace(snapshot=lambda: {"alpha": {"blocked": True}}),
+    )
+    monkeypatch.setattr(
+        "app.services.ops_report.snapshot_strategy_pnl",
+        lambda: {
+            "alpha": {
+                "realized_pnl_today": -12.5,
+                "realized_pnl_total": 87.5,
+                "realized_pnl_7d": -5.0,
+                "max_drawdown_observed": 42.0,
+            }
+        },
+    )
+    monkeypatch.setattr(
         "app.services.ops_report.list_recent_operator_actions",
         lambda limit=10: [
             {
@@ -165,6 +185,11 @@ def test_ops_report_json_accessible_for_viewer_and_operator(
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
     assert payload["strategy_controls"]["alpha"]["freeze_reason"] == "limit_breach"
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
+    assert "per_strategy_pnl" in payload
+    alpha_pnl = payload["per_strategy_pnl"]["alpha"]
+    assert alpha_pnl["realized_pnl_today"] == -12.5
+    assert alpha_pnl["frozen"] is True
+    assert alpha_pnl["budget_blocked"] is True
 
     operator_response = client.get(
         "/api/ui/ops_report",
@@ -189,5 +214,11 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
         row["section"] == "strategy:alpha"
         and row["key"] == "freeze_reason"
         and row["value"] == "limit_breach"
+        for row in rows
+    )
+    assert any(
+        row["section"] == "strategy_pnl:alpha"
+        and row["key"] == "frozen"
+        and row["value"] == "True"
         for row in rows
     )
