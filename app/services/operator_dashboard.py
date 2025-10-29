@@ -619,6 +619,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-risk .breach-ok{color:#166534;font-weight:700;}"
         ".strategy-risk .breach-alert{color:#b91c1c;font-weight:700;}"
         ".strategy-risk .freeze-alert{color:#b91c1c;font-weight:700;margin-top:0.35rem;}"
+        ".strategy-risk .enabled-status{display:block;font-weight:700;color:#166534;margin-bottom:0.25rem;}"
+        ".strategy-risk .enabled-status-disabled{color:#b91c1c;}"
+        ".strategy-risk .manual-disabled{color:#b91c1c;font-weight:700;margin-top:0.25rem;}"
+        ".strategy-risk form.strategy-toggle{margin-top:1rem;padding:1rem;border:1px solid #d0d5dd;background:#f9fafb;border-radius:4px;}"
+        ".strategy-risk form.strategy-toggle label{margin-top:0.5rem;}"
+        ".strategy-risk form.strategy-toggle .toggle-checkbox{display:flex;align-items:center;gap:0.5rem;font-weight:600;margin:0.5rem 0;}"
         ".strategy-risk .risk-state{display:inline-block;font-weight:700;text-transform:uppercase;}"
         ".strategy-risk .risk-state-active{color:#166534;}"
         ".strategy-risk .risk-state-blocked{color:#b91c1c;}"
@@ -723,6 +729,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             failure_count = state.get("consecutive_failures")
             frozen = bool(state.get("frozen") or entry.get("frozen"))
             freeze_reason = state.get("freeze_reason") or entry.get("reason") or ""
+            enabled_flag = state.get("enabled") if isinstance(state, Mapping) else None
+            if enabled_flag is None:
+                enabled_flag = entry.get("enabled")
+            enabled = bool(enabled_flag) if enabled_flag is not None else True
             risk_state = "active"
             if frozen:
                 risk_state = "frozen_by_risk"
@@ -736,7 +746,17 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 "frozen_by_risk": "risk-state risk-state-frozen",
             }.get(risk_state, "risk-state risk-state-blocked")
             risk_state_cell = f'<span class="{risk_state_class}">{risk_state}</span>'
-            status_label_parts: list[str] = []
+            enabled_label = "yes" if enabled else "no"
+            enabled_class = "enabled-status"
+            if not enabled:
+                enabled_class += " enabled-status-disabled"
+            status_label_parts: list[str] = [
+                f'<span class="{enabled_class}">enabled: {enabled_label}</span>'
+            ]
+            if not enabled:
+                status_label_parts.append(
+                    '<div class="manual-disabled">MANUAL DISABLED (operator override)</div>'
+                )
             if breach:
                 status_label_parts.append('<span class="breach-alert">BREACH DETECTED</span>')
                 reasons = entry.get("breach_reasons") or []
@@ -781,7 +801,22 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         strategy_risk_html.append("</tbody></table>")
         if is_operator:
             strategy_risk_html.append(
-                "<div class=\"note\"><strong>Manual override:</strong> use the dashboard form below or send <code>POST /api/ui/unfreeze-strategy</code> with JSON <code>{&quot;strategy&quot;: &quot;cross_exchange_arb&quot;, &quot;reason&quot;: &quot;operator override&quot;}</code> to clear a frozen strategy.</div>"
+                "<div class=\"note\"><strong>Manual override:</strong> use <code>POST /api/ui/unfreeze-strategy</code> to clear risk freezes. To pause or resume trading manually, submit the toggle form below (records audit trail).</div>"
+            )
+            strategy_risk_html.append(
+                "<form method=\"post\" action=\"/api/ui/set-strategy-enabled\" class=\"strategy-toggle-form\">"
+                "<label for=\"strategy-toggle-name\">Strategy identifier</label>"
+                "<input id=\"strategy-toggle-name\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required />"
+                "<input type=\"hidden\" name=\"enabled\" value=\"false\" />"
+                "<label class=\"toggle-checkbox\"><input type=\"checkbox\" name=\"enabled\" value=\"true\" checked /> <span>Enabled</span></label>"
+                "<label for=\"strategy-toggle-reason\">Reason</label>"
+                "<input id=\"strategy-toggle-reason\" name=\"reason\" type=\"text\" placeholder=\"reason for toggle\" required />"
+                "<button type=\"submit\">Update strategy toggle</button>"
+                "</form>"
+            )
+        else:
+            strategy_risk_html.append(
+                "<div class=\"note\">Strategy enable/disable controls require operator role. Status is still visible above.</div>"
             )
     parts.append("".join(strategy_risk_html) + "</div>")
 

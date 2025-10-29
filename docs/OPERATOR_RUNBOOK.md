@@ -139,6 +139,25 @@
   `/api/ui/dashboard-unfreeze-strategy`), либо через `POST /api/ui/unfreeze-strategy`
   с JSON. Оба пути проходят RBAC/аудит и сбрасывают счётчик ошибок.
 
+### Strategy maintenance toggle
+
+- Freeze (`frozen_by_risk`) срабатывает автоматически при превышении лимитов.
+  Стратегия остаётся заблокированной до ручного UNFREEZE, а счётчики риска не
+  сбрасываются сами по себе. Этот механизм не зависит от операторских действий.
+- Manual disable (`enabled: no`) — отдельный операторский флаг «не торговать
+  эту стратегию сейчас». Он не влияет на HOLD/SAFE_MODE и не снимает freeze,
+  но заставляет исполнитель сразу возвращать состояние
+  `DISABLED_BY_OPERATOR` без попыток выставить ордера.
+- В блоке Strategy Risk на `/ui/dashboard` теперь отображается `enabled: yes/no`
+  с явной пометкой «MANUAL DISABLED (operator override)», если стратегия
+  отключена вручную.
+- Операторы могут переключить статус через новую форму на дашборде (POST
+  `/api/ui/set-strategy-enabled`) или прямым API-вызовом. Поля:
+  `strategy`, `enabled` (`true`/`false`) и `reason`.
+- Все попытки (включая отклонённые viewer-ролями) фиксируются в audit-log под
+  действиями `STRATEGY_MANUAL_DISABLE`/`STRATEGY_MANUAL_ENABLE`, а снимок
+  доступен через `/api/ui/audit_snapshot`.
+
 ## Startup validation / go-live safety
 
 - Контейнер теперь выполняет жёсткий preflight: при старте `app/main.py`

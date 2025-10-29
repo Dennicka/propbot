@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Dict, Mapping, Optional
+from typing import Dict, Optional
 
 from . import audit_log
+from .runtime_state_store import load_runtime_payload, write_runtime_payload
 
 DEFAULT_LIMITS: Dict[str, Dict[str, float | int]] = {
     "cross_exchange_arb": {
@@ -21,6 +23,7 @@ class StrategyState:
     frozen: bool = False
     freeze_reason: Optional[str] = None
     last_update_ts: float = field(default_factory=time.time)
+    enabled: bool = True
 
 
 class StrategyRiskManager:
@@ -36,6 +39,31 @@ class StrategyRiskManager:
         self.state: Dict[str, StrategyState] = {
             name: StrategyState() for name in self.limits
         }
+        self._load_persistent_state()
+
+    def _load_persistent_state(self) -> None:
+        payload = load_runtime_payload()
+        controls = payload.get("strategy_controls") if isinstance(payload, Mapping) else {}
+        controls_mapping = controls if isinstance(controls, Mapping) else {}
+        enabled_payload = (
+            controls_mapping.get("enabled") if isinstance(controls_mapping, Mapping) else {}
+        )
+        if isinstance(enabled_payload, Mapping):
+            for name, flag in enabled_payload.items():
+                state = self._ensure_strategy(str(name))
+                state.enabled = bool(flag)
+
+    def _persist_state(self) -> None:
+        payload = load_runtime_payload()
+        controls = payload.get("strategy_controls") if isinstance(payload, Mapping) else {}
+        controls_dict = dict(controls) if isinstance(controls, Mapping) else {}
+        controls_dict["enabled"] = {
+            name: bool(state.enabled)
+            for name, state in self.state.items()
+        }
+        payload_dict = dict(payload) if isinstance(payload, Mapping) else {}
+        payload_dict["strategy_controls"] = controls_dict
+        write_runtime_payload(payload_dict)
 
     def _ensure_strategy(self, strategy_name: str) -> StrategyState:
         if strategy_name not in self.state:
@@ -110,6 +138,7 @@ class StrategyRiskManager:
             "freeze_reason": state.freeze_reason,
             "reason": state.freeze_reason,
             "last_update_ts": state.last_update_ts,
+            "enabled": state.enabled,
         }
 
         return {
@@ -131,6 +160,7 @@ class StrategyRiskManager:
                 "breach": bool(result.get("breach")),
                 "breach_reasons": list(result.get("breach_reasons", [])),
                 "frozen": bool(result.get("frozen")),
+                "enabled": self.is_enabled(name),
             }
         return {
             "timestamp": time.time(),
@@ -140,6 +170,10 @@ class StrategyRiskManager:
     def is_frozen(self, strategy_name: str) -> bool:
         state = self._ensure_strategy(strategy_name)
         return bool(state.frozen)
+
+    def is_enabled(self, strategy_name: str) -> bool:
+        state = self._ensure_strategy(strategy_name)
+        return bool(state.enabled)
 
     def unfreeze_strategy(
         self,
@@ -159,6 +193,45 @@ class StrategyRiskManager:
             role=role,
             action="STRATEGY_UNFREEZE_MANUAL",
             details={"strategy": strategy_name, "reason": reason},
+        )
+        self._persist_state()
+
+    def set_enabled(
+        self,
+        strategy_name: str,
+        enabled: bool,
+        operator_name: str,
+        reason: str,
+        *,
+        role: str = "operator",
+    ) -> None:
+        state = self._ensure_strategy(strategy_name)
+        enabled_bool = bool(enabled)
+        if state.enabled == enabled_bool:
+            audit_log.log_operator_action(
+                operator_name=operator_name,
+                role=role,
+                action="STRATEGY_MANUAL_ENABLE" if enabled_bool else "STRATEGY_MANUAL_DISABLE",
+                details={
+                    "strategy": strategy_name,
+                    "enabled": state.enabled,
+                    "reason": reason,
+                    "status": "noop",
+                },
+            )
+            return
+        state.enabled = enabled_bool
+        state.last_update_ts = time.time()
+        self._persist_state()
+        audit_log.log_operator_action(
+            operator_name=operator_name,
+            role=role,
+            action="STRATEGY_MANUAL_ENABLE" if enabled_bool else "STRATEGY_MANUAL_DISABLE",
+            details={
+                "strategy": strategy_name,
+                "enabled": enabled_bool,
+                "reason": reason,
+            },
         )
 
     def _freeze_strategy(
@@ -181,6 +254,7 @@ class StrategyRiskManager:
             action="STRATEGY_AUTO_FREEZE",
             details={"strategy": strategy_name, "reason": reason},
         )
+        self._persist_state()
 
     def _check_limits_and_freeze(self, strategy_name: str, state: StrategyState) -> None:
         limits = self.limits.get(strategy_name, {})

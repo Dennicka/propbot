@@ -592,7 +592,16 @@ class ArbitrageEngine:
 
     def execute(self, pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False, dry_run: bool = True) -> Dict[str, object]:
         strategy_name = "cross_exchange_arb"
-        if get_strategy_risk_manager().is_frozen(strategy_name):
+        manager = get_strategy_risk_manager()
+        if not manager.is_enabled(strategy_name):
+            return {
+                "ok": False,
+                "executed": False,
+                "state": "DISABLED_BY_OPERATOR",
+                "reason": "disabled_by_operator",
+                "strategy": strategy_name,
+            }
+        if manager.is_frozen(strategy_name):
             return {
                 "ok": False,
                 "executed": False,
@@ -759,7 +768,16 @@ def current_edges() -> List[Dict[str, object]]:
 
 def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False) -> Dict[str, object]:
     strategy_name = "cross_exchange_arb"
-    if get_strategy_risk_manager().is_frozen(strategy_name):
+    manager = get_strategy_risk_manager()
+    if not manager.is_enabled(strategy_name):
+        return {
+            "ok": False,
+            "executed": False,
+            "state": "DISABLED_BY_OPERATOR",
+            "reason": "disabled_by_operator",
+            "strategy": strategy_name,
+        }
+    if manager.is_frozen(strategy_name):
         return {
             "ok": False,
             "executed": False,

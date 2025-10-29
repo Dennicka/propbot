@@ -3,17 +3,18 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import json
 import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, conint, confloat
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, conint, confloat
 
 from .. import ledger
 from ..audit_log import list_recent_operator_actions, log_operator_action
@@ -202,6 +203,14 @@ class UnfreezeStrategyPayload(BaseModel):
 
     strategy: str = Field(..., min_length=1, description="Strategy identifier")
     reason: str = Field(..., min_length=1, description="Operator supplied reason")
+
+
+class SetStrategyEnabledPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str = Field(..., min_length=1, description="Strategy identifier")
+    enabled: bool = Field(..., description="Whether the strategy should be enabled")
+    reason: str = Field(..., min_length=1, description="Operator supplied reason for the change")
 
 
 def _dashboard_token_dependency(request: Request) -> str | None:
@@ -978,6 +987,94 @@ def unfreeze_strategy(payload: UnfreezeStrategyPayload, request: Request) -> dic
         "strategy": payload.strategy,
         "frozen": manager.is_frozen(payload.strategy),
         "snapshot": snapshot.get("snapshot", {}),
+    }
+
+
+@router.post("/set-strategy-enabled")
+async def set_strategy_enabled(request: Request) -> dict[str, object]:
+    raw_body = await request.body()
+    payload_data: dict[str, Any]
+    parsed: dict[str, Any] | None = None
+    if raw_body:
+        try:
+            decoded = raw_body.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded = raw_body.decode("latin1", errors="ignore")
+        try:
+            json_payload = json.loads(decoded)
+        except json.JSONDecodeError:
+            json_payload = None
+        if isinstance(json_payload, Mapping):
+            parsed = dict(json_payload)
+    if parsed is None:
+        payload_data = _parse_dashboard_form(raw_body)
+    else:
+        payload_data = parsed
+    if "strategy" not in payload_data and "strategy_name" in payload_data:
+        payload_data["strategy"] = payload_data["strategy_name"]
+    try:
+        payload = SetStrategyEnabledPayload(**payload_data)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(),
+        ) from exc
+    action_label = "STRATEGY_MANUAL_ENABLE" if payload.enabled else "STRATEGY_MANUAL_DISABLE"
+    if not is_auth_enabled():
+        operator_name = "local-dev"
+        role = "operator"
+    else:
+        token = require_token(request)
+        if token is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
+        identity = _resolve_operator_identity(token)
+        if not identity:
+            log_operator_action(
+                "unknown",
+                "unknown",
+                action_label,
+                details={
+                    "strategy": payload.strategy,
+                    "enabled": payload.enabled,
+                    "reason": payload.reason,
+                    "status": "forbidden",
+                },
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        operator_name, role = identity
+        if role != "operator":
+            log_operator_action(
+                operator_name,
+                role,
+                action_label,
+                details={
+                    "strategy": payload.strategy,
+                    "enabled": payload.enabled,
+                    "reason": payload.reason,
+                    "status": "forbidden",
+                },
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+
+    manager = get_strategy_risk_manager()
+    manager.set_enabled(
+        payload.strategy,
+        payload.enabled,
+        operator_name,
+        payload.reason,
+        role=role,
+    )
+    snapshot = manager.check_limits(payload.strategy)
+    state_snapshot = snapshot.get("snapshot", {}) or {}
+    return {
+        "status": "ok",
+        "strategy": payload.strategy,
+        "enabled": manager.is_enabled(payload.strategy),
+        "frozen": bool(snapshot.get("frozen")),
+        "breach": bool(snapshot.get("breach")),
+        "breach_reasons": list(snapshot.get("breach_reasons", [])),
+        "snapshot": state_snapshot,
+        "limits": snapshot.get("limits", {}),
     }
 
 

@@ -157,3 +157,117 @@ def test_unfreeze_endpoint_enforces_operator_role(monkeypatch, tmp_path, client)
     assert payload["frozen"] is False
     assert manager.is_frozen("test_strategy") is False
     assert any(call["action"] == "STRATEGY_UNFREEZE_MANUAL" for call in calls)
+
+
+def test_set_strategy_enabled_requires_operator_role(monkeypatch, tmp_path, client) -> None:
+    runtime_path = tmp_path / "runtime_state.json"
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
+    reset_strategy_risk_manager_for_tests()
+
+    secrets_payload = {
+        "operator_tokens": {
+            "viewer": {"token": "VIEW", "role": "viewer"},
+            "operator": {"token": "OPER", "role": "operator"},
+        }
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    calls: list[tuple[str, str, str, object]] = []
+
+    def _capture(name: str, role: str, action: str, details):
+        calls.append((name, role, action, details))
+
+    monkeypatch.setattr("app.routers.ui.log_operator_action", _capture)
+
+    response = client.post(
+        "/api/ui/set-strategy-enabled",
+        json={"strategy": "cross_exchange_arb", "enabled": False, "reason": "viewer attempt"},
+        headers={"Authorization": "Bearer VIEW"},
+    )
+
+    assert response.status_code == 403
+    manager = get_strategy_risk_manager()
+    assert manager.is_enabled("cross_exchange_arb") is True
+    assert (
+        "viewer",
+        "viewer",
+        "STRATEGY_MANUAL_DISABLE",
+        {
+            "strategy": "cross_exchange_arb",
+            "enabled": False,
+            "reason": "viewer attempt",
+            "status": "forbidden",
+        },
+    ) in calls
+
+
+def test_operator_toggle_strategy_execution(monkeypatch, tmp_path, client) -> None:
+    runtime_path = tmp_path / "runtime_state.json"
+    monkeypatch.setenv("RUNTIME_STATE_PATH", str(runtime_path))
+    reset_strategy_risk_manager_for_tests()
+
+    secrets_payload = {
+        "operator_tokens": {
+            "operator": {"token": "OPER", "role": "operator"},
+        }
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+
+    audit_calls: list[dict[str, object]] = []
+
+    def _audit(operator_name: str, role: str, action: str, details=None) -> None:
+        audit_calls.append(
+            {
+                "operator_name": operator_name,
+                "role": role,
+                "action": action,
+                "details": details,
+            }
+        )
+
+    monkeypatch.setattr("app.strategy_risk.audit_log.log_operator_action", _audit)
+
+    operator_headers = {"Authorization": "Bearer OPER"}
+
+    disable_resp = client.post(
+        "/api/ui/set-strategy-enabled",
+        json={"strategy": "cross_exchange_arb", "enabled": False, "reason": "maintenance"},
+        headers=operator_headers,
+    )
+    assert disable_resp.status_code == 200
+    disable_payload = disable_resp.json()
+    assert disable_payload["enabled"] is False
+    disable_state = disable_payload.get("snapshot", {}) or {}
+    if disable_state:
+        assert disable_state.get("enabled") is False
+    manager = get_strategy_risk_manager()
+    assert manager.is_enabled("cross_exchange_arb") is False
+    assert any(call["action"] == "STRATEGY_MANUAL_DISABLE" for call in audit_calls)
+
+    execution = execute_trade(pair_id=None, size=None)
+    assert execution["state"] == "DISABLED_BY_OPERATOR"
+    assert execution["executed"] is False
+
+    enable_resp = client.post(
+        "/api/ui/set-strategy-enabled",
+        json={"strategy": "cross_exchange_arb", "enabled": True, "reason": "resume"},
+        headers=operator_headers,
+    )
+    assert enable_resp.status_code == 200
+    enable_payload = enable_resp.json()
+    assert enable_payload["enabled"] is True
+    assert manager.is_enabled("cross_exchange_arb") is True
+    assert any(call["action"] == "STRATEGY_MANUAL_ENABLE" for call in audit_calls)
+
+    execution_after = execute_trade(pair_id=None, size=None)
+    assert execution_after.get("state") != "DISABLED_BY_OPERATOR"
