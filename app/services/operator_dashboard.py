@@ -1803,14 +1803,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 f"<input id=\"unfreeze-strategy\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required{disabled_attr} />"
                 "<label for=\"unfreeze-reason\">Reason</label>"
                 f"<input id=\"unfreeze-reason\" name=\"reason\" type=\"text\" placeholder=\"Why override is safe\" required{disabled_attr} />"
-                "<div class=\"note\">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded.</div>"
-                f"<button type=\"submit\"{disabled_attr}>Unfreeze strategy</button></form>"
+                "<div class=\"note\">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded. Second-operator approval is required.</div>"
+                f"<button type=\"submit\"{disabled_attr}>Request unfreeze</button></form>"
             ),
             (
-                "<form method=\"post\" action=\"/ui/dashboard/kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
+                "<form method=\"post\" action=\"/api/ui/dashboard-kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
                 f"<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\"{disabled_attr} />"
-                "<div class=\"note\">Invokes existing guarded endpoint to cancel managed orders immediately.</div>"
-                f"<button type=\"submit\"{disabled_attr}>Emergency CANCEL ALL</button></form>"
+                "<label for=\"kill-reason\">Reason (optional)</label>"
+                f"<input id=\"kill-reason\" name=\"reason\" type=\"text\" placeholder=\"Why kill switch is required\"{disabled_attr} />"
+                "<div class=\"note\">Requests a dual-approval kill switch. Orders are cancelled only after the second confirmation.</div>"
+                f"<button type=\"submit\"{disabled_attr}>Request emergency CANCEL ALL</button></form>"
             ),
         ]
 
@@ -1821,11 +1823,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<p class=\"note\" style=\"color:#1f2937;font-weight:600;\">Auditor role: read only. Trading controls are hidden.</p>"
         )
     else:
-        disabled_attr = " disabled"
         controls_parts.append(
             "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">Controls require operator role. Requests cannot be initiated from viewer accounts.</p>"
         )
-        controls_parts.extend(_controls_form_markup(disabled_attr))
 
     controls_parts.append("</div>")
     parts.append("".join(controls_parts))

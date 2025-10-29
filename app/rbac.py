@@ -1,27 +1,50 @@
 """Role-based access control utilities."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import FrozenSet, Literal
 
 Role = Literal["viewer", "auditor", "operator"]
-Action = Literal["HOLD", "RESUME", "KILL", "RAISE_LIMITS", "CANCEL_ALL"]
+Action = Literal[
+    "HOLD",
+    "RESUME_REQUEST",
+    "RESUME_APPROVE",
+    "RESUME_EXECUTE",
+    "KILL_REQUEST",
+    "KILL_APPROVE",
+    "UNFREEZE_STRATEGY_REQUEST",
+    "UNFREEZE_STRATEGY_APPROVE",
+    "CANCEL_ALL",
+    "SET_STRATEGY_ENABLED",
+]
 
 
-_CRITICAL_ACTIONS = {"HOLD", "RESUME", "KILL", "RAISE_LIMITS", "CANCEL_ALL"}
+_ROLE_PERMISSIONS: dict[Role, FrozenSet[Action]] = {
+    "viewer": frozenset(),
+    "auditor": frozenset(),
+    "operator": frozenset(
+        {
+            "HOLD",
+            "RESUME_REQUEST",
+            "RESUME_APPROVE",
+            "RESUME_EXECUTE",
+            "KILL_REQUEST",
+            "KILL_APPROVE",
+            "UNFREEZE_STRATEGY_REQUEST",
+            "UNFREEZE_STRATEGY_APPROVE",
+            "CANCEL_ALL",
+            "SET_STRATEGY_ENABLED",
+        }
+    ),
+}
 
 
 def can_execute_action(role: Role, action: Action) -> bool:
-    """Return ``True`` if ``role`` can perform ``action``.
+    """Return ``True`` if ``role`` can perform ``action``."""
 
-    ``viewer`` roles are read-only and cannot perform critical actions, while
-    ``operator`` roles are allowed to execute all supported actions.
-    """
-
-    if role == "operator":
-        return True
-    if role in {"viewer", "auditor"}:
-        return action not in _CRITICAL_ACTIONS
-    return False
+    allowed = _ROLE_PERMISSIONS.get(role)
+    if allowed is None:
+        return False
+    return action in allowed
 
 
 __all__ = ["can_execute_action", "Role", "Action"]

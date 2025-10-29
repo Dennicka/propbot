@@ -45,6 +45,7 @@ def ops_report_environment(monkeypatch, tmp_path):
         "operator_tokens": {
             "alice": {"token": "AAA", "role": "operator"},
             "bob": {"token": "BBB", "role": "viewer"},
+            "carol": {"token": "CCC", "role": "auditor"},
         },
         "approve_token": "ZZZ",
     }
@@ -165,6 +166,7 @@ def ops_report_environment(monkeypatch, tmp_path):
         yield {
             "viewer": {"Authorization": "Bearer BBB"},
             "operator": {"Authorization": "Bearer AAA"},
+            "auditor": {"Authorization": "Bearer CCC"},
         }
     finally:
         reset_strategy_budget_manager_for_tests()
@@ -181,7 +183,7 @@ def test_ops_report_requires_token_when_auth_enabled(monkeypatch, client) -> Non
     assert response.status_code == 401
 
 
-def test_ops_report_json_accessible_for_viewer_and_operator(
+def test_ops_report_json_accessible_for_roles(
     client, ops_report_environment
 ) -> None:
     response = client.get("/api/ui/ops_report", headers=ops_report_environment["viewer"])
@@ -207,6 +209,15 @@ def test_ops_report_json_accessible_for_viewer_and_operator(
     )
     assert operator_response.status_code == 200
     assert operator_response.json()["audit"]["ops_events"]
+
+    auditor_response = client.get(
+        "/api/ui/ops_report",
+        headers=ops_report_environment["auditor"],
+    )
+    assert auditor_response.status_code == 200
+    auditor_payload = auditor_response.json()
+    assert auditor_payload["runtime"]["mode"] == "HOLD"
+    assert auditor_payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
 
 
 def test_ops_report_csv_export(client, ops_report_environment) -> None:

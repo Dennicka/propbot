@@ -21,18 +21,18 @@
 - **viewer**: имеет доступ к `/ui/dashboard` после успешной аутентификации и
   видит базовую телеметрию — статус демонов (`healthz`), открытую и частичную
   экспозицию, runtime flags (SAFE_MODE/HOLD/DRY_RUN/autopilot и причину HOLD),
-  pending approvals, build_version, последние алерты. Управляющие формы HOLD /
-  RESUME-request / KILL / raise-limits остаются read-only — элементы
-  отображаются выключенными и действия инициировать нельзя.
+  pending approvals, build_version, последние алерты. Управляющий блок полностью
+  скрыт: форма HOLD/RESUME/KILL не рендерится, чтобы исключить ложные клики.
 - **auditor**: ревизор с расширенным read-only доступом. Видит `/ui/dashboard`,
   `ops_report` (JSON/CSV), `audit_snapshot`, бюджеты/PNL и аудит действий.
   Управляющий блок на дэшборде скрыт, вместо него показывается баннер «auditor
   role: read only». Роль не требует доступа к чувствительным ключам и служит для
   проверок без риска случайно возобновить торговлю.
 - **operator**: помимо чтения статуса может инициировать HOLD,
-  RESUME-request, KILL, запрос повышения лимитов и подтверждать второй шаг
-  (approve) в двухоператорном флоу. Каждое такое действие попадает в
-  `audit_log` и отображается в блоках Recent Ops / Audit.
+  RESUME-request, запрос ручного UNFREEZE, kill-switch (через
+  `/api/ui/kill-request`) и подтверждать второй шаг (approve) в двухоператорном
+  флоу. Каждое такое действие попадает в `audit_log` со статусом `requested` /
+  `approved` и отображается в блоках Recent Ops / Audit.
 
 Верхний блок дэшборда всегда показывает имя и бейдж роли (`viewer` /
 `auditor` / `operator`), чтобы сразу понять, какие кнопки доступны.
@@ -412,11 +412,12 @@
 - `GET /api/ui/positions` — активные ноги хеджа, экспозиция и unrealized PnL.
 - HTML-панель `/ui/dashboard` (через bearer-токен) — сводка build версии,
   HOLD/SAFE_MODE/DRY_RUN, runaway guard, авто-хедж, живой риск, pending approvals
-  и формы HOLD/RESUME/UNFREEZE/kill. Формы HOLD и RESUME-request постят в
-  `/api/ui/dashboard-hold` и `/api/ui/dashboard-resume-request`, UNFREEZE — в
-  `/api/ui/dashboard-unfreeze-strategy`; эти обёртки собирают JSON-пейлоады и
-  вызывают существующие guarded эндпоинты, не обходя RBAC/два оператора. Kill
-  продолжает ходить на `/ui/dashboard/kill` (JSON не нужен).
+  и формы HOLD/RESUME/UNFREEZE/kill для роли `operator`. Формы HOLD и
+  RESUME-request постят в `/api/ui/dashboard-hold` и `/api/ui/dashboard-resume-request`,
+  UNFREEZE — в `/api/ui/dashboard-unfreeze-strategy`, kill — в
+  `/api/ui/dashboard-kill`; эти обёртки собирают JSON-пейлоады и вызывают
+  существующие guarded эндпоинты, не обходя RBAC/два оператора. Роли `viewer` и
+  `auditor` видят только предупреждение "read only" без управляющих форм.
 - Telegram-бот дублирует критичные события (HOLD, runaway guard, kill switch,
   auto-hedge, двухшаговый RESUME).
 
@@ -484,12 +485,10 @@
   лимиты, последние таймштампы), живые и `partial` позиции, очередь two-man
   approvals, последние execution stats (slippage), актуальные reconciliation
   alerts и свежий daily report.
-- Если нужен лёгкий отчёт без записи файла — вызовите `GET /api/ui/audit_snapshot`
-  с тем же токеном. Там только операционное состояние: режимы (HOLD/SAFE_MODE/
-  DRY_RUN), живые позиции/экспозиция, состояние StrategyRiskManager
-  (`active`/`blocked_by_risk`/`frozen_by_risk`), UniverseManager (кандидаты и
-  разрешённые символы) и `build_version`. Никаких секретов из `secrets_store` в
-  ответ не попадает.
+- Если нужен лёгкий аудит действий — вызовите `GET /api/ui/audit_snapshot`
+  с тем же токеном. Ответ содержит последние записи `audit_log` (оператор,
+  роль, действие, `status` = `requested` / `approved` / `denied` / `forbidden`,
+  таймштамп). Это быстрый способ проверить, кто поставил HOLD или Kill-request.
 - Для повседневной проверки используйте `GET /api/ui/ops_report` — агрегированный
   read-only срез: режим runtime и SAFE_MODE, DRY_RUN/автопилот (с `last_decision`),
   очередь RESUME, суммарная экспозиция, объединённый `strategy_status`
@@ -556,11 +555,13 @@
 - Блок Pending approvals подгружается из `ops_approvals.json`: видны запросы на
   снятие HOLD/выход из DRY_RUN/поднятие лимитов, кто и когда их инициировал, и
   текущий статус.
-- Блок Controls использует формы, бьющие в прокси `/ui/dashboard/hold` /
-  `resume` / `kill`. Они конвертируют форму в JSON, вызывают прежние guarded
-  эндпоинты и показывают результат прямо в браузере. Настоящее возобновление
-  торговли по-прежнему требует второго оператора и `APPROVE_TOKEN` — панель
-  явно напоминает об этом, никакого обхода двухшаговой защиты нет.
+- Блок Controls использует формы, бьющие в прокси `/api/ui/dashboard-hold` /
+  `dashboard-resume-request` / `dashboard-unfreeze-strategy` / `dashboard-kill`.
+  Они конвертируют форму в JSON, вызывают прежние guarded эндпоинты и показывают
+  результат прямо в браузере. Настоящее возобновление торговли по-прежнему
+  требует второго оператора и `APPROVE_TOKEN` — панель явно напоминает об этом,
+  никакого обхода двухшаговой защиты нет. Роли `viewer`/`auditor` видят только
+  read-only баннер без форм.
 - Добавлен read-only блок **PnL / Risk**: в одном месте видно текущий unrealised
   PnL, stub поля `realised_pnl_today_usdt` (пока всегда `0.0`, до интеграции
   расчёта фактических закрытий), суммарный notional открытых/partial ног и запас
