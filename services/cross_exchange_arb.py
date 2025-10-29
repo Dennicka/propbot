@@ -14,6 +14,7 @@ from app.services.runtime import (
     record_incident,
     register_order_attempt,
 )
+from app.strategy_budget import get_strategy_budget_manager
 from positions import create_position
 from exchanges import BinanceFuturesClient, OKXFuturesClient
 from .execution_router import choose_venue
@@ -35,6 +36,9 @@ _clients = _ExchangeClients(
     binance=BinanceFuturesClient(),
     okx=OKXFuturesClient(),
 )
+
+
+STRATEGY_NAME = "cross_exchange_arb"
 
 
 def _determine_cheapest(
@@ -457,6 +461,7 @@ def _persist_partial_position(
             status="partial",
             simulated=False,
             legs=legs,
+            strategy=STRATEGY_NAME,
         )
         return record
     except Exception:  # pragma: no cover - defensive persistence
@@ -492,6 +497,7 @@ def execute_hedged_trade(
     short_plan = dict(choose_venue("short", spread_info["symbol"], short_size) or {})
 
     dry_run_mode = is_dry_run_mode()
+    budget_manager = get_strategy_budget_manager()
 
     def _record_and_return(reason: str) -> dict:
         _record_execution_stat(
@@ -522,6 +528,21 @@ def execute_hedged_trade(
             "long_plan": long_plan,
             "short_plan": short_plan,
         }
+
+    if not dry_run_mode and not budget_manager.can_allocate(
+        STRATEGY_NAME, notional, requested_positions=1
+    ):
+        result = _record_and_return("strategy_budget_exceeded")
+        result.update(
+            {
+                "ok": False,
+                "state": "BUDGET_BLOCKED",
+                "strategy": STRATEGY_NAME,
+                "limits": budget_manager.get_limits(STRATEGY_NAME),
+                "requested_notional": notional,
+            }
+        )
+        return result
 
     if not long_plan or not short_plan:
         return _record_and_return("routing_unavailable")

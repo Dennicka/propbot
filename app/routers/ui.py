@@ -53,6 +53,7 @@ from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
+from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_risk import get_strategy_risk_manager
 from ..orchestrator import orchestrator
 from ..services.positions_view import build_positions_snapshot
@@ -88,6 +89,36 @@ def capital_snapshot(request: Request) -> dict[str, Any]:
     require_token(request)
     manager = get_capital_manager()
     return manager.snapshot()
+
+
+@router.get("/strategy_budget")
+def strategy_budget_summary(request: Request) -> dict[str, Any]:
+    """Return the per-strategy budget state for viewer/operator roles."""
+
+    token = require_token(request)
+    if token is not None:
+        identity = resolve_operator_identity(token)
+        if not identity:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+        _, role = identity
+        if role not in {"viewer", "operator"}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
+    manager = get_strategy_budget_manager()
+    snapshot = manager.snapshot()
+    strategies: list[dict[str, object]] = []
+    for name in sorted(snapshot):
+        entry = snapshot[name]
+        strategies.append(
+            {
+                "strategy": name,
+                "max_notional_usdt": entry.get("max_notional_usdt"),
+                "current_notional_usdt": entry.get("current_notional_usdt"),
+                "max_open_positions": entry.get("max_open_positions"),
+                "current_open_positions": entry.get("current_open_positions"),
+                "blocked": bool(entry.get("blocked")),
+            }
+        )
+    return {"strategies": strategies}
 
 
 def _authorize_operator_action(request: Request, action: Action) -> Optional[OperatorIdentity]:

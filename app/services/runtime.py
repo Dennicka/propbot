@@ -1509,6 +1509,12 @@ def reset_for_tests() -> None:
         consecutive_failures=0,
     )
     approvals_store.reset_for_tests()
+    try:
+        from ..strategy_budget import get_strategy_budget_manager
+
+        get_strategy_budget_manager().reset_all_usage()
+    except Exception:
+        pass
 
 
 def control_as_dict() -> Dict[str, object]:

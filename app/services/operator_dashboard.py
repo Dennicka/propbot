@@ -38,6 +38,7 @@ from services.execution_stats_store import (
 )
 from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
+from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_risk import get_strategy_risk_manager
 
 
@@ -262,6 +263,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     pnl_snapshot = build_pnl_snapshot(positions_payload)
     risk_snapshot = await build_risk_snapshot()
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
+    strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
         persisted.get("safety") if isinstance(persisted, Mapping) else None
@@ -362,6 +364,20 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         risk_throttled=risk_throttled,
     )
 
+    strategy_budgets: list[dict[str, object]] = []
+    for strategy_name in sorted(strategy_budget_snapshot):
+        entry = strategy_budget_snapshot[strategy_name]
+        strategy_budgets.append(
+            {
+                "strategy": strategy_name,
+                "max_notional_usdt": entry.get("max_notional_usdt"),
+                "current_notional_usdt": entry.get("current_notional_usdt"),
+                "max_open_positions": entry.get("max_open_positions"),
+                "current_open_positions": entry.get("current_open_positions"),
+                "blocked": bool(entry.get("blocked")),
+            }
+        )
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -407,6 +423,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "risk_snapshot": risk_snapshot,
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
+        "strategy_budgets": strategy_budgets,
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
     }
@@ -541,6 +558,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     exposures = context.get("exposure", {}) or {}
     positions = context.get("positions", []) or []
     totals = context.get("position_totals", {}) or {}
+    strategy_budgets = context.get("strategy_budgets", []) or []
     health_checks = context.get("health_checks", []) or []
     approvals = context.get("pending_approvals", []) or []
     flash_messages = context.get("flash_messages", []) or []
@@ -684,6 +702,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-risk .failure-count{font-weight:700;}"
         ".strategy-risk .failure-count-alert{color:#b91c1c;}"
         ".strategy-risk .failure-count-ok{color:#166534;}"
+        ".strategy-budgets{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".strategy-budgets h2{margin-top:0;}"
+        ".strategy-budgets table{margin-top:1rem;}"
+        ".strategy-budgets tr.blocked{background:#fee2e2;}"
+        ".strategy-budgets .status-ok{color:#166534;font-weight:700;}"
+        ".strategy-budgets .status-blocked{color:#b91c1c;font-weight:700;}"
         ".pnl-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".pnl-risk h2{margin-top:0;}"
         ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
@@ -875,6 +899,50 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 "<div class=\"note\">Strategy enable/disable controls require operator role. Status is still visible above.</div>"
             )
     parts.append("".join(strategy_risk_html) + "</div>")
+
+    budget_parts = ["<div class=\"strategy-budgets\"><h2>Strategy Budgets</h2>"]
+    if strategy_budgets:
+        budget_parts.append(
+            "<table><thead><tr><th>Strategy</th><th>Notional (current / max)</th><th>Open positions</th><th>Status</th></tr></thead><tbody>"
+        )
+        for entry in strategy_budgets:
+            strategy_name = _fmt(entry.get("strategy"))
+            current_notional = _fmt(entry.get("current_notional_usdt"))
+            max_notional_value = entry.get("max_notional_usdt")
+            max_notional = (
+                "&infin;" if max_notional_value in (None, 0) else _fmt(max_notional_value)
+            )
+            notional_tag = _near_limit_tag(
+                entry.get("current_notional_usdt"), max_notional_value
+            )
+            current_positions = _fmt(entry.get("current_open_positions"))
+            max_positions_value = entry.get("max_open_positions")
+            max_positions = (
+                "&infin;" if max_positions_value in (None, 0) else _fmt(max_positions_value)
+            )
+            blocked = bool(entry.get("blocked"))
+            status_html = (
+                '<span class="status-blocked">BLOCKED</span>'
+                if blocked
+                else '<span class="status-ok">OK</span>'
+            )
+            row_class = " class=\"blocked\"" if blocked else ""
+            budget_parts.append(
+                "<tr{row_class}><td>{strategy}</td><td>{notional}{tag}</td><td>{positions}</td><td>{status}</td></tr>".format(
+                    row_class=row_class,
+                    strategy=strategy_name,
+                    notional=f"{current_notional} / {max_notional}",
+                    tag=notional_tag,
+                    positions=f"{current_positions} / {max_positions}",
+                    status=status_html,
+                )
+            )
+        budget_parts.append("</tbody></table>")
+    else:
+        budget_parts.append(
+            "<p class=\"note\">Strategy budget data unavailable.</p>"
+        )
+    parts.append("".join(budget_parts) + "</div>")
 
 
 
