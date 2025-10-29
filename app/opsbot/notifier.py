@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Deque, Dict, Iterable, List, Mapping, MutableSequence
+from typing import Deque, Dict, Iterable, List, Mapping, MutableSequence, Optional
 
 import requests
 from fastapi import FastAPI
@@ -172,6 +172,47 @@ def _enqueue_telegram(record: Mapping[str, object]) -> None:
     _QUEUE_EVENT.set()
 
 
+def send_watchdog_alert(
+    exchange: str,
+    reason: str,
+    mode: str = "AUTO_HOLD",
+    *,
+    status_text: str = "HOLD active; trading paused",
+    timestamp: Optional[str] = None,
+    hold_reason: Optional[str] = None,
+    context: Optional[str] = None,
+) -> Dict[str, object]:
+    """Emit a structured watchdog alert to the ops channel and Telegram."""
+
+    exchange_label = str(exchange or "").strip() or "exchange"
+    reason_label = str(reason or "").strip() or "unknown"
+    headline = f"[ALERT] Exchange watchdog triggered {mode}".strip()
+    lines = [
+        headline,
+        f"Exchange: {exchange_label}",
+        f"Reason: {reason_label}",
+        f"Status: {status_text}",
+    ]
+    text = "\n".join(lines)
+    extra: Dict[str, object] = {
+        "exchange": exchange_label,
+        "reason": reason_label,
+        "mode": mode,
+        "status": "hold_active",
+        "status_text": status_text,
+        "hold_active": True,
+        "actor": "system",
+        "initiated_by": "system",
+    }
+    if timestamp:
+        extra["timestamp"] = timestamp
+    if hold_reason:
+        extra["hold_reason"] = hold_reason
+    if context:
+        extra["context"] = context
+    return emit_alert("watchdog_alert", text, extra=extra)
+
+
 def _telegram_url(config: TelegramConfig) -> str:
     token = config.token or ""
     return f"https://api.telegram.org/bot{token}/sendMessage"
@@ -292,6 +333,7 @@ def setup_notifier(app: FastAPI) -> None:
 __all__ = [
     "alert_ops",
     "emit_alert",
+    "send_watchdog_alert",
     "get_recent_alerts",
     "setup_notifier",
     "start_worker",
