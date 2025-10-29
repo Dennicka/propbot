@@ -9,6 +9,7 @@ from typing import Any, Dict, Mapping, Sequence
 
 from fastapi import Request
 
+from ..audit_log import list_recent_operator_actions
 from ..opsbot import notifier
 from ..runtime_state_store import load_runtime_payload
 from ..pnl_report import build_pnl_snapshot
@@ -282,6 +283,10 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     control_flags = state.control.flags
     active_alerts = risk_alerts.evaluate_alerts()
     recent_audit = notifier.get_recent_alerts(limit=5)
+    try:
+        recent_operator_actions = list_recent_operator_actions(limit=5)
+    except Exception:
+        recent_operator_actions = []
     recent_ops_incidents = list_recent_events(limit=10)
 
     hold_reason = str(safety_payload.get("hold_reason") or "")
@@ -352,6 +357,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "persisted_snapshot": persisted,
         "active_alerts": active_alerts,
         "recent_audit": recent_audit,
+        "recent_operator_actions": recent_operator_actions,
         "recent_ops_incidents": recent_ops_incidents,
         "liquidity": liquidity_status,
         "reconciliation": reconciliation_status,
@@ -407,6 +413,20 @@ def _extra_block(extra: object) -> str:
     except (TypeError, ValueError):
         text = str(payload)
     return f"<div style=\"font-size:0.8rem;color:#4b5563;margin-top:0.25rem;\">{escape(text)}</div>"
+
+
+def _operator_action_details(details: object) -> str:
+    if isinstance(details, Mapping):
+        payload = {str(key): value for key, value in details.items()}
+        if not payload:
+            return ""
+        try:
+            return escape(json.dumps(payload, sort_keys=True))
+        except (TypeError, ValueError):
+            return escape(str(payload))
+    if details is None:
+        return ""
+    return _fmt(details)
 
 
 def _ops_status_badge(status: object, action: object) -> str:
@@ -483,6 +503,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     throttle_reason = context.get("risk_throttle_reason") or ""
     active_alerts = context.get("active_alerts", []) or []
     recent_audit = context.get("recent_audit", []) or []
+    recent_operator_actions = context.get("recent_operator_actions", []) or []
     trend = context.get("pnl_trend", {}) or {}
     liquidity = context.get("liquidity", {}) or {}
     liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
@@ -1130,6 +1151,24 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             f"{_fmt(resume_request.get('requested_at'))} — reason: {_fmt(resume_request.get('reason'))}"
         )
         parts.append(f"<tr><th>Pending Resume Request</th><td>{rr_line}</td></tr>")
+    parts.append("</tbody></table>")
+
+    parts.append("<h3 style=\"margin-top:1rem;\">Recent operator actions</h3>")
+    parts.append(
+        "<table><thead><tr><th>Timestamp</th><th>Operator</th><th>Action</th><th>Details</th></tr></thead><tbody>"
+    )
+    if not recent_operator_actions:
+        parts.append("<tr><td colspan=\"4\">No operator actions recorded</td></tr>")
+    else:
+        for action_entry in recent_operator_actions:
+            parts.append(
+                "<tr><td>{ts}</td><td>{name}</td><td>{action}</td><td>{details}</td></tr>".format(
+                    ts=_fmt(action_entry.get("timestamp")),
+                    name=_fmt(action_entry.get("operator_name")),
+                    action=_fmt(action_entry.get("action")),
+                    details=_operator_action_details(action_entry.get("details")),
+                )
+            )
     parts.append("</tbody></table>")
 
     risk_autopilot_label = "ENABLED" if risk_snapshot_autopilot else "DISABLED"

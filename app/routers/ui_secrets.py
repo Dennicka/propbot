@@ -43,12 +43,22 @@ def secrets_status(request: Request, threshold_days: int = 90) -> Dict[str, obje
 
     identity = _resolve_identity(token, store)
     if not identity:
-        log_operator_action("unknown", "unknown", "SECRETS_STATUS", channel="api", details="forbidden")
+        log_operator_action(
+            "unknown",
+            "unknown",
+            "SECRETS_STATUS",
+            details={"status": "forbidden"},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
     name, role = identity
     if role != "operator":
-        log_operator_action(name, role, "SECRETS_STATUS", channel="api", details="forbidden")
+        log_operator_action(
+            name,
+            role,
+            "SECRETS_STATUS",
+            details={"status": "forbidden"},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
     rotation = store.needs_rotation(threshold_days)
@@ -57,7 +67,7 @@ def secrets_status(request: Request, threshold_days: int = 90) -> Dict[str, obje
         for operator_name, operator_role in store.list_operator_infos()
     ]
 
-    log_operator_action(name, role, "SECRETS_STATUS", channel="api", details="ok")
+    log_operator_action(name, role, "SECRETS_STATUS", details={"status": "ok"})
     return {"rotation_needed": rotation, "operators": operators}
 
 
