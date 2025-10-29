@@ -44,6 +44,7 @@ from ..services.hedge_log import read_entries
 from ..secrets_store import SecretsStore
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
+from ..risk_snapshot import build_risk_snapshot
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
 from pnl_history_store import list_recent as list_recent_snapshots
@@ -235,6 +236,14 @@ async def hedge_positions(request: Request) -> dict:
     if not positions:
         return {"positions": [], "exposure": {}, "totals": {"unrealized_pnl_usdt": 0.0}}
     return await build_positions_snapshot(state, positions)
+
+
+@router.get("/risk_snapshot")
+async def risk_snapshot(request: Request) -> dict:
+    """Return an aggregate risk snapshot for operators."""
+
+    require_token(request)
+    return await build_risk_snapshot()
 
 
 @router.get("/pnl_history")
