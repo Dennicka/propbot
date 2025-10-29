@@ -5,10 +5,11 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Tuple
 
-from ..core.config import ArbitragePairConfig
 from ..broker.router import ExecutionRouter
-from .derivatives import DerivativesRuntime
+from ..core.config import ArbitragePairConfig
+from ..strategy_risk import get_strategy_risk_manager
 from . import risk
+from .derivatives import DerivativesRuntime
 from .runtime import (
     HoldActiveError,
     bump_counter,
@@ -590,6 +591,15 @@ class ArbitrageEngine:
         return order
 
     def execute(self, pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False, dry_run: bool = True) -> Dict[str, object]:
+        strategy_name = "cross_exchange_arb"
+        if get_strategy_risk_manager().is_frozen(strategy_name):
+            return {
+                "ok": False,
+                "executed": False,
+                "state": "BLOCKED",
+                "reason": "blocked_by_risk_freeze",
+                "strategy": strategy_name,
+            }
         state = get_state()
         pair_cfg, edge = self._select_pair(pair_id)
         order_size = edge["tradable_size"] if size is None else min(size, edge["tradable_size"])
@@ -748,6 +758,15 @@ def current_edges() -> List[Dict[str, object]]:
 
 
 def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False) -> Dict[str, object]:
+    strategy_name = "cross_exchange_arb"
+    if get_strategy_risk_manager().is_frozen(strategy_name):
+        return {
+            "ok": False,
+            "executed": False,
+            "state": "BLOCKED",
+            "reason": "blocked_by_risk_freeze",
+            "strategy": strategy_name,
+        }
     engine = get_engine()
     state = get_state()
     report = engine.run_preflight()

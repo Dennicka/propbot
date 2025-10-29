@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Mapping, Optional
 
+from . import audit_log
+
 DEFAULT_LIMITS: Dict[str, Dict[str, float | int]] = {
     "cross_exchange_arb": {
         "daily_loss_usdt": 500.0,
@@ -17,7 +19,7 @@ class StrategyState:
     realized_pnl_today: float = 0.0
     consecutive_failures: int = 0
     frozen: bool = False
-    reason: Optional[str] = None
+    freeze_reason: Optional[str] = None
     last_update_ts: float = field(default_factory=time.time)
 
 
@@ -46,12 +48,20 @@ class StrategyRiskManager:
         state = self._ensure_strategy(strategy_name)
         state.realized_pnl_today += float(pnl_delta_usdt or 0.0)
         state.last_update_ts = time.time()
+        self.check_limits(strategy_name)
 
     def record_failure(self, strategy_name: str, failure_reason: str) -> None:
         state = self._ensure_strategy(strategy_name)
         state.consecutive_failures += 1
-        state.reason = failure_reason or state.reason
         state.last_update_ts = time.time()
+        self._check_limits_and_freeze(strategy_name, state)
+        self.check_limits(strategy_name)
+
+    def record_success(self, strategy_name: str) -> None:
+        state = self._ensure_strategy(strategy_name)
+        state.consecutive_failures = 0
+        state.last_update_ts = time.time()
+        # successful execution does not unfreeze automatically
 
     def reset_daily_if_needed(self) -> None:
         """Placeholder for daily reset logic.
@@ -65,6 +75,7 @@ class StrategyRiskManager:
         limits = self.limits.get(strategy_name, {})
         breach_reasons: list[str] = []
         breach = False
+        freeze_reason: str | None = None
 
         daily_limit = _coerce_float(limits.get("daily_loss_usdt"))
         if daily_limit is not None:
@@ -74,6 +85,7 @@ class StrategyRiskManager:
                 breach_reasons.append(
                     f"realized_pnl_today={pnl_today:.2f} below -{daily_limit:.2f} limit"
                 )
+                freeze_reason = freeze_reason or "pnl_limit_breach"
 
         max_failures = _coerce_int(limits.get("max_consecutive_failures"))
         if max_failures is not None and state.consecutive_failures > max_failures:
@@ -81,12 +93,22 @@ class StrategyRiskManager:
             breach_reasons.append(
                 f"consecutive_failures={state.consecutive_failures} exceeds {max_failures}"
             )
+            freeze_reason = freeze_reason or "too_many_failures"
+
+        if breach and not state.frozen:
+            self._freeze_strategy(
+                strategy_name,
+                freeze_reason or "limit_breach",
+                operator_name="system",
+                role="system",
+            )
 
         snapshot = {
             "realized_pnl_today": state.realized_pnl_today,
             "consecutive_failures": state.consecutive_failures,
             "frozen": state.frozen,
-            "reason": state.reason,
+            "freeze_reason": state.freeze_reason,
+            "reason": state.freeze_reason,
             "last_update_ts": state.last_update_ts,
         }
 
@@ -114,6 +136,64 @@ class StrategyRiskManager:
             "timestamp": time.time(),
             "strategies": strategies,
         }
+
+    def is_frozen(self, strategy_name: str) -> bool:
+        state = self._ensure_strategy(strategy_name)
+        return bool(state.frozen)
+
+    def unfreeze_strategy(
+        self,
+        strategy_name: str,
+        *,
+        operator_name: str,
+        role: str,
+        reason: str,
+    ) -> None:
+        state = self._ensure_strategy(strategy_name)
+        state.frozen = False
+        state.freeze_reason = ""
+        state.consecutive_failures = 0
+        state.last_update_ts = time.time()
+        audit_log.log_operator_action(
+            operator_name=operator_name,
+            role=role,
+            action="STRATEGY_UNFREEZE_MANUAL",
+            details={"strategy": strategy_name, "reason": reason},
+        )
+
+    def _freeze_strategy(
+        self,
+        strategy_name: str,
+        reason: str,
+        *,
+        operator_name: str,
+        role: str,
+    ) -> None:
+        state = self._ensure_strategy(strategy_name)
+        if state.frozen and state.freeze_reason == reason:
+            return
+        state.frozen = True
+        state.freeze_reason = reason
+        state.last_update_ts = time.time()
+        audit_log.log_operator_action(
+            operator_name=operator_name,
+            role=role,
+            action="STRATEGY_AUTO_FREEZE",
+            details={"strategy": strategy_name, "reason": reason},
+        )
+
+    def _check_limits_and_freeze(self, strategy_name: str, state: StrategyState) -> None:
+        limits = self.limits.get(strategy_name, {})
+        max_failures = _coerce_int(limits.get("max_consecutive_failures"))
+        if max_failures is None:
+            return
+        if state.consecutive_failures > max_failures:
+            self._freeze_strategy(
+                strategy_name,
+                "too_many_failures",
+                operator_name="system",
+                role="system",
+            )
 
 
 def _coerce_float(value: object) -> Optional[float]:

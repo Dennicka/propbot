@@ -618,6 +618,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-risk h2{margin-top:0;}"
         ".strategy-risk .breach-ok{color:#166534;font-weight:700;}"
         ".strategy-risk .breach-alert{color:#b91c1c;font-weight:700;}"
+        ".strategy-risk .freeze-alert{color:#b91c1c;font-weight:700;margin-top:0.35rem;}"
+        ".strategy-risk .frozen-pill{display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;background:#fee2e2;color:#991b1b;font-weight:700;text-transform:uppercase;}"
         ".pnl-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".pnl-risk h2{margin-top:0;}"
         ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
@@ -698,7 +700,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         strategy_risk_html.append("<p class=\"note\">No strategy risk data available.</p>")
     else:
         strategy_risk_html.append(
-            "<table><thead><tr><th>Strategy</th><th>Daily loss (current / limit)</th><th>Consecutive failures (current / limit)</th><th>Status</th></tr></thead><tbody>"
+            "<table><thead><tr><th>Strategy</th><th>Daily loss (current / limit)</th><th>Consecutive failures (current / limit)</th><th>Frozen</th><th>Status</th></tr></thead><tbody>"
         )
         for name in sorted(strategy_risk_strategies):
             entry = strategy_risk_strategies.get(name) or {}
@@ -709,26 +711,40 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             realized = state.get("realized_pnl_today")
             failure_limit = limits.get("max_consecutive_failures")
             failure_count = state.get("consecutive_failures")
-            status_label = (
-                '<span class="breach-alert">BREACH DETECTED</span>'
-                if breach
-                else '<span class="breach-ok">OK</span>'
-            )
+            frozen = bool(state.get("frozen") or entry.get("frozen"))
+            freeze_reason = state.get("freeze_reason") or entry.get("reason") or ""
+            status_label_parts: list[str] = []
             if breach:
+                status_label_parts.append('<span class="breach-alert">BREACH DETECTED</span>')
                 reasons = entry.get("breach_reasons") or []
-                reason_notes = "".join(
+                status_label_parts.extend(
                     f"<div class=\"note\">{_fmt(reason)}</div>" for reason in reasons if reason
                 )
-                status_label = status_label + reason_notes
+            else:
+                status_label_parts.append('<span class="breach-ok">OK</span>')
+            if frozen:
+                reason_text = freeze_reason or "manual_override"
+                status_label_parts.append(
+                    f"<div class=\"freeze-alert\">FROZEN by risk: {_fmt(reason_text)}</div>"
+                )
+            status_label = "".join(status_label_parts)
+            frozen_label = (
+                '<span class="frozen-pill">FROZEN</span>' if frozen else '<span class="breach-ok">no</span>'
+            )
             strategy_risk_html.append(
-                "<tr><td>{name}</td><td>{pnl}</td><td>{failures}</td><td>{status}</td></tr>".format(
+                "<tr><td>{name}</td><td>{pnl}</td><td>{failures}</td><td>{frozen}</td><td>{status}</td></tr>".format(
                     name=_fmt(name),
                     pnl=f"{_fmt(realized)} (limit {_fmt(daily_limit)})",
                     failures=f"{_fmt(failure_count)} (limit {_fmt(failure_limit)})",
+                    frozen=frozen_label,
                     status=status_label,
                 )
             )
         strategy_risk_html.append("</tbody></table>")
+        if is_operator:
+            strategy_risk_html.append(
+                "<div class=\"note\"><strong>Manual override:</strong> send <code>POST /api/ui/unfreeze-strategy</code> with JSON <code>{&quot;strategy&quot;: &quot;cross_exchange_arb&quot;, &quot;reason&quot;: &quot;operator override&quot;}</code> to clear a frozen strategy.</div>"
+            )
     parts.append("".join(strategy_risk_html) + "</div>")
 
     pnl_parts = ["<div class=\"pnl-risk\"><h2>PnL / Risk</h2>"]
