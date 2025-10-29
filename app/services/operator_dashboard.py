@@ -282,7 +282,22 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     control_flags = state.control.flags
     active_alerts = risk_alerts.evaluate_alerts()
-    recent_audit = notifier.get_recent_alerts(limit=5)
+    recent_audit = notifier.get_recent_alerts(limit=10)
+    last_watchdog_alert: dict[str, str] | None = None
+    for entry in recent_audit:
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind != "watchdog_alert":
+            continue
+        extra_payload = entry.get("extra") if isinstance(entry.get("extra"), Mapping) else {}
+        exchange_value = extra_payload.get("exchange") if isinstance(extra_payload, Mapping) else None
+        reason_value = extra_payload.get("reason") if isinstance(extra_payload, Mapping) else None
+        timestamp_value = extra_payload.get("timestamp") if isinstance(extra_payload, Mapping) else None
+        last_watchdog_alert = {
+            "exchange": str(exchange_value or entry.get("exchange") or ""),
+            "reason": str(reason_value or entry.get("text") or ""),
+            "timestamp": str(timestamp_value or entry.get("ts") or ""),
+        }
+        break
     try:
         recent_operator_actions = list_recent_operator_actions(limit=5)
     except Exception:
@@ -360,6 +375,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "persisted_snapshot": persisted,
         "active_alerts": active_alerts,
         "recent_audit": recent_audit,
+        "last_watchdog_alert": last_watchdog_alert,
         "recent_operator_actions": recent_operator_actions,
         "recent_ops_incidents": recent_ops_incidents,
         "liquidity": liquidity_status,
@@ -1191,6 +1207,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     hold_reason_raw = safety.get("hold_reason")
     hold_reason_display = safety.get("hold_reason_display") or hold_reason_raw
     hold_since = safety.get("hold_since")
+    last_watchdog_alert = context.get("last_watchdog_alert") or {}
     parts.append("<h2>Runtime &amp; Safety</h2><table><tbody>")
     mode_value = _fmt(context.get("control", {}).get("mode"))
     if risk_throttled:
@@ -1207,6 +1224,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         hold_cell = '<span style=\"color:#1b7f3b;font-weight:600;\">NO</span>'
     parts.append(f"<tr><th>HOLD Active</th><td>{hold_cell}</td></tr>")
+
+    if isinstance(last_watchdog_alert, Mapping) and last_watchdog_alert:
+        watchdog_cell = (
+            f"{_fmt(last_watchdog_alert.get('exchange'))} / "
+            f"{_fmt(last_watchdog_alert.get('reason'))} / "
+            f"{_fmt(last_watchdog_alert.get('timestamp'))}"
+        )
+    else:
+        watchdog_cell = "n/a"
+    parts.append(f"<tr><th>Last watchdog alert</th><td>{watchdog_cell}</td></tr>")
 
     if edge_guard_allowed:
         guard_cell = '<span style="color:#1b7f3b;font-weight:600;">YES</span>'

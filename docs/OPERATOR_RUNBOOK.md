@@ -380,6 +380,20 @@
 - Telegram-бот дублирует критичные события (HOLD, runaway guard, kill switch,
   auto-hedge, двухшаговый RESUME).
 
+### Watchdog alerts in Telegram
+
+- Если exchange watchdog фиксирует критический сбой (биржа недоступна или
+  жестко лочит нас по rate limit), бот автоматически включает HOLD/SAFE_MODE.
+- В ops-канал приходит уведомление вида `[ALERT] Exchange watchdog triggered
+  auto-HOLD` с деталями: биржа (`binance` / `okx`), причина (`unreachable` /
+  `rate_limited`) и статус `HOLD active — trading paused`.
+- Действия операторов после тревоги:
+  1. Проверить состояние биржи (heartbeat, статус-доски, аккаунт).
+  2. Устранить первопричину (поднять коннект, дождаться снятия rate limit).
+  3. Выполнить стандартную двухшаговую процедуру RESUME (запрос + подтверждение
+     оператором с APPROVE_TOKEN). HOLD снимать через Telegram разрешено только
+     операторам; viewer остаётся read-only.
+
 ### Daily report / инвестор апдейт
 
 - Каждую ночь (или вручную через cron) сохраняется агрегат `data/daily_reports.json` —
