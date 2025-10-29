@@ -33,6 +33,7 @@ from services.execution_stats_store import (
     list_recent as list_recent_execution_stats,
 )
 from services.daily_reporter import load_latest_report
+from ..risk_snapshot import build_risk_snapshot
 
 
 def _env_int(name: str, default: int) -> int:
@@ -253,6 +254,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     auto_state = get_auto_hedge_state()
     positions_snapshot_source = list_positions()
     positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
+    risk_snapshot = await build_risk_snapshot()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
         persisted.get("safety") if isinstance(persisted, Mapping) else None
@@ -354,6 +356,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "risk_advice": risk_advice,
         "execution_quality": execution_quality,
         "daily_report": daily_report or {},
+        "risk_snapshot": risk_snapshot,
     }
 
 
@@ -502,6 +505,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_attempt = autopilot.get("last_attempt_ts") or ""
     autopilot_armed = bool(autopilot.get("armed"))
 
+    risk_snapshot = context.get("risk_snapshot", {}) or {}
+    risk_snapshot_total = risk_snapshot.get("total_notional_usd")
+    risk_snapshot_partial = risk_snapshot.get("partial_hedges_count")
+    risk_snapshot_autopilot = bool(risk_snapshot.get("autopilot_enabled"))
+    risk_snapshot_score = risk_snapshot.get("risk_score") or "TBD"
+    risk_snapshot_per_venue = risk_snapshot.get("per_venue") or {}
+
     operator_info = context.get("operator", {}) or {}
     operator_name = operator_info.get("name") or "unknown"
     operator_role_raw = str(operator_info.get("role") or "viewer").strip().lower()
@@ -532,6 +542,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        ".risk-snapshot{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".risk-snapshot h2{margin-top:0;}"
+        ".risk-snapshot table{margin-top:1rem;}"
+        ".risk-snapshot .risk-label{font-weight:600;color:#374151;margin-right:0.5rem;}"
+        ".risk-snapshot .risk-pill{font-weight:700;}"
         "button:disabled{background:#9ca3af;cursor:not-allowed;}"
         "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
         "</style></head><body>"
@@ -894,6 +909,44 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
         parts.append(f"<tr><th>Pending Resume Request</th><td>{rr_line}</td></tr>")
     parts.append("</tbody></table>")
+
+    risk_autopilot_label = "ENABLED" if risk_snapshot_autopilot else "DISABLED"
+    risk_autopilot_color = "#1b7f3b" if risk_snapshot_autopilot else "#b00020"
+    risk_autopilot_html = (
+        f'<span class="risk-pill" style="color:{risk_autopilot_color};">{risk_autopilot_label}</span>'
+    )
+    parts.append("<div class=\"risk-snapshot\">")
+    parts.append("<h2>Risk snapshot</h2>")
+    parts.append(
+        f"<p><span class=\"risk-label\">total_notional_usd:</span> <strong>{_fmt(risk_snapshot_total)}</strong></p>"
+    )
+    parts.append(
+        f"<p><span class=\"risk-label\">partial_hedges_count:</span> <strong>{_fmt(risk_snapshot_partial)}</strong></p>"
+    )
+    parts.append(
+        f"<p><span class=\"risk-label\">autopilot_enabled:</span> {risk_autopilot_html}</p>"
+    )
+    parts.append(
+        f"<p><span class=\"risk-label\">risk_score:</span> <strong>{_fmt(risk_snapshot_score)}</strong></p>"
+    )
+    if risk_snapshot_per_venue:
+        parts.append(
+            "<table><thead><tr><th>Venue</th><th>net_exposure_usd</th><th>unrealised_pnl_usd</th><th>open_positions_count</th></tr></thead><tbody>"
+        )
+        for venue, stats in sorted(risk_snapshot_per_venue.items()):
+            stats = stats or {}
+            parts.append(
+                "<tr><td>{venue}</td><td>{exposure}</td><td>{pnl}</td><td>{positions}</td></tr>".format(
+                    venue=_fmt(venue),
+                    exposure=_fmt(stats.get("net_exposure_usd")),
+                    pnl=_fmt(stats.get("unrealised_pnl_usd")),
+                    positions=_fmt(stats.get("open_positions_count")),
+                )
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p class=\"note\">No active venues recorded.</p>")
+    parts.append("</div>")
 
     parts.append("<h2>Auto-Hedge</h2><table><tbody>")
     parts.append(f"<tr><th>Enabled</th><td>{'YES' if auto.get('enabled') else 'NO'}</td></tr>")
