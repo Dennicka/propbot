@@ -559,6 +559,10 @@
           <div id="riskCurrent" class="muted">Loading…</div>
         </div>
         <div class="risk-section">
+          <h3>Daily loss cap</h3>
+          <div id="botLossCap" class="muted">Not configured</div>
+        </div>
+        <div class="risk-section">
           <h3>Breaches</h3>
           <div id="riskBreaches" class="muted">No active breaches</div>
         </div>
@@ -748,6 +752,7 @@
       const riskLimitsEl = document.getElementById('riskLimits');
       const riskCurrentEl = document.getElementById('riskCurrent');
       const riskBreachesEl = document.getElementById('riskBreaches');
+      const botLossCapEl = document.getElementById('botLossCap');
       const eventsContainer = document.getElementById('events');
       const eventLevelSelect = document.getElementById('eventLevel');
       const eventVenueInput = document.getElementById('eventVenue');
@@ -950,6 +955,7 @@
           riskCurrentEl.textContent = 'Unavailable';
           riskBreachesEl.textContent = 'No data';
           riskBreachesEl.classList.add('muted');
+          renderBotLossCap(null);
           return;
         }
         const limits = risk.limits || {};
@@ -1018,6 +1024,42 @@
           riskBreachesEl.classList.add('muted');
         }
       };
+
+      function renderBotLossCap(lossCap) {
+        if (!botLossCapEl) return;
+        if (!lossCap || typeof lossCap !== 'object') {
+          botLossCapEl.textContent = 'Not configured';
+          botLossCapEl.classList.add('muted');
+          return;
+        }
+        const capValue = Number(lossCap.cap_usdt ?? lossCap.cap);
+        if (!Number.isFinite(capValue) || capValue <= 0) {
+          botLossCapEl.textContent = 'Cap disabled';
+          botLossCapEl.classList.add('muted');
+          return;
+        }
+        const realizedValue = Number(lossCap.realized_today_usdt ?? 0);
+        const remainingRaw = lossCap.remaining_usdt;
+        const remainingValue = Number(remainingRaw);
+        const breached = Boolean(lossCap.breached);
+        const statusIcon = breached ? '🔴' : '🟢';
+        const statusText = breached ? 'Breached' : 'OK';
+        const statusClass = breached ? 'value bad' : 'value good';
+        const remainingClass = Number.isFinite(remainingValue)
+          ? `value ${remainingValue >= 0 ? 'good' : 'bad'}`
+          : 'value muted';
+        const remainingLabel = Number.isFinite(remainingValue)
+          ? formatNumber(remainingValue)
+          : '—';
+        const lines = [
+          `<div class="risk-metric"><span>Status</span><span class="${statusClass}">${statusIcon} ${statusText}</span></div>`,
+          `<div class="risk-metric"><span>Cap</span><span class="value">${formatNumber(capValue)}</span></div>`,
+          `<div class="risk-metric"><span>Realized</span><span class="value">${formatNumber(realizedValue)}</span></div>`,
+          `<div class="risk-metric"><span>Remaining</span><span class="${remainingClass}">${remainingLabel}</span></div>`,
+        ];
+        botLossCapEl.classList.remove('muted');
+        botLossCapEl.innerHTML = lines.join('');
+      }
 
       const renderLoopOverview = (loopInfo, secret, env, ordersCount) => {
         const running = Boolean(loopInfo?.running);
@@ -1521,6 +1563,9 @@
           renderControlSnapshot(state.control);
           renderAutopilot(data.autopilot || {});
           renderRisk(data.risk);
+          const lossCapSnapshot =
+            data.bot_loss_cap || (data.risk_accounting && data.risk_accounting.bot_loss_cap) || null;
+          renderBotLossCap(lossCapSnapshot);
 
           if (secretResp.ok) {
             state.secret = await secretResp.json();

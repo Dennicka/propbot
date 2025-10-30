@@ -173,6 +173,24 @@ notional'а, например:
   `budget used / limit`. Если дневной убыток или кап исчерпаны, строка
   подсвечивается флагом breach.
 
+### Bot-wide daily loss cap
+
+- Глобальный дневной loss-cap настраивается через переменную окружения
+  `DAILY_LOSS_CAP_USDT`. Пустое значение или `0` отключает ограничение.
+- Реализованный PnL агрегируется по всем стратегиям. При активных флагах
+  `RISK_CHECKS_ENABLED=1`, `RISK_ENFORCE_CAPS=1` и в отсутствии DRY_RUN новые
+  intents блокируются с состоянием `SKIPPED_BY_RISK` и причиной
+  `daily_loss_cap`, как только дневной убыток превысит кап.
+- Счётчик сбрасывается автоматически в 00:00 UTC (тот же epoch-day, что и у
+  бюджетов), ручных ресетов нет.
+- `/api/ui/risk_snapshot` и `/ui/dashboard` получают дополнительный блок
+  `bot_loss_cap` (`cap_usdt`, `realized_today_usdt`, `remaining_usdt`,
+  `breached`). На дашборде отображается компактный статус со световой
+  подсветкой.
+- В Prometheus публикуются новые метрики: `bot_daily_loss_realized_usdt`,
+  `bot_daily_loss_cap_usdt`, а счётчик `risk_skips_total{reason="daily_loss_cap"}`
+  инкрементируется при каждом отказе.
+
 ### Autopilot resume safety
 
 - Автопилот больше не снимает HOLD автоматически, если стратегия заморожена

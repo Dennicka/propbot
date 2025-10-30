@@ -4,6 +4,7 @@ import pytest
 
 from types import SimpleNamespace
 
+from app.risk import accounting as risk_accounting
 from app.risk import core as risk_core
 from app.risk.core import _RiskMetrics
 from app.risk.telemetry import (
@@ -21,7 +22,9 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("RISK_ENFORCE_CAPS", raising=False)
     monkeypatch.delenv("RISK_ENFORCE_BUDGETS", raising=False)
     monkeypatch.delenv("DRY_RUN_MODE", raising=False)
+    monkeypatch.delenv("DAILY_LOSS_CAP_USDT", raising=False)
     risk_core.reset_risk_governor_for_tests()
+    risk_accounting.reset_risk_accounting_for_tests()
     reset_risk_skip_metrics_for_tests()
     monkeypatch.setattr(
         risk_core,
@@ -30,6 +33,7 @@ def _reset_env(monkeypatch):
     )
     yield
     risk_core.reset_risk_governor_for_tests()
+    risk_accounting.reset_risk_accounting_for_tests()
     reset_risk_skip_metrics_for_tests()
 
 
@@ -94,3 +98,30 @@ def test_risk_gate_blocks_when_caps_breached(monkeypatch):
     assert result.get("details", {}).get("breach") == "max_total_notional_usdt"
     counts = get_risk_skip_counts()
     assert counts.get("unit_test", {}).get("caps_exceeded") == 1
+
+
+def test_risk_gate_blocks_when_daily_loss_cap_breached(monkeypatch):
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "100")
+    risk_core.reset_risk_governor_for_tests()
+    monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(0.0, 0))
+
+    risk_accounting.record_fill("unit_test", 0.0, -150.0, simulated=False)
+
+    intent = {
+        "intent_notional": 10.0,
+        "intent_open_positions": 0,
+        "strategy": "unit_test",
+    }
+    result = risk_core.risk_gate(intent)
+
+    assert result["allowed"] is False
+    assert result["reason"] == "daily_loss_cap"
+    assert result["state"] == "SKIPPED_BY_RISK"
+    assert result.get("strategy") == "unit_test"
+    details = result.get("details")
+    assert isinstance(details, dict)
+    assert "bot_loss_cap" in details
+    counts = get_risk_skip_counts()
+    assert counts.get("unit_test", {}).get("daily_loss_cap") == 1

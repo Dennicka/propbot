@@ -29,8 +29,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import os
 import threading
 from typing import Dict, Iterable, Mapping, Tuple
+
+from prometheus_client import Gauge
 
 from ..budget.strategy_budget import StrategyBudgetManager
 from ..services.runtime import get_state
@@ -39,12 +42,135 @@ from .telemetry import record_risk_skip
 
 __all__ = [
     "get_risk_snapshot",
+    "get_bot_loss_cap_state",
     "record_intent",
     "record_fill",
     "set_strategy_budget_cap",
     "reset_strategy_budget_usage",
     "reset_risk_accounting_for_tests",
+    "is_loss_cap_breached",
 ]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _current_epoch_day() -> int:
+    ts = _utc_now()
+    return int(ts.timestamp() // 86_400)
+
+
+_BOT_DAILY_LOSS_REALIZED_GAUGE = Gauge(
+    "bot_daily_loss_realized_usdt",
+    "Realised bot-wide daily PnL in USDT",
+)
+
+_BOT_DAILY_LOSS_CAP_GAUGE = Gauge(
+    "bot_daily_loss_cap_usdt",
+    "Configured bot-wide daily loss cap in USDT",
+)
+
+
+class BotDailyLossCap:
+    """Track bot-wide realised PnL against an optional daily loss cap."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._realized_today = 0.0
+        self._last_reset_epoch_day: int | None = None
+        self._last_cap: float | None = None
+
+    @staticmethod
+    def _read_cap_from_env() -> float | None:
+        raw = os.getenv("DAILY_LOSS_CAP_USDT")
+        if raw is None:
+            return None
+        if str(raw).strip() == "":
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        return float(value)
+
+    def _update_cap_cache(self, cap: float | None) -> None:
+        if self._last_cap == cap:
+            return
+        self._last_cap = cap
+        _BOT_DAILY_LOSS_CAP_GAUGE.set(0.0 if cap is None else cap)
+
+    def _maybe_reset_locked(self) -> None:
+        current_day = _current_epoch_day()
+        if self._last_reset_epoch_day is None:
+            self._last_reset_epoch_day = current_day
+            return
+        if self._last_reset_epoch_day != current_day:
+            self._realized_today = 0.0
+            self._last_reset_epoch_day = current_day
+
+    def maybe_reset(self) -> None:
+        with self._lock:
+            self._maybe_reset_locked()
+            self._update_cap_cache(self._read_cap_from_env())
+            _BOT_DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+
+    def record_realized(self, pnl_delta: float) -> None:
+        with self._lock:
+            self._maybe_reset_locked()
+            self._realized_today += float(pnl_delta or 0.0)
+            cap = self._read_cap_from_env()
+            self._update_cap_cache(cap)
+            _BOT_DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+
+    def _losses_today(self) -> float:
+        return max(-self._realized_today, 0.0)
+
+    def _remaining(self, cap: float | None) -> float | None:
+        if cap is None:
+            return None
+        return cap - self._losses_today()
+
+    def snapshot(self) -> dict[str, float | bool | None]:
+        with self._lock:
+            self._maybe_reset_locked()
+            cap = self._read_cap_from_env()
+            self._update_cap_cache(cap)
+            remaining = self._remaining(cap)
+            breached = False
+            if cap is not None:
+                tolerance = 1e-6
+                breached = self._losses_today() >= cap - tolerance
+            snapshot = {
+                "cap_usdt": cap,
+                "realized_today_usdt": self._realized_today,
+                "remaining_usdt": remaining,
+                "breached": breached,
+            }
+            _BOT_DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+            return snapshot
+
+    def is_breached(self) -> bool:
+        with self._lock:
+            self._maybe_reset_locked()
+            cap = self._read_cap_from_env()
+            self._update_cap_cache(cap)
+            if cap is None:
+                return False
+            tolerance = 1e-6
+            return self._losses_today() >= cap - tolerance
+
+    def reset_for_tests(self) -> None:
+        with self._lock:
+            self._realized_today = 0.0
+            self._last_reset_epoch_day = _current_epoch_day()
+            self._update_cap_cache(self._read_cap_from_env())
+            _BOT_DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+
+
+_BOT_LOSS_CAP = BotDailyLossCap()
 
 
 @dataclass
@@ -77,6 +203,14 @@ _BUDGET_MANAGER = StrategyBudgetManager()
 _LAST_DENIAL: dict[str, object] | None = None
 
 
+def get_bot_loss_cap_state() -> dict[str, float | bool | None]:
+    return _BOT_LOSS_CAP.snapshot()
+
+
+def is_loss_cap_breached() -> bool:
+    return _BOT_LOSS_CAP.is_breached()
+
+
 def _reason_code_from_details(
     details: Mapping[str, object] | None, default: str = "other_risk"
 ) -> str:
@@ -95,7 +229,7 @@ def _reason_code_from_details(
 
 
 def _today() -> date:
-    return date.today()
+    return datetime.now(timezone.utc).date()
 
 
 def _reset_for_new_day_unlocked() -> None:
@@ -110,6 +244,7 @@ def _reset_for_new_day_unlocked() -> None:
         entry.realised_pnl_today = 0.0
         entry.simulated_realised_pnl_today = 0.0
         entry.budget_used = 0.0
+    _BOT_LOSS_CAP.maybe_reset()
 
 
 def _maybe_reset_day_unlocked() -> None:
@@ -254,6 +389,7 @@ def _snapshot_unlocked() -> dict:
         },
         "per_strategy": per_strategy,
     }
+    snapshot["bot_loss_cap"] = get_bot_loss_cap_state()
     if _LAST_DENIAL is not None:
         snapshot["last_denial"] = dict(_LAST_DENIAL)
     return snapshot
@@ -264,6 +400,7 @@ def get_risk_snapshot() -> dict:
 
     with _LOCK:
         _maybe_reset_day_unlocked()
+        _BOT_LOSS_CAP.maybe_reset()
         return _snapshot_unlocked()
 
 
@@ -298,7 +435,9 @@ def record_intent(
         "strategy": strategy,
     }
     with _LOCK:
+        global _LAST_DENIAL
         _maybe_reset_day_unlocked()
+        _BOT_LOSS_CAP.maybe_reset()
         entry = _strategy_entry(strategy)
         budget_info = _budget_info(strategy, entry)
         _recalculate_budget_totals()
@@ -317,6 +456,34 @@ def record_intent(
         )
         enforce_budget_now = budgets_enabled and not dry_run
         governor = get_risk_governor()
+        if (
+            FeatureFlags.risk_checks_enabled()
+            and FeatureFlags.enforce_caps()
+            and not dry_run
+            and _BOT_LOSS_CAP.is_breached()
+        ):
+            record_risk_skip(strategy, "daily_loss_cap")
+            loss_cap_details = {"bot_loss_cap": get_bot_loss_cap_state()}
+            failure_payload = {
+                "source": "accounting",
+                "strategy": strategy,
+                "ok": False,
+                "state": "SKIPPED_BY_RISK",
+                "reason": "daily_loss_cap",
+                "details": loss_cap_details,
+            }
+            _LAST_DENIAL = dict(failure_payload)
+            snapshot = _snapshot_unlocked()
+            failed_result = dict(result)
+            failed_result.update(
+                {
+                    "ok": False,
+                    "state": "SKIPPED_BY_RISK",
+                    "reason": "daily_loss_cap",
+                    "details": loss_cap_details,
+                }
+            )
+            return snapshot, failed_result
         projected_notional = _TOTALS.open_notional + (0.0 if simulated else notional_value)
         projected_positions = _TOTALS.open_positions + (0 if simulated else 1)
         validation = governor.validate(
@@ -328,7 +495,6 @@ def record_intent(
             budget_limit=None,
             budget_used=entry.budget_used,
         )
-        global _LAST_DENIAL
         if not validation.get("ok", False):
             details = validation.get("details")
             reason_code = _reason_code_from_details(details, default="caps_exceeded")
@@ -412,6 +578,7 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
 
     with _LOCK:
         _maybe_reset_day_unlocked()
+        _BOT_LOSS_CAP.maybe_reset()
         entry = _strategy_entry(strategy)
         _budget_info(strategy, entry)
         _recalculate_budget_totals()
@@ -430,6 +597,7 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
         _TOTALS.open_notional = max(_TOTALS.open_notional - notional_value, 0.0)
         _TOTALS.open_positions = max(_TOTALS.open_positions - 1, 0)
         _TOTALS.realised_pnl_today += pnl_value
+        _BOT_LOSS_CAP.record_realized(pnl_value)
 
         if pnl_value < 0:
             loss = abs(pnl_value)
@@ -490,3 +658,4 @@ def reset_risk_accounting_for_tests() -> None:
         global _LAST_DENIAL
         _LAST_DENIAL = None
         _BUDGET_MANAGER.reset_all()
+        _BOT_LOSS_CAP.reset_for_tests()

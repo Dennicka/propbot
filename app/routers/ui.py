@@ -372,6 +372,8 @@ async def runtime_state() -> dict:
     risk_payload = risk_state.as_dict()
     risk_blocked = bool(risk_state.breaches)
     risk_reasons = [breach.detail or breach.limit for breach in risk_state.breaches]
+    accounting_snapshot = get_risk_accounting_snapshot()
+    bot_loss_cap = accounting_snapshot.get("bot_loss_cap") if isinstance(accounting_snapshot, Mapping) else None
     dryrun = state.dryrun
     control_snapshot = control_as_dict()
     response = {
@@ -401,6 +403,8 @@ async def runtime_state() -> dict:
         "risk": risk_payload,
         "risk_blocked": risk_blocked,
         "risk_reasons": risk_reasons,
+        "risk_accounting": accounting_snapshot,
+        "bot_loss_cap": bot_loss_cap,
         "autopilot": state.autopilot.as_dict(),
     }
     return redact_sensitive_data(response)
