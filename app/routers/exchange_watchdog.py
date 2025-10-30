@@ -6,11 +6,11 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from ..exchange_watchdog import get_exchange_watchdog
+from ..watchdog.exchange_watchdog import get_exchange_watchdog
 from ..security import is_auth_enabled, require_token
 from ..utils.operators import resolve_operator_identity
 
-router = APIRouter(prefix="/exchange_health", tags=["ui"])
+router = APIRouter(prefix="/watchdog_status", tags=["ui"])
 
 
 async def _ensure_viewer_access(request: Request) -> None:
@@ -28,11 +28,14 @@ async def _ensure_viewer_access(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
 
-@router.get("", name="exchange-health")
-async def get_exchange_health(request: Request) -> Dict[str, Dict[str, Any]]:
+@router.get("", name="watchdog-status")
+async def get_watchdog_status(request: Request) -> Dict[str, Any]:
     await _ensure_viewer_access(request)
     watchdog = get_exchange_watchdog()
-    return watchdog.get_state()
+    return {
+        "overall_ok": watchdog.overall_ok(),
+        "exchanges": watchdog.get_state(),
+    }
 
 
 __all__ = ["router"]

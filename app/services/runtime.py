@@ -1075,86 +1075,33 @@ def register_cancel_attempt(delta: int = 1, *, reason: str, source: str) -> None
     _register_action_counter("cancels", delta, reason=reason, source=source)
 
 
-def _exchange_watchdog_detail(exchange: str, entry: Mapping[str, Any] | None) -> str:
-    label = str(exchange or "").strip() or "exchange"
-    lowered = label.lower()
-    if not entry:
-        return f"{lowered} unavailable"
-    reachable = bool(entry.get("reachable"))
-    rate_limited = bool(entry.get("rate_limited"))
-    error_text = str(entry.get("error") or "").strip()
-    if not reachable:
-        detail = error_text or "unreachable"
-    elif rate_limited:
-        detail = error_text or "ratelimit"
-    else:
-        detail = error_text or "degraded"
-    summary = f"{lowered} {detail}".strip()
-    return summary or lowered
-
-
 def evaluate_exchange_watchdog(*, context: str = "runtime") -> str | None:
     """Engage HOLD when the exchange watchdog reports a critical failure."""
 
     watchdog = get_exchange_watchdog()
-    snapshot = watchdog.get_state()
-    for exchange in ("binance", "okx"):
-        if not watchdog.is_critical(exchange):
-            continue
-        entry = snapshot.get(exchange, {}) if isinstance(snapshot, Mapping) else {}
-        reason_detail = _exchange_watchdog_detail(exchange, entry)
-        hold_reason = f"exchange_watchdog:{reason_detail}"
-        with _STATE_LOCK:
-            previous_reason = _STATE.safety.hold_reason or ""
-        engaged = engage_safety_hold(hold_reason, source=f"exchange_watchdog:{exchange}")
-        if engaged or previous_reason != hold_reason:
-            details: Dict[str, object] = {
+    failure = watchdog.most_recent_failure()
+    if not failure:
+        return None
+    exchange, payload = failure
+    reason_text = str(payload.get("reason") or "degraded").strip() or "degraded"
+    hold_reason = f"exchange_watchdog:{exchange} {reason_text}".strip()
+    with _STATE_LOCK:
+        previous_reason = str(_STATE.safety.hold_reason or "")
+    engaged = engage_safety_hold(hold_reason, source=f"watchdog:{exchange}")
+    if engaged or previous_reason != hold_reason:
+        log_operator_action(
+            "system",
+            "system",
+            "AUTO_HOLD_WATCHDOG",
+            details={
                 "exchange": exchange,
+                "reason": reason_text,
                 "context": context,
-                "reason": reason_detail,
                 "hold_reason": hold_reason,
-                "hold_active": True,
-            }
-            if isinstance(entry, Mapping):
-                details["watchdog"] = {str(k): v for k, v in entry.items()}
-            event_ts = datetime.now(timezone.utc).isoformat()
-            try:
-                from ..opsbot.notifier import send_watchdog_alert as _send_watchdog_alert
-            except Exception:
-                _send_watchdog_alert = None
-            if _send_watchdog_alert is not None:
-                try:
-                    _send_watchdog_alert(
-                        exchange,
-                        reason_detail,
-                        mode="AUTO_HOLD",
-                        timestamp=event_ts,
-                        hold_reason=hold_reason,
-                        context=context,
-                    )
-                except Exception:
-                    pass
-            log_operator_action(
-                "system",
-                "system",
-                "WATCHDOG_ALERT",
-                details={
-                    "exchange": exchange,
-                    "reason": reason_detail,
-                    "timestamp": event_ts,
-                    "initiated_by": "system",
-                    "context": context,
-                    "hold_active": True,
-                },
-            )
-            log_operator_action(
-                "system",
-                "system",
-                "AUTO_HOLD_BY_EXCHANGE_WATCHDOG",
-                details=details,
-            )
-        return hold_reason
-    return None
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    return hold_reason
 
 
 def update_clock_skew(skew_seconds: float | None, *, source: str = "clock_skew_checker") -> None:

@@ -146,17 +146,17 @@ def test_watchdog_blocks_order_attempt(monkeypatch):
     monkeypatch.setattr(runtime, "send_notifier_alert", lambda *_, **__: None)
 
     class _StubWatchdog:
-        def get_state(self) -> dict[str, dict[str, object]]:
-            return {
-                "binance": {
-                    "reachable": False,
-                    "rate_limited": True,
-                    "error": "rate_limited",
-                }
-            }
+        def __init__(self) -> None:
+            self._entry = {"ok": False, "last_check_ts": 0.0, "reason": "rate_limited"}
 
-        def is_critical(self, name: str) -> bool:
-            return name.lower() == "binance"
+        def get_state(self) -> dict[str, dict[str, object]]:
+            return {"binance": dict(self._entry)}
+
+        def overall_ok(self) -> bool:
+            return False
+
+        def most_recent_failure(self):
+            return "binance", dict(self._entry)
 
     monkeypatch.setattr(runtime, "get_exchange_watchdog", lambda: _StubWatchdog())
 
@@ -171,7 +171,7 @@ def test_watchdog_blocks_order_attempt(monkeypatch):
     assert "rate_limited" in safety["hold_reason"]
 
     recorded_actions = [entry["action"] for entry in audit_events]
-    assert "AUTO_HOLD_BY_EXCHANGE_WATCHDOG" in recorded_actions
+    assert "AUTO_HOLD_WATCHDOG" in recorded_actions
 
 
 def test_hold_reason_persisted_to_runtime_store(monkeypatch, tmp_path):

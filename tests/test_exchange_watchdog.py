@@ -11,7 +11,11 @@ def test_exchange_health_endpoint_viewer_access(monkeypatch) -> None:
     monkeypatch.setenv("API_TOKEN", "viewer-token")
 
     watchdog = ExchangeWatchdog()
-    watchdog.update_from_client("binance", ok=False, rate_limited=True, error="429")
+
+    def _probe() -> dict[str, object]:
+        return {"binance": {"ok": False, "reason": "offline"}}
+
+    watchdog.check_once(_probe)
 
     def _mock_get_watchdog():
         return watchdog
@@ -29,12 +33,12 @@ def test_exchange_health_endpoint_viewer_access(monkeypatch) -> None:
 
     client = TestClient(app)
     response = client.get(
-        "/api/ui/exchange_health",
+        "/api/ui/watchdog_status",
         headers={"Authorization": "Bearer viewer-token"},
     )
     assert response.status_code == 200
     payload = response.json()
-    assert "binance" in payload
-    assert payload["binance"]["reachable"] is False
-    assert payload["binance"]["rate_limited"] is True
-    assert payload["binance"]["error"] == "429"
+    assert payload["overall_ok"] is False
+    assert "binance" in payload["exchanges"]
+    assert payload["exchanges"]["binance"]["ok"] is False
+    assert payload["exchanges"]["binance"]["reason"] == "offline"
