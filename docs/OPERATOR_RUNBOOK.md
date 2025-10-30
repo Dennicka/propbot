@@ -242,6 +242,10 @@
 - Enforcement включается флагом `ENFORCE_DAILY_LOSS_CAP=1` (совместно с
   `RISK_CHECKS_ENABLED=1`). В DRY_RUN лимит отображается, но торговля не
   останавливается.
+- Флаг `DAILY_LOSS_CAP_AUTO_HOLD=1` включает системный auto-HOLD
+  (`AUTO_HOLD_DAILY_LOSS`) при breach: бот уходит в HOLD, пишется аудит,
+  отправляется алерт и на дашборде появляется бейдж «AUTO-HOLD: DAILY LOSS CAP».
+  Процесс ручного RESUME (two-man) не меняется.
 - Учёт ведётся по суммарному реализованному PnL всех стратегий. При активных
   флагах и в режиме без DRY_RUN новые intents блокируются с
   `state=SKIPPED_BY_RISK`, `reason=DAILY_LOSS_CAP`.

@@ -6,6 +6,7 @@ import json
 from positions import create_position
 
 from app.risk import accounting as risk_accounting, core as risk_core
+from app.risk import auto_hold
 from app.services import approvals_store, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
@@ -335,7 +336,7 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     risk_core.reset_risk_governor_for_tests()
     risk_accounting.record_fill("dashboard", 0.0, -60.0, simulated=False)
 
-    runtime.engage_safety_hold("pytest", source="test")
+    runtime.engage_safety_hold(auto_hold.AUTO_HOLD_REASON, source="test")
     runtime.update_auto_hedge_state(
         enabled=True,
         last_success_ts="2024-01-01T00:00:00+00:00",
@@ -485,6 +486,9 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "Recent Ops / Incidents" in html
 
     assert "Balances / Liquidity" in html
+    assert "AUTO-HOLD: DAILY LOSS CAP" in html
+    assert "Auto-HOLD by Daily Loss Cap" in html
+    assert "realised -60.00 vs cap 50.00" in html
     assert "TRADING HALTED FOR SAFETY" in html
     assert "okx" in html
     assert "free balance below hedge size" in html

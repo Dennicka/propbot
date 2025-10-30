@@ -8,6 +8,7 @@ from collections.abc import Mapping as ABCMapping
 from dataclasses import dataclass, field
 from typing import Dict, Mapping, Optional
 
+from .auto_hold import auto_hold_on_daily_loss_breach
 from .telemetry import record_risk_skip
 
 from ..runtime_state_store import load_runtime_payload
@@ -219,6 +220,10 @@ class FeatureFlags:
     @classmethod
     def enforce_daily_loss_cap(cls) -> bool:
         return cls._flag("ENFORCE_DAILY_LOSS_CAP")
+
+    @classmethod
+    def auto_hold_daily_loss_cap(cls) -> bool:
+        return cls._flag("DAILY_LOSS_CAP_AUTO_HOLD")
 
 
 @dataclass(frozen=True)
@@ -445,12 +450,20 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
             record_risk_skip(strategy_name, "daily_loss_cap")
             snapshot = get_daily_loss_cap_state()
             details = {"daily_loss_cap": snapshot, "bot_loss_cap": snapshot}
+            hold_engaged = auto_hold_on_daily_loss_breach(
+                snapshot,
+                dry_run=dry_run,
+                source="risk_gate",
+            )
             response: Dict[str, object | None] = {
                 "allowed": False,
                 "state": "SKIPPED_BY_RISK",
                 "reason": "DAILY_LOSS_CAP",
                 "details": details,
             }
+            if hold_engaged:
+                response["status"] = "hold_engaged"
+                response["hold_engaged"] = True
             if strategy_name is not None:
                 response["strategy"] = strategy_name
             return response

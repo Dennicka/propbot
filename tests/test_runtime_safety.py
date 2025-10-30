@@ -70,6 +70,18 @@ def test_resume_request_and_confirm_flow(monkeypatch):
     assert approved["status"] == "approved"
 
 
+def test_manual_hold_resume_flow_with_auto_hold_flag(monkeypatch):
+    monkeypatch.setenv("DAILY_LOSS_CAP_AUTO_HOLD", "1")
+    runtime.engage_safety_hold("manual_auto_hold_flag", source="pytest")
+    assert runtime.is_hold_active() is True
+
+    request = runtime.record_resume_request("resume_manual", requested_by="alice")
+    result = runtime.approve_resume(request_id=request["id"], actor="bob")
+
+    assert result["hold_cleared"] is True
+    assert runtime.is_hold_active() is False
+
+
 def test_risk_limit_raise_request_and_approval():
     record = runtime.request_risk_limit_change(
         "max_position_usdt",

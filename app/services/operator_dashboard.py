@@ -40,6 +40,7 @@ from services.execution_stats_store import (
 from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
 from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
+from ..risk.auto_hold import AUTO_HOLD_AUDIT_REASON, AUTO_HOLD_REASON
 from ..risk.telemetry import get_risk_skip_counts
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
@@ -268,6 +269,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     pnl_snapshot = build_pnl_snapshot(positions_payload)
     risk_snapshot = await build_risk_snapshot()
     risk_accounting_snapshot = get_risk_accounting_snapshot()
+    if not isinstance(risk_accounting_snapshot, Mapping):
+        risk_accounting_snapshot = {}
     risk_skip_counts = get_risk_skip_counts()
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
@@ -372,6 +375,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "last_released_ts": safety_payload.get("last_released_ts"),
         "hold_reason_raw": hold_reason,
     }
+    auto_hold_daily_loss: dict[str, object] | None = None
     summary_highlights: list[str] = []
     exchange_watchdog_hold_reason = ""
     lowered_reason = hold_reason.lower()
@@ -449,6 +453,34 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             }
         )
 
+    if hold_reason == AUTO_HOLD_REASON:
+        bot_loss_cap_raw = risk_accounting_snapshot.get("bot_loss_cap")
+        bot_loss_cap = bot_loss_cap_raw if isinstance(bot_loss_cap_raw, Mapping) else {}
+        if bot_loss_cap:
+            realized_raw = bot_loss_cap.get("realized_pnl_today_usdt")
+            if realized_raw is None:
+                realized_raw = bot_loss_cap.get("realized_today_usdt")
+            realized_value = _coerce_float(realized_raw)
+            cap_raw = bot_loss_cap.get("max_daily_loss_usdt")
+            if cap_raw is None:
+                cap_raw = bot_loss_cap.get("cap_usdt")
+            cap_value = _coerce_float(cap_raw) if cap_raw is not None else None
+            if cap_value is not None:
+                message = f"realised {realized_value:.2f} vs cap {cap_value:.2f}"
+            else:
+                message = f"realised {realized_value:.2f}"
+            auto_hold_daily_loss = {
+                "label": "AUTO-HOLD: DAILY LOSS CAP",
+                "reason": AUTO_HOLD_AUDIT_REASON,
+                "message": message,
+                "realized": realized_value,
+                "cap": cap_value,
+            }
+            if not lowered_reason.startswith("exchange_watchdog:") and watchdog_status.get("overall_ok", True):
+                summary_highlights.append(
+                    f"Auto-HOLD by Daily Loss Cap — {auto_hold_daily_loss['message']}"
+                )
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -504,6 +536,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "daily_strategy_budgets": daily_strategy_budgets,
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
+        "auto_hold_daily_loss": auto_hold_daily_loss,
     }
 
 
@@ -783,6 +816,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         for item in context.get("summary_highlights", [])
         if isinstance(item, str) and item.strip()
     ]
+    auto_hold_daily_loss = context.get("auto_hold_daily_loss") or {}
+    if not isinstance(auto_hold_daily_loss, Mapping):
+        auto_hold_daily_loss = {}
 
     parts: list[str] = []
     parts.append(
@@ -880,6 +916,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".risk-accounting table{margin-top:1rem;}"
         ".risk-accounting .breach{color:#b91c1c;font-weight:700;}"
         ".risk-accounting .breach-ok{color:#166534;font-weight:700;}"
+        ".auto-hold-banner{display:inline-flex;align-items:center;gap:0.75rem;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-weight:700;padding:0.5rem 0.9rem;border-radius:999px;margin-bottom:1rem;}"
+        ".auto-hold-banner .label{letter-spacing:0.02em;}"
+        ".auto-hold-banner .reason{font-weight:600;font-size:0.95rem;}"
         "button:disabled{background:#9ca3af;cursor:not-allowed;}"
         "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
         "</style></head><body>"
@@ -910,6 +949,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append(
             "<div class=\"flash\" style=\"background:#fee2e2;border-color:#f87171;color:#7f1d1d;\">"
             f"{_fmt(highlight)}"
+            "</div>"
+        )
+
+    if auto_hold_daily_loss:
+        label = _fmt(auto_hold_daily_loss.get("label") or "AUTO-HOLD: DAILY LOSS CAP")
+        reason_text = auto_hold_daily_loss.get("message") or auto_hold_daily_loss.get("reason") or ""
+        parts.append(
+            "<div class=\"auto-hold-banner\">"
+            f"<span class=\"label\">{label}</span>"
+            f"<span class=\"reason\">{_fmt(reason_text)}</span>"
             "</div>"
         )
 

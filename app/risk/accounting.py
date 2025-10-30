@@ -34,6 +34,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 
 from ..budget.strategy_budget import StrategyBudgetManager
 from ..services.runtime import get_state
+from .auto_hold import auto_hold_on_daily_loss_breach
 from .core import FeatureFlags, RiskGovernor, get_risk_governor
 from .daily_loss import (
     get_daily_loss_cap,
@@ -364,6 +365,11 @@ def record_intent(
                 "daily_loss_cap": cap_snapshot,
                 "bot_loss_cap": cap_snapshot,
             }
+            hold_engaged = auto_hold_on_daily_loss_breach(
+                cap_snapshot,
+                dry_run=dry_run,
+                source="risk_accounting",
+            )
             failure_payload = {
                 "source": "accounting",
                 "strategy": strategy,
@@ -372,6 +378,9 @@ def record_intent(
                 "reason": "DAILY_LOSS_CAP",
                 "details": loss_cap_details,
             }
+            if hold_engaged:
+                failure_payload["status"] = "hold_engaged"
+                failure_payload["hold_engaged"] = True
             _LAST_DENIAL = dict(failure_payload)
             snapshot = _snapshot_unlocked()
             failed_result = dict(result)
@@ -383,6 +392,9 @@ def record_intent(
                     "details": loss_cap_details,
                 }
             )
+            if hold_engaged:
+                failed_result["status"] = "hold_engaged"
+                failed_result["hold_engaged"] = True
             return snapshot, failed_result
         projected_notional = _TOTALS.open_notional + (0.0 if simulated else notional_value)
         projected_positions = _TOTALS.open_positions + (0 if simulated else 1)
