@@ -1,8 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.risk import accounting as risk_accounting
 from app.risk import core as risk_core
-
 
 STRATEGY = "cross_exchange_arb"
 
@@ -11,6 +12,15 @@ STRATEGY = "cross_exchange_arb"
 def reset_accounting(monkeypatch):
     monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USDT", raising=False)
     monkeypatch.delenv("MAX_OPEN_POSITIONS", raising=False)
+    monkeypatch.delenv("RISK_CHECKS_ENABLED", raising=False)
+    monkeypatch.delenv("RISK_ENFORCE_CAPS", raising=False)
+    monkeypatch.delenv("RISK_ENFORCE_BUDGETS", raising=False)
+    monkeypatch.delenv("DRY_RUN_MODE", raising=False)
+    monkeypatch.setattr(
+        risk_accounting,
+        "get_state",
+        lambda: SimpleNamespace(control=SimpleNamespace(dry_run=False)),
+    )
     risk_accounting.reset_risk_accounting_for_tests()
     risk_core.reset_risk_governor_for_tests()
     yield
@@ -24,19 +34,37 @@ def _configure_caps(monkeypatch, *, notional: float, positions: int) -> None:
     risk_core.reset_risk_governor_for_tests()
 
 
-def test_caps_block_additional_intents(monkeypatch):
-    _configure_caps(monkeypatch, notional=100.0, positions=1)
+def test_flags_disabled_allow_large_intents(monkeypatch):
+    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "100.0")
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "1")
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    risk_core.reset_risk_governor_for_tests()
+
+    snapshot, ok = risk_accounting.record_intent(STRATEGY, 250.0, simulated=False)
+
+    assert ok is True
+    assert snapshot["totals"]["open_notional"] == pytest.approx(250.0)
+    assert "last_denial" not in snapshot
+
+
+def test_caps_enforced_when_flags_enabled(monkeypatch):
+    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "100.0")
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "1")
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    risk_core.reset_risk_governor_for_tests()
 
     snapshot, ok = risk_accounting.record_intent(STRATEGY, 80.0, simulated=False)
     assert ok is True
     assert snapshot["totals"]["open_notional"] == pytest.approx(80.0)
 
-    snapshot_after, ok_second = risk_accounting.record_intent(STRATEGY, 30.0, simulated=False)
+    snapshot_after, ok_second = risk_accounting.record_intent(STRATEGY, 50.0, simulated=False)
     assert ok_second is False
-    assert snapshot_after["totals"]["open_notional"] == pytest.approx(80.0)
+    assert snapshot_after.get("last_denial", {}).get("reason") == "SKIPPED_BY_RISK"
+    assert snapshot_after.get("last_denial", {}).get("details", {}).get("breach") == "max_total_notional_usdt"
 
 
-def test_budget_blocks_after_losses(monkeypatch):
+def test_budget_blocks_only_when_enforced(monkeypatch):
     _configure_caps(monkeypatch, notional=1_000.0, positions=5)
     risk_accounting.set_strategy_budget_cap(STRATEGY, 50.0)
 
@@ -47,16 +75,27 @@ def test_budget_blocks_after_losses(monkeypatch):
     risk_accounting.record_fill(STRATEGY, 10.0, -20.0, simulated=False)
     risk_accounting.record_fill(STRATEGY, 0.0, -30.0, simulated=False)
 
+    snapshot_before_flag, ok_without_flag = risk_accounting.record_intent(STRATEGY, 5.0, simulated=False)
+    assert ok_without_flag is True
+    assert "last_denial" not in snapshot_before_flag
+
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
+    monkeypatch.setenv("RISK_ENFORCE_BUDGETS", "1")
+    risk_core.reset_risk_governor_for_tests()
+
     snapshot_after, ok_again = risk_accounting.record_intent(STRATEGY, 5.0, simulated=False)
     assert ok_again is False
     strategy_row = snapshot_after["per_strategy"][STRATEGY]
     assert "budget_exhausted" in strategy_row["breaches"]
-    assert strategy_row["budget"]["used"] == pytest.approx(50.0)
+    assert snapshot_after.get("last_denial", {}).get("details", {}).get("breach") == "budget_exhausted"
 
 
-def test_simulated_runs_only_touch_simulated_counters(monkeypatch):
-    _configure_caps(monkeypatch, notional=50.0, positions=1)
-    risk_accounting.set_strategy_budget_cap(STRATEGY, 5.0)
+def test_dry_run_records_simulated_only(monkeypatch):
+    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "50.0")
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "1")
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    risk_core.reset_risk_governor_for_tests()
 
     snapshot, ok = risk_accounting.record_intent(STRATEGY, 200.0, simulated=True)
     assert ok is True

@@ -33,7 +33,8 @@ import threading
 from typing import Dict, Iterable, Tuple
 
 from ..budget.strategy_budget import StrategyBudgetManager
-from .core import RiskGovernor, get_risk_governor
+from ..services.runtime import get_state
+from .core import FeatureFlags, RiskGovernor, get_risk_governor
 
 __all__ = [
     "get_risk_snapshot",
@@ -71,6 +72,7 @@ _STRATEGY_STATE: Dict[str, _StrategyAccounting] = {}
 _TOTALS = _Totals()
 _CURRENT_DATE: date | None = None
 _BUDGET_MANAGER = StrategyBudgetManager()
+_LAST_DENIAL: dict[str, object] | None = None
 
 
 def _today() -> date:
@@ -178,6 +180,8 @@ def _snapshot_unlocked() -> dict:
         },
         "per_strategy": per_strategy,
     }
+    if _LAST_DENIAL is not None:
+        snapshot["last_denial"] = dict(_LAST_DENIAL)
     return snapshot
 
 
@@ -207,23 +211,36 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
     with _LOCK:
         _maybe_reset_day_unlocked()
         entry = _strategy_entry(strategy)
+        state = get_state()
+        control = getattr(state, "control", None)
+        dry_run = bool(getattr(control, "dry_run", False)) or FeatureFlags.dry_run_mode() or simulated
+        governor = get_risk_governor()
+        projected_notional = _TOTALS.open_notional + (0.0 if simulated else notional_value)
+        projected_positions = _TOTALS.open_positions + (0 if simulated else 1)
+        limit = _budget_limit(strategy)
+        validation = governor.validate(
+            intent_notional=projected_notional,
+            projected_positions=projected_positions,
+            dry_run=dry_run,
+            current_total_notional=_TOTALS.open_notional,
+            current_open_positions=_TOTALS.open_positions,
+            budget_limit=limit,
+            budget_used=entry.budget_used,
+        )
+        global _LAST_DENIAL
+        if not validation.get("ok", False):
+            _LAST_DENIAL = {"source": "accounting", "strategy": strategy, **validation}
+            snapshot = _snapshot_unlocked()
+            return snapshot, False
+
+        _LAST_DENIAL = None
+
         if simulated:
             entry.simulated_open_notional += notional_value
             entry.simulated_open_positions += 1
             _TOTALS.simulated_open_notional += notional_value
             _TOTALS.simulated_open_positions += 1
             return _snapshot_unlocked(), True
-
-        governor = get_risk_governor()
-        projected_notional = _TOTALS.open_notional + notional_value
-        projected_positions = _TOTALS.open_positions + 1
-        caps = governor.caps
-        if projected_notional > caps.max_total_notional_usdt + _tolerance():
-            return _snapshot_unlocked(), False
-        if projected_positions > caps.max_open_positions:
-            return _snapshot_unlocked(), False
-        if _budget_breached(entry, strategy=strategy):
-            return _snapshot_unlocked(), False
 
         entry.open_notional += notional_value
         entry.open_positions += 1
@@ -286,3 +303,5 @@ def reset_risk_accounting_for_tests() -> None:
         _TOTALS.simulated_open_positions = 0
         _TOTALS.simulated_realised_pnl_today = 0.0
         _TOTALS.budget_used = 0.0
+        global _LAST_DENIAL
+        _LAST_DENIAL = None

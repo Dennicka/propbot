@@ -141,11 +141,15 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
 
 
 @router.get("/risk_snapshot")
-def risk_accounting_snapshot(request: Request) -> dict[str, Any]:
-    """Expose the execution risk accounting snapshot for UI consumers."""
+async def risk_snapshot(request: Request) -> dict[str, Any]:
+    """Return combined portfolio and execution risk telemetry."""
 
     require_token(request)
-    return get_risk_accounting_snapshot()
+    accounting_snapshot = get_risk_accounting_snapshot()
+    base_snapshot = await build_risk_snapshot()
+    payload = dict(base_snapshot)
+    payload["accounting"] = accounting_snapshot
+    return payload
 
 
 def _log_operator_event(
@@ -373,14 +377,6 @@ async def hedge_positions(request: Request) -> dict:
     if not positions:
         return {"positions": [], "exposure": {}, "totals": {"unrealized_pnl_usdt": 0.0}}
     return await build_positions_snapshot(state, positions)
-
-
-@router.get("/risk_snapshot")
-async def risk_snapshot(request: Request) -> dict:
-    """Return an aggregate risk snapshot for operators."""
-
-    require_token(request)
-    return await build_risk_snapshot()
 
 
 @router.get("/orchestrator_plan")
