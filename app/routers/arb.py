@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..services import arbitrage
+from ..orchestrator import risk_gate
 from ..services.runtime import (
     HoldActiveError,
     get_last_opportunity_state,
@@ -170,6 +171,14 @@ async def execute(plan_body: ExecutePayload) -> dict:
         )
         if not can_open:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+        if not state.control.dry_run:
+            gate_result = risk_gate(
+                {"intent_notional": plan_body.notion_usdt, "intent_open_positions": 1}
+            )
+            if not gate_result.get("ok", False):
+                gate_result.setdefault("ok", False)
+                gate_result.setdefault("executed", False)
+                return gate_result
         trade_result = execute_hedged_trade(
             plan_body.symbol,
             plan_body.notion_usdt,
@@ -237,6 +246,12 @@ async def execute(plan_body: ExecutePayload) -> dict:
     if not plan.viable and not dry_run:
         detail = plan.reason or "plan not viable"
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+    if not dry_run:
+        gate_result = risk_gate({"intent_notional": plan.notional, "intent_open_positions": 1})
+        if not gate_result.get("ok", False):
+            gate_result.setdefault("ok", False)
+            gate_result.setdefault("executed", False)
+            return gate_result
     try:
         report = await arbitrage.execute_plan_async(plan)
     except HoldActiveError as exc:
@@ -290,6 +305,12 @@ async def confirm(payload: ConfirmPayload) -> dict:
     if not allowed:
         set_last_opportunity_state(opportunity, "blocked_by_risk")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+    if not state.control.dry_run:
+        gate_result = risk_gate({"intent_notional": notional, "intent_open_positions": 1})
+        if not gate_result.get("ok", False):
+            gate_result.setdefault("ok", False)
+            gate_result.setdefault("executed", False)
+            return gate_result
     min_spread = float(opportunity.get("min_spread", opportunity.get("spread", 0.0)) or 0.0)
     trade_result = execute_hedged_trade(
         str(opportunity.get("symbol")),

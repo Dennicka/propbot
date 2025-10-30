@@ -396,6 +396,19 @@ monitor clock skew and maintenance signals, but simulated fills do not contribut
 to real risk limits. Never resume trading until the root cause is investigated
 and addressed, then follow the existing two-step `resume-request`/`resume-confirm`
 flow to clear HOLD.
+
+## Pre-trade risk gate
+
+Routers and orchestrator flows now run a lightweight `risk_gate(order_intent)`
+helper before dispatching manual hedges or orchestrated plans. The helper reads
+the current exposure snapshot and verifies that adding the requested intent
+(`intent_notional`, optional position increments) would stay inside
+`MAX_TOTAL_NOTIONAL_USDT` and `MAX_OPEN_POSITIONS`. When a cap would be
+breached the API responds with `{"ok": false, "reason": "risk.max_notional"}`
+or `{..., "reason": "risk.max_open_positions"}` and skips order submission.
+Dry-run executions bypass the gate so operators can rehearse flows without
+touching live limits.
+
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional
     caps.

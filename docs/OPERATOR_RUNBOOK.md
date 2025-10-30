@@ -145,6 +145,19 @@
   количеством открытых позиций против лимитов. Стратегии в статусе blocked
   подсвечиваются красным.
 
+## Pre-trade risk gate
+
+- Перед отправкой ручных сделок (`/api/arb/execute`, `/api/arb/confirm`) и
+  оркестраторских планов вызывается helper `risk_gate(order_intent)`.
+- Хелпер подтягивает `safety.risk_snapshot`, добавляет желаемый notional и
+  прирост позиций (`intent_notional`, `intent_open_positions`) и проверяет
+  лимиты `MAX_TOTAL_NOTIONAL_USDT` и `MAX_OPEN_POSITIONS` через
+  `RiskGovernor`/`RiskCaps`.
+- Если сделка выбивает лимит, API отвечает `{"ok": false, "reason":
+  "risk.max_notional"}` или `"risk.max_open_positions"`, сделка не
+  размещается. В `dry_run` режимах проверка пропускается, чтобы можно было
+  репетировать сценарии без изменения лимитов.
+
 ## Per-Strategy PnL & Drawdown
 
 - Для прозрачности, какая стратегия «сливает», в runtime добавлен отдельный

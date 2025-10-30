@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import logging
 from collections.abc import Mapping as ABCMapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +11,10 @@ from typing import Dict, Mapping, Optional, Tuple
 
 from .runtime_state_store import load_runtime_payload
 from .services.runtime import get_state
+from .risk.core import RiskCaps, RiskGovernor, RiskValidationError
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _env_int(name: str) -> Optional[int]:
@@ -43,18 +48,15 @@ class StrategyState:
     status_reason: str | None = None
 
 
-def check_risk_gates() -> Dict[str, object | None]:
-    """Aggregate runtime safety flags and basic risk-cap checks."""
+@dataclass(frozen=True)
+class _RiskMetrics:
+    open_positions: int = 0
+    total_notional: float = 0.0
 
+
+def _current_risk_metrics() -> _RiskMetrics:
     state = get_state()
     safety = getattr(state, "safety", None)
-    control = getattr(state, "control", None)
-    autopilot = getattr(state, "autopilot", None)
-
-    hold_active = bool(getattr(safety, "hold_active", False))
-    safe_mode = bool(getattr(control, "safe_mode", False))
-    dry_run_mode = bool(getattr(control, "dry_run_mode", False) or getattr(control, "dry_run", False))
-    autopilot_enabled = bool(getattr(autopilot, "enabled", False))
 
     runtime_payload = load_runtime_payload()
     positions_payload = runtime_payload.get("positions") if isinstance(runtime_payload, Mapping) else None
@@ -108,6 +110,24 @@ def check_risk_gates() -> Dict[str, object | None]:
                     except (TypeError, ValueError):
                         continue
 
+    return _RiskMetrics(open_positions=open_positions, total_notional=total_notional)
+
+
+def check_risk_gates() -> Dict[str, object | None]:
+    """Aggregate runtime safety flags and basic risk-cap checks."""
+
+    state = get_state()
+    safety = getattr(state, "safety", None)
+    control = getattr(state, "control", None)
+    autopilot = getattr(state, "autopilot", None)
+
+    hold_active = bool(getattr(safety, "hold_active", False))
+    safe_mode = bool(getattr(control, "safe_mode", False))
+    dry_run_mode = bool(getattr(control, "dry_run_mode", False) or getattr(control, "dry_run", False))
+    autopilot_enabled = bool(getattr(autopilot, "enabled", False))
+
+    metrics = _current_risk_metrics()
+
     max_open_positions = _env_int("MAX_OPEN_POSITIONS")
     max_total_notional = _env_float("MAX_TOTAL_NOTIONAL_USDT")
 
@@ -117,10 +137,10 @@ def check_risk_gates() -> Dict[str, object | None]:
     if hold_active or safe_mode:
         risk_caps_ok = False
         reason_if_blocked = "hold_active"
-    elif max_open_positions and max_open_positions > 0 and open_positions > max_open_positions:
+    elif max_open_positions and max_open_positions > 0 and metrics.open_positions > max_open_positions:
         risk_caps_ok = False
         reason_if_blocked = "risk_limit"
-    elif max_total_notional and max_total_notional > 0 and total_notional > max_total_notional:
+    elif max_total_notional and max_total_notional > 0 and metrics.total_notional > max_total_notional:
         risk_caps_ok = False
         reason_if_blocked = "risk_limit"
 
@@ -132,6 +152,117 @@ def check_risk_gates() -> Dict[str, object | None]:
         "risk_caps_ok": risk_caps_ok,
         "reason_if_blocked": reason_if_blocked,
     }
+
+
+def _extract_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_float(value: object, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _intent_notional(order_intent: Mapping[str, object] | None) -> float:
+    if not isinstance(order_intent, Mapping):
+        return 0.0
+    for key in ("intent_notional", "notional_usdt", "notional_usd", "notional"):
+        if key in order_intent:
+            value = _extract_float(order_intent.get(key))
+            if value:
+                return max(value, 0.0)
+    return 0.0
+
+
+def _intent_positions(order_intent: Mapping[str, object] | None) -> int:
+    if not isinstance(order_intent, Mapping):
+        return 0
+    for key in ("intent_open_positions", "requested_positions", "positions", "open_positions_delta"):
+        if key in order_intent:
+            value = _extract_int(order_intent.get(key))
+            if value:
+                return max(value, 0)
+    if bool(order_intent.get("opens_position")):
+        return 1
+    return 0
+
+
+def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | None]:
+    """Evaluate intent against configured RiskCaps before placing orders."""
+
+    metrics = _current_risk_metrics()
+    intent_notional = _intent_notional(order_intent)
+    intent_positions = _intent_positions(order_intent)
+
+    max_open_positions_raw = _env_int("MAX_OPEN_POSITIONS")
+    max_total_notional_raw = _env_float("MAX_TOTAL_NOTIONAL_USDT")
+
+    enforce_positions = bool(max_open_positions_raw and max_open_positions_raw > 0)
+    enforce_notional = bool(max_total_notional_raw and max_total_notional_raw > 0)
+
+    if not enforce_positions and not enforce_notional:
+        return {"ok": True, "reason": None}
+
+    open_limit = (
+        max_open_positions_raw
+        if enforce_positions
+        else max(metrics.open_positions + max(intent_positions, 0) + 1, 1)
+    )
+    notional_limit = (
+        max_total_notional_raw
+        if enforce_notional
+        else max(metrics.total_notional + intent_notional + 1.0, 1.0)
+    )
+
+    try:
+        caps = RiskCaps(
+            max_open_positions=int(open_limit),
+            max_total_notional_usdt=float(notional_limit),
+        )
+    except RiskValidationError as exc:
+        LOGGER.warning("risk gate disabled due to invalid caps", extra={"error": str(exc)})
+        return {"ok": True, "reason": None}
+
+    governor = RiskGovernor(caps)
+    total_after = max(metrics.total_notional + intent_notional, 0.0)
+    open_after = max(metrics.open_positions + intent_positions, 0)
+
+    if enforce_notional:
+        try:
+            governor.ensure_total_notional_within_limit(total_after)
+        except RiskValidationError:
+            LOGGER.warning(
+                "risk gate blocked order: total_notional cap exceeded",
+                extra={
+                    "intent_notional": intent_notional,
+                    "current_total_notional": metrics.total_notional,
+                    "total_after": total_after,
+                    "limit": caps.max_total_notional_usdt,
+                },
+            )
+            return {"ok": False, "reason": "risk.max_notional"}
+
+    if enforce_positions:
+        try:
+            governor.ensure_open_positions_within_limit(open_after)
+        except RiskValidationError:
+            LOGGER.warning(
+                "risk gate blocked order: open_positions cap exceeded",
+                extra={
+                    "intent_positions": intent_positions,
+                    "current_open_positions": metrics.open_positions,
+                    "open_after": open_after,
+                    "limit": caps.max_open_positions,
+                },
+            )
+            return {"ok": False, "reason": "risk.max_open_positions"}
+
+    return {"ok": True, "reason": None}
 
 
 class StrategyOrchestrator:
