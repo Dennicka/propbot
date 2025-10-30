@@ -15,6 +15,7 @@ from app.services.runtime import (
     record_incident,
     register_order_attempt,
 )
+from app.risk.telemetry import record_risk_skip
 from app.strategy_budget import get_strategy_budget_manager
 from app.strategy_risk import get_strategy_risk_manager
 from positions import create_position
@@ -515,11 +516,12 @@ def execute_hedged_trade(
             "strategy": STRATEGY_NAME,
         }
     if risk_manager.is_frozen(STRATEGY_NAME):
+        record_risk_skip(STRATEGY_NAME, "strategy_frozen")
         return {
             "ok": False,
             "executed": False,
-            "state": "BLOCKED",
-            "reason": "blocked_by_risk_freeze",
+            "state": "SKIPPED_BY_RISK",
+            "reason": "strategy_frozen",
             "strategy": STRATEGY_NAME,
         }
 

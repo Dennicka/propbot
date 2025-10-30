@@ -448,13 +448,26 @@ that adding the requested intent (`intent_notional`, optional position
 increments) would stay inside the configured caps when
 `FeatureFlags.enforce_caps()` is true. Manual routes **skip without raising**
 when a cap would be breached, returning an HTTP 200 body such as
-`{"status": "skipped", "reason": "SKIPPED_BY_RISK", "cap": "max_total_notional_usdt"}`
+`{"status": "skipped", "state": "SKIPPED_BY_RISK", "reason": "caps_exceeded", "cap": "max_total_notional_usdt"}`
 so operators can see why the order was ignored. Dry-run executions (either via
 the runtime control toggle or the `DRY_RUN_MODE` flag) short-circuit with
 `why="dry_run_no_enforce"`, keeping simulated counters in the snapshot without
 blocking execution. Per-strategy drawdown budgets (when configured) are guarded
 only when `FeatureFlags.enforce_budgets()` returns true, letting operators
 observe loss telemetry without immediately halting trading.
+
+### Risk skip reason codes
+
+Risk-driven skips now emit consistent reason codes that surface in the
+dashboard ("Risk skips (last run)") and via the `/metrics` endpoint as the
+`risk_skips_total{reason,strategy}` counter.
+
+| Code              | Description                                    | Where to monitor                  |
+| ----------------- | ---------------------------------------------- | --------------------------------- |
+| `caps_exceeded`   | Global RiskGovernor caps (notional/positions)  | UI risk skip block, `/metrics`    |
+| `budget_exceeded` | `StrategyBudgetManager` per-strategy budgets   | UI risk skip block, `/metrics`    |
+| `strategy_frozen` | `StrategyRiskManager` freeze due to breaches   | UI risk skip block, `/metrics`    |
+| `other_risk`      | Any other risk gating condition or fallback    | UI risk skip block, `/metrics`    |
 
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional

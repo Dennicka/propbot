@@ -35,6 +35,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 from ..budget.strategy_budget import StrategyBudgetManager
 from ..services.runtime import get_state
 from .core import FeatureFlags, RiskGovernor, get_risk_governor
+from .telemetry import record_risk_skip
 
 __all__ = [
     "get_risk_snapshot",
@@ -74,6 +75,23 @@ _TOTALS = _Totals()
 _CURRENT_DATE: date | None = None
 _BUDGET_MANAGER = StrategyBudgetManager()
 _LAST_DENIAL: dict[str, object] | None = None
+
+
+def _reason_code_from_details(
+    details: Mapping[str, object] | None, default: str = "other_risk"
+) -> str:
+    if isinstance(details, Mapping):
+        type_value = str(details.get("type") or "").lower()
+        if type_value == "caps":
+            return "caps_exceeded"
+        if type_value == "budgets":
+            return "budget_exceeded"
+        breach = str(details.get("breach") or "").lower()
+        if breach.startswith("max_"):
+            return "caps_exceeded"
+        if breach.startswith("budget"):
+            return "budget_exceeded"
+    return default
 
 
 def _today() -> date:
@@ -249,7 +267,9 @@ def get_risk_snapshot() -> dict:
         return _snapshot_unlocked()
 
 
-def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[dict, bool]:
+def record_intent(
+    strategy: str, notional: float, *, simulated: bool
+) -> Tuple[dict, Dict[str, object]]:
     """Record an execution intent and validate risk constraints.
 
     Parameters
@@ -261,9 +281,22 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
         zero.
     simulated:
         Flag indicating whether the run is simulated (dry-run/safe-mode).
+
+    Returns
+    -------
+    tuple(dict, dict)
+        Snapshot of the current accounting state together with a result payload
+        describing whether the allocation was accepted.  When blocked the
+        result contains ``ok=False`` and a ``reason`` code.
     """
 
     notional_value = max(float(notional or 0.0), 0.0)
+    result: Dict[str, object] = {
+        "ok": True,
+        "state": "RECORDED",
+        "reason": None,
+        "strategy": strategy,
+    }
     with _LOCK:
         _maybe_reset_day_unlocked()
         entry = _strategy_entry(strategy)
@@ -297,9 +330,31 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
         )
         global _LAST_DENIAL
         if not validation.get("ok", False):
-            _LAST_DENIAL = {"source": "accounting", "strategy": strategy, **validation}
+            details = validation.get("details")
+            reason_code = _reason_code_from_details(details, default="caps_exceeded")
+            record_risk_skip(strategy, reason_code)
+            denial_payload = {
+                "source": "accounting",
+                "strategy": strategy,
+                "ok": False,
+                "state": "SKIPPED_BY_RISK",
+                "reason": reason_code,
+            }
+            if details is not None:
+                denial_payload["details"] = details
+            _LAST_DENIAL = denial_payload
             snapshot = _snapshot_unlocked()
-            return snapshot, False
+            failed_result = dict(result)
+            failed_result.update(
+                {
+                    "ok": False,
+                    "state": "SKIPPED_BY_RISK",
+                    "reason": reason_code,
+                }
+            )
+            if details is not None:
+                failed_result["details"] = details
+            return snapshot, failed_result
 
         blocked = _budget_blocked(budget_info)
         if enforce_budget_now and blocked:
@@ -312,6 +367,7 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
             details: dict[str, object] = {"used": used}
             if limit_value is not None:
                 details["limit"] = limit_value
+            record_risk_skip(strategy, "budget_exceeded")
             _LAST_DENIAL = {
                 "source": "accounting",
                 "strategy": strategy,
@@ -321,7 +377,16 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
                 "details": details,
             }
             snapshot = _snapshot_unlocked()
-            return snapshot, False
+            failed_result = dict(result)
+            failed_result.update(
+                {
+                    "ok": False,
+                    "state": "SKIPPED_BY_RISK",
+                    "reason": "budget_exceeded",
+                    "details": details,
+                }
+            )
+            return snapshot, failed_result
 
         _LAST_DENIAL = None
 
@@ -330,13 +395,13 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
             entry.simulated_open_positions += 1
             _TOTALS.simulated_open_notional += notional_value
             _TOTALS.simulated_open_positions += 1
-            return _snapshot_unlocked(), True
+            return _snapshot_unlocked(), dict(result)
 
         entry.open_notional += notional_value
         entry.open_positions += 1
         _TOTALS.open_notional += notional_value
         _TOTALS.open_positions += 1
-        return _snapshot_unlocked(), True
+        return _snapshot_unlocked(), dict(result)
 
 
 def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: bool) -> dict:

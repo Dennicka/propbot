@@ -39,6 +39,7 @@ from services.execution_stats_store import (
 from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
 from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
+from ..risk.telemetry import get_risk_skip_counts
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
@@ -266,6 +267,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     pnl_snapshot = build_pnl_snapshot(positions_payload)
     risk_snapshot = await build_risk_snapshot()
     risk_accounting_snapshot = get_risk_accounting_snapshot()
+    risk_skip_counts = get_risk_skip_counts()
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
@@ -466,6 +468,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "daily_report": daily_report or {},
         "risk_snapshot": risk_snapshot,
         "risk_accounting_snapshot": risk_accounting_snapshot,
+        "risk_skip_counts": risk_skip_counts,
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
         "strategy_pnl_snapshot": strategy_pnl_snapshot,
@@ -695,6 +698,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     risk_accounting_snapshot = context.get("risk_accounting_snapshot", {}) or {}
     if not isinstance(risk_accounting_snapshot, Mapping):
         risk_accounting_snapshot = {}
+    risk_skip_counts = context.get("risk_skip_counts", {}) or {}
+    if not isinstance(risk_skip_counts, Mapping):
+        risk_skip_counts = {}
     accounting_totals_raw = risk_accounting_snapshot.get("totals")
     accounting_totals = (
         accounting_totals_raw
@@ -813,6 +819,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".pnl-risk h2{margin-top:0;}"
         ".pnl-risk .metric{margin:0.25rem 0;font-size:0.95rem;}"
         ".pnl-risk table{margin-top:1rem;}"
+        ".risk-skips{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".risk-skips h2{margin-top:0;}"
+        ".risk-skips .metric{margin:0.25rem 0;font-size:0.95rem;}"
+        ".risk-skips .meta{color:#1d4ed8;font-size:0.9rem;margin-bottom:0.5rem;}"
         ".strategy-orchestrator{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".strategy-orchestrator h2{margin-top:0;}"
         ".strategy-orchestrator table{margin-top:1rem;}"
@@ -1224,6 +1234,58 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<p class=\"note\">Capital headroom data unavailable.</p>"
         )
     parts.append("".join(pnl_parts) + "</div>")
+
+    skip_parts = ["<div class=\"risk-skips\"><h2>Risk skips (last run)</h2>"]
+    last_denial = risk_accounting_snapshot.get("last_denial")
+    if isinstance(last_denial, Mapping) and last_denial:
+        denial_strategy = _fmt(last_denial.get("strategy"))
+        denial_reason = _fmt(last_denial.get("reason"))
+        skip_parts.append(
+            "<p class=\"meta\">Last denial: <strong>{strategy}</strong> — {reason}</p>".format(
+                strategy=denial_strategy or "unknown",
+                reason=denial_reason or "other_risk",
+            )
+        )
+    reason_order = [
+        ("caps_exceeded", "caps"),
+        ("budget_exceeded", "budget"),
+        ("strategy_frozen", "frozen"),
+        ("other_risk", "other"),
+    ]
+    summarised: dict[str, dict[str, int]] = {}
+    for strategy_name, counts in risk_skip_counts.items():
+        if not isinstance(counts, Mapping):
+            continue
+        name = str(strategy_name)
+        summarised[name] = {}
+        for code, _label in reason_order:
+            value = counts.get(code, 0)
+            try:
+                summarised[name][code] = int(value)
+            except (TypeError, ValueError):
+                summarised[name][code] = 0
+    if isinstance(last_denial, Mapping):
+        strategy_value = str(last_denial.get("strategy") or "").strip()
+        if strategy_value and strategy_value not in summarised:
+            summarised[strategy_value] = {code: 0 for code, _label in reason_order}
+    if summarised:
+        for strategy_name in sorted(summarised):
+            counts = summarised[strategy_name]
+            skip_parts.append(
+                "<p class=\"metric\"><strong>{strategy}</strong>: caps {caps} | budget {budget} | frozen {frozen} | other {other}</p>".format(
+                    strategy=_fmt(strategy_name),
+                    caps=_fmt(counts.get("caps_exceeded", 0)),
+                    budget=_fmt(counts.get("budget_exceeded", 0)),
+                    frozen=_fmt(counts.get("strategy_frozen", 0)),
+                    other=_fmt(counts.get("other_risk", 0)),
+                )
+            )
+    else:
+        skip_parts.append(
+            "<p class=\"note\">No risk skips recorded yet for this session.</p>"
+        )
+    skip_parts.append("</div>")
+    parts.append("".join(skip_parts))
 
     parts.append("<div class=\"strategy-orchestrator\"><h2>Strategy Orchestrator</h2>")
     if not is_operator:

@@ -72,7 +72,7 @@ def can_open_new_position(
     if not risk_manager.is_enabled(strategy_name):
         return False, "disabled_by_operator"
     if risk_manager.is_frozen(strategy_name):
-        return False, "blocked_by_risk_freeze"
+        return False, "strategy_frozen"
     budget_manager = get_strategy_budget_manager()
     if not budget_manager.can_allocate(
         strategy_name,
