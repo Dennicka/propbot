@@ -384,6 +384,44 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             }
         )
 
+    accounting_per_strategy_raw = risk_accounting_snapshot.get("per_strategy")
+    accounting_per_strategy = (
+        accounting_per_strategy_raw if isinstance(accounting_per_strategy_raw, Mapping) else {}
+    )
+    daily_strategy_budgets: list[dict[str, object]] = []
+    for strategy_name in sorted(accounting_per_strategy):
+        row = accounting_per_strategy.get(strategy_name)
+        row_mapping = row if isinstance(row, Mapping) else {}
+        budget_raw = row_mapping.get("budget")
+        budget_mapping = budget_raw if isinstance(budget_raw, Mapping) else {}
+        limit_value = budget_mapping.get("limit_usdt")
+        try:
+            limit_float = float(limit_value) if limit_value is not None else None
+        except (TypeError, ValueError):
+            limit_float = None
+        used_value = budget_mapping.get("used_today_usdt")
+        try:
+            used_float = float(used_value or 0.0)
+        except (TypeError, ValueError):
+            used_float = 0.0
+        remaining_value = budget_mapping.get("remaining_usdt")
+        try:
+            remaining_float = float(remaining_value)
+        except (TypeError, ValueError):
+            remaining_float = None if limit_float is None else limit_float - used_float
+        last_reset = budget_mapping.get("last_reset_ts_utc")
+        blocked = bool(row_mapping.get("blocked_by_budget"))
+        daily_strategy_budgets.append(
+            {
+                "strategy": strategy_name,
+                "limit_usdt": limit_float,
+                "used_today_usdt": used_float,
+                "remaining_usdt": remaining_float,
+                "last_reset_ts_utc": str(last_reset or ""),
+                "blocked": blocked,
+            }
+        )
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -434,6 +472,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "strategy_status_snapshot": strategy_status_snapshot,
         "strategy_budgets": strategy_budgets,
         "strategy_budget_snapshot": strategy_budget_snapshot,
+        "daily_strategy_budgets": daily_strategy_budgets,
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
     }
@@ -569,6 +608,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     positions = context.get("positions", []) or []
     totals = context.get("position_totals", {}) or {}
     strategy_budgets = context.get("strategy_budgets", []) or []
+    daily_strategy_budgets = context.get("daily_strategy_budgets", []) or []
     health_checks = context.get("health_checks", []) or []
     approvals = context.get("pending_approvals", []) or []
     flash_messages = context.get("flash_messages", []) or []
@@ -752,6 +792,17 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-budgets tr.blocked{background:#fee2e2;}"
         ".strategy-budgets .status-ok{color:#166534;font-weight:700;}"
         ".strategy-budgets .status-blocked{color:#b91c1c;font-weight:700;}"
+        ".daily-strategy-budgets{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".daily-strategy-budgets h2{margin-top:0;}"
+        ".daily-strategy-budgets table{margin-top:1rem;}"
+        ".daily-strategy-budgets tr.blocked{background:#fee2e2;}"
+        ".daily-strategy-budgets .status-ok{color:#166534;font-weight:700;}"
+        ".daily-strategy-budgets .status-blocked{color:#b91c1c;font-weight:700;}"
+        ".daily-strategy-budgets form{margin-top:1rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0.75rem;}"
+        ".daily-strategy-budgets form label{font-weight:600;}"
+        ".daily-strategy-budgets form input{padding:0.5rem;border:1px solid #c1c7d0;border-radius:4px;}"
+        ".daily-strategy-budgets form .full-width{grid-column:1/-1;}"
+        ".daily-strategy-budgets form button{grid-column:1/-1;}"
         ".strategy-performance{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".strategy-performance h2{margin-top:0;}"
         ".strategy-performance table{margin-top:1rem;}"
@@ -1035,6 +1086,62 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 "<div class=\"note\">Strategy enable/disable controls require operator role. Status is still visible above.</div>"
             )
     parts.append("".join(strategy_risk_html) + "</div>")
+
+    daily_budget_parts = [
+        "<div class=\"daily-strategy-budgets\"><h2>Daily Strategy Budgets</h2>"
+    ]
+    daily_budget_parts.append("<p class=\"note\">Автосброс в 00:00 UTC.</p>")
+    if daily_strategy_budgets:
+        daily_budget_parts.append(
+            "<table><thead><tr><th>Strategy</th><th>Limit (USDT)</th><th>Used today (USDT)</th><th>Remaining (USDT)</th><th>Last reset (UTC)</th><th>Status</th></tr></thead><tbody>"
+        )
+        for entry in daily_strategy_budgets:
+            strategy_name = _fmt(entry.get("strategy"))
+            limit = _fmt(entry.get("limit_usdt")) if entry.get("limit_usdt") is not None else "∞"
+            used = _fmt(entry.get("used_today_usdt"))
+            remaining_value = entry.get("remaining_usdt")
+            remaining = (
+                "∞" if entry.get("limit_usdt") is None else _fmt(remaining_value)
+            )
+            last_reset = _fmt(entry.get("last_reset_ts_utc"))
+            blocked = bool(entry.get("blocked"))
+            status_html = (
+                '<span class="status-blocked">BLOCKED</span>'
+                if blocked
+                else '<span class="status-ok">OK</span>'
+            )
+            row_class = " class=\"blocked\"" if blocked else ""
+            daily_budget_parts.append(
+                "<tr{row_class}><td>{strategy}</td><td>{limit}</td><td>{used}</td><td>{remaining}</td><td>{reset}</td><td>{status}</td></tr>".format(
+                    row_class=row_class,
+                    strategy=strategy_name,
+                    limit=limit,
+                    used=used,
+                    remaining=remaining,
+                    reset=last_reset or "",
+                    status=status_html,
+                )
+            )
+        daily_budget_parts.append("</tbody></table>")
+    else:
+        daily_budget_parts.append(
+            "<p class=\"note\">Daily budget telemetry unavailable.</p>"
+        )
+    if is_operator:
+        daily_budget_parts.append(
+            "<form method=\"post\" action=\"/api/ui/budget/reset\" class=\"budget-reset-form\">"
+            "<label for=\"budget-reset-strategy\">Strategy</label>"
+            "<input id=\"budget-reset-strategy\" name=\"strategy\" type=\"text\" required placeholder=\"strategy name\" />"
+            "<label for=\"budget-reset-reason\" class=\"full-width\">Reason</label>"
+            "<input id=\"budget-reset-reason\" name=\"reason\" type=\"text\" required placeholder=\"reason for reset\" class=\"full-width\" />"
+            "<button type=\"submit\">Reset daily budget</button>"
+            "</form>"
+        )
+    else:
+        daily_budget_parts.append(
+            "<div class=\"note\">Budget reset controls require operator role.</div>"
+        )
+    parts.append("".join(daily_budget_parts) + "</div>")
 
     budget_parts = ["<div class=\"strategy-budgets\"><h2>Strategy Budgets</h2>"]
     if strategy_budgets:

@@ -52,7 +52,10 @@ from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
-from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
+from ..risk.accounting import (
+    get_risk_snapshot as get_risk_accounting_snapshot,
+    reset_strategy_budget_usage,
+)
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_risk import get_strategy_risk_manager
 from ..services.strategy_status import build_strategy_status
@@ -150,6 +153,35 @@ async def risk_snapshot(request: Request) -> dict[str, Any]:
     payload = dict(base_snapshot)
     payload["accounting"] = accounting_snapshot
     return payload
+
+
+@router.post("/budget/reset")
+async def reset_strategy_budget(request: Request, payload: BudgetResetPayload) -> dict[str, object]:
+    """Reset the daily budget usage for a strategy (operator only)."""
+
+    identity = _authorize_operator_action(request, "BUDGET_RESET")
+    budget_state = reset_strategy_budget_usage(payload.strategy)
+    limit = budget_state.get("limit_usdt")
+    used = float(budget_state.get("used_today_usdt") or 0.0)
+    remaining = None if limit is None else float(limit) - used
+    blocked = False
+    if limit is not None:
+        try:
+            limit_value = float(limit)
+        except (TypeError, ValueError):
+            blocked = False
+        else:
+            blocked = used >= (limit_value - 1e-6)
+            remaining = limit_value - used
+    response_budget = dict(budget_state)
+    response_budget["remaining_usdt"] = remaining
+    response_budget["blocked_by_budget"] = blocked
+    _log_operator_success(
+        identity,
+        "BUDGET_RESET",
+        extra={"strategy": payload.strategy, "reason": payload.reason},
+    )
+    return {"strategy": payload.strategy, "budget": response_budget}
 
 
 def _log_operator_event(
@@ -292,6 +324,13 @@ class SetStrategyEnabledPayload(BaseModel):
     strategy: str = Field(..., min_length=1, description="Strategy identifier")
     enabled: bool = Field(..., description="Whether the strategy should be enabled")
     reason: str = Field(..., min_length=1, description="Operator supplied reason for the change")
+
+
+class BudgetResetPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str = Field(..., min_length=1, description="Strategy identifier")
+    reason: str = Field(..., min_length=1, description="Operator supplied reason for reset")
 
 
 def _dashboard_token_dependency(request: Request) -> str | None:

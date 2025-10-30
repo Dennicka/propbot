@@ -145,6 +145,28 @@
   количеством открытых позиций против лимитов. Стратегии в статусе blocked
   подсвечиваются красным.
 
+## Strategy Budgets (risk accounting)
+
+- Runtime считает отдельный дневной бюджет потерь по каждой стратегии. На
+  каждый заход вы увидите `limit_usdt`, фактический расход `used_today_usdt`,
+  остаток `remaining_usdt` и отметку `last_reset_ts_utc`. Счётчики обнуляются
+  автоматически на границе суток (00:00 UTC), так что овершоты не тянутся в
+  следующий день.
+- Лимит реально блокирует intents только если одновременно включены
+  `RISK_CHECKS_ENABLED=1`, `RISK_ENFORCE_BUDGETS=1` и runtime **не** находится в
+  `dry_run_mode`. В сухих прогонах и SAFE_MODE строки всё равно подсвечиваются
+  (`blocked_by_budget=True`), но сделки не скипаются — можно безопасно тестить.
+- Endpoint `GET /api/ui/risk_snapshot` теперь отдаёт эти поля для каждой
+  стратегии, плюс явный флаг `blocked_by_budget`. Это источник истины для UI и
+  внешних интеграций.
+- Операторам доступен ручной сброс: `POST /api/ui/budget/reset` (JSON
+  `{"strategy": "...", "reason": "..."}`) сбрасывает дневной расход и пишет
+  запись в `audit_log` с `action="BUDGET_RESET"`. Используйте при переходе между
+  сессиями/сменами.
+- `/ui/dashboard` дополнен блоком «Daily Strategy Budgets»: колонка `limit`,
+  `used_today`, `remaining`, `last_reset (UTC)` и статус `OK/BLOCKED`. Под таблицей
+  размещена форма ручного сброса и пояснение «Автосброс в 00:00 UTC».
+
 ## Pre-trade risk gate
 
 - Перед отправкой ручных сделок (`/api/arb/execute`, `/api/arb/confirm`) и

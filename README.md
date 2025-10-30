@@ -110,6 +110,29 @@ notional'а, например:
 Там отображается текущий notional и количество открытых позиций против лимитов,
 а исчерпанные бюджеты подсвечиваются красным.
 
+### Strategy Budgets (risk accounting)
+
+- In-memory risk accounting держит отдельный дневной бюджет для каждой
+  стратегии: `limit_usdt`, фактический расход `used_today_usdt`, остаток
+  `remaining_usdt` и `last_reset_ts_utc`. Значения сбрасываются автоматически
+  в 00:00 UTC (по epoch-day), поэтому старый убыток не тянется в следующий
+  торговый день.
+- Блокировка intents происходит только при одновременном выполнении трёх
+  условий: `FeatureFlags.risk_checks_enabled()` → `true`,
+  `FeatureFlags.enforce_budgets()` → `true` и `runtime_state.control.dry_run_mode`
+  → `False`. В DRY_RUN/SAFE_MODE бюджет отображается как превышенный
+  (`blocked_by_budget=True`), но фактического SKIP не происходит.
+- `GET /api/ui/risk_snapshot` возвращает для каждой стратегии расширенный
+  блок `budget` c полями `limit_usdt`, `used_today_usdt`, `remaining_usdt` и
+  `last_reset_ts_utc`, а также флаг `blocked_by_budget`.
+- Операторы могут обнулять дневной счётчик вручную через
+  `POST /api/ui/budget/reset` (payload: `{"strategy": "...", "reason": "..."}`),
+  событие фиксируется в `audit_log` (action=`BUDGET_RESET`).
+- `/ui/dashboard` показывает отдельную таблицу «Daily Strategy Budgets» с
+  колонками `limit`, `used_today`, `remaining`, `last_reset` и статусом
+  `BLOCKED/OK`. Под таблицей есть форма ручного сброса и напоминание
+  «Автосброс в 00:00 UTC».
+
 ### Per-Strategy PnL & Drawdown
 
 - Runtime теперь ведёт отдельный журнал реализованного PnL по каждой стратегии.

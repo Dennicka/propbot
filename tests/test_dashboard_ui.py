@@ -170,6 +170,8 @@ def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
     html = response.text
     assert "PnL / Risk" in html
     assert "headroom" in html.lower()
+    assert "Daily Strategy Budgets" in html
+    assert "Автосброс в 00:00 UTC" in html
 
 
 def test_dashboard_risk_snapshot_viewer(monkeypatch, tmp_path, client) -> None:
@@ -214,6 +216,7 @@ def test_dashboard_risk_snapshot_viewer(monkeypatch, tmp_path, client) -> None:
     assert "Risk snapshot" in html
     assert "partial_hedges_count" in html
     assert "READ ONLY: you cannot change HOLD/RESUME/KILL." in html
+    assert "Daily Strategy Budgets" in html
 
 
 def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
