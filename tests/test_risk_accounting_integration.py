@@ -6,9 +6,17 @@ import pytest
 from app.budget import strategy_budget as strategy_budget_module
 from app.risk import accounting as risk_accounting
 from app.risk import core as risk_core
+from app.risk import auto_hold
 from app.risk.telemetry import get_risk_skip_counts, reset_risk_skip_metrics_for_tests
+from app.services import runtime
 
 STRATEGY = "cross_exchange_arb"
+
+
+def _clear_runtime_hold() -> None:
+    if runtime.is_hold_active():
+        request = runtime.record_resume_request("release_for_tests", requested_by="pytest")
+        runtime.approve_resume(request_id=request["id"], actor="pytest")
 
 
 @pytest.fixture(autouse=True)
@@ -224,6 +232,43 @@ def test_daily_loss_cap_blocks_when_breached(monkeypatch):
     assert bot_cap.get("realized_today_usdt") == pytest.approx(-120.0)
     counts = get_risk_skip_counts()
     assert counts.get(STRATEGY, {}).get("daily_loss_cap") == 1
+
+
+def test_daily_loss_cap_auto_hold_on_record_intent(monkeypatch):
+    runtime.reset_for_tests()
+    _clear_runtime_hold()
+    monkeypatch.setattr(risk_accounting, "get_state", runtime.get_state)
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
+    monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
+    monkeypatch.setenv("DAILY_LOSS_CAP_AUTO_HOLD", "1")
+    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "100")
+    state = runtime.get_state()
+    state.control.dry_run = False
+    state.control.dry_run_mode = False
+
+    audit_actions: list[str] = []
+    alerts: list[str] = []
+
+    def _audit_action(operator: str, role: str, action: str, details=None) -> None:
+        audit_actions.append(action)
+
+    def _emit_alert(kind: str, *_args, **_kwargs) -> None:
+        alerts.append(kind)
+
+    monkeypatch.setattr(auto_hold, "log_operator_action", _audit_action)
+    monkeypatch.setattr(auto_hold, "send_notifier_alert", _emit_alert)
+
+    risk_accounting.record_fill(STRATEGY, 0.0, -150.0, simulated=False)
+
+    snapshot, result = risk_accounting.record_intent(STRATEGY, 5.0, simulated=False)
+
+    assert result["ok"] is False
+    assert result.get("hold_engaged") is True
+    assert result.get("status") == "hold_engaged"
+    assert snapshot.get("last_denial", {}).get("status") == "hold_engaged"
+    assert runtime.get_state().safety.hold_active is True
+    assert auto_hold.AUTO_HOLD_ACTION in audit_actions
+    assert alerts and alerts[0] == auto_hold.AUTO_HOLD_ALERT_KIND
 
 
 @pytest.mark.parametrize("scenario", ["checks_disabled", "enforcement_disabled", "dry_run"])
