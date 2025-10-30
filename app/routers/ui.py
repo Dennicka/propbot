@@ -52,6 +52,7 @@ from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
+from ..risk.daily_loss import get_daily_loss_cap_state
 from ..risk.accounting import (
     get_risk_snapshot as get_risk_accounting_snapshot,
     reset_strategy_budget_usage,
@@ -153,6 +154,14 @@ async def risk_snapshot(request: Request) -> dict[str, Any]:
     payload = dict(base_snapshot)
     payload["accounting"] = accounting_snapshot
     return payload
+
+
+@router.get("/daily_loss_status")
+def daily_loss_status(request: Request) -> dict[str, Any]:
+    """Return the current bot-wide daily loss cap status."""
+
+    require_token(request)
+    return get_daily_loss_cap_state()
 
 
 @router.post("/budget/reset")
@@ -405,6 +414,7 @@ async def runtime_state() -> dict:
         "risk_reasons": risk_reasons,
         "risk_accounting": accounting_snapshot,
         "bot_loss_cap": bot_loss_cap,
+        "daily_loss_cap": bot_loss_cap or get_daily_loss_cap_state(),
         "autopilot": state.autopilot.as_dict(),
     }
     return redact_sensitive_data(response)

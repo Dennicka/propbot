@@ -10,6 +10,7 @@ from app.broker.binance import BinanceTestnetBroker
 from app.services import runtime
 from app.services.runtime import get_state
 from app.secrets_store import reset_secrets_store_cache
+from app.risk import accounting as risk_accounting, core as risk_core
 
 
 def test_ui_state_and_controls(client, monkeypatch):
@@ -479,3 +480,28 @@ def test_risk_state_endpoint(client):
     assert resp.status_code == 200
     payload = resp.json()
     assert set(payload.keys()) >= {"limits", "current", "breaches", "positions_usdt", "exposures"}
+
+
+def test_daily_loss_status_endpoint(client, monkeypatch):
+    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "75")
+    monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
+    risk_accounting.reset_risk_accounting_for_tests()
+    risk_core.reset_risk_governor_for_tests()
+
+    risk_accounting.record_fill("ui_test", 0.0, -30.0, simulated=False)
+
+    resp = client.get("/api/ui/daily_loss_status")
+    assert resp.status_code == 200
+    snapshot = resp.json()
+    assert snapshot["max_daily_loss_usdt"] == pytest.approx(75.0)
+    assert snapshot["losses_usdt"] == pytest.approx(30.0)
+    assert snapshot["breached"] is False
+    assert snapshot["enabled"] is True
+    assert snapshot["blocking"] is True
+
+    state_resp = client.get("/api/ui/state")
+    assert state_resp.status_code == 200
+    state_payload = state_resp.json()
+    embedded = state_payload.get("daily_loss_cap")
+    assert embedded
+    assert embedded["losses_usdt"] == pytest.approx(30.0)

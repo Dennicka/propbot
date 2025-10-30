@@ -87,6 +87,7 @@ def test_risk_snapshot_endpoint(monkeypatch, client) -> None:
     assert "realized_today_usdt" in loss_cap
     assert "remaining_usdt" in loss_cap
     assert "breached" in loss_cap
+    assert "daily_loss_cap" in accounting
 
     unauth_response = client.get("/api/ui/risk_snapshot")
     assert unauth_response.status_code in {401, 403}

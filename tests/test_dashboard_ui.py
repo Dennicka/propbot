@@ -5,6 +5,7 @@ import json
 
 from positions import create_position
 
+from app.risk import accounting as risk_accounting, core as risk_core
 from app.services import approvals_store, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
@@ -328,6 +329,12 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
     monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
 
+    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "50")
+    monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
+    risk_accounting.reset_risk_accounting_for_tests()
+    risk_core.reset_risk_governor_for_tests()
+    risk_accounting.record_fill("dashboard", 0.0, -60.0, simulated=False)
+
     runtime.engage_safety_hold("pytest", source="test")
     runtime.update_auto_hedge_state(
         enabled=True,
@@ -336,6 +343,8 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
         consecutive_failures=2,
     )
     state = runtime.get_state()
+    state.control.dry_run = False
+    state.control.dry_run_mode = False
     state.safety.counters.orders_placed_last_min = 9
     state.safety.counters.cancels_last_min = 8
     state.safety.limits.max_orders_per_min = 10
@@ -482,6 +491,7 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "Reconciliation status" in html
     assert "STATE DESYNC — manual intervention required" in html
     assert "Outstanding mismatches:" in html
+    assert "Daily loss cap" in html
 
 
 def test_dashboard_recent_ops_status_badges(monkeypatch, client) -> None:

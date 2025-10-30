@@ -20,6 +20,7 @@ from . import runtime
 from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
 from .strategy_status import build_strategy_status
+from ..risk.daily_loss import get_daily_loss_cap_state
 
 
 def _iso_now() -> str:
@@ -126,6 +127,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
         "overall_ok": watchdog_instance.overall_ok(),
         "exchanges": watchdog_snapshot,
     }
+    daily_loss_cap_snapshot = get_daily_loss_cap_state()
 
     control = state.control
     autopilot = state.autopilot.as_dict() if hasattr(state.autopilot, "as_dict") else {}
@@ -155,6 +157,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
         },
         "autopilot": autopilot,
         "pnl": pnl_snapshot,
+        "daily_loss_cap": daily_loss_cap_snapshot,
         "positions_snapshot": {
             "positions": list(positions_snapshot.get("positions", [])),
             "exposure": {str(k): v for k, v in _coerce_mapping(positions_snapshot.get("exposure")).items()},
@@ -274,6 +277,28 @@ def _iter_pnl_rows(pnl_payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
             yield {"section": "pnl", "key": key, "value": _stringify(pnl_payload.get(key))}
 
 
+def _iter_daily_loss_rows(snapshot: Mapping[str, Any]) -> Iterable[dict[str, str]]:
+    payload = _coerce_mapping(snapshot)
+    if not payload:
+        return []
+    for key in (
+        "realized_pnl_today_usdt",
+        "losses_usdt",
+        "max_daily_loss_usdt",
+        "remaining_usdt",
+        "percentage_used",
+        "breached",
+        "enabled",
+        "blocking",
+    ):
+        if key in payload:
+            yield {
+                "section": "daily_loss_cap",
+                "key": key,
+                "value": _stringify(payload.get(key)),
+            }
+
+
 def _iter_positions_rows(positions_payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
     totals = _coerce_mapping(positions_payload.get("totals"))
     for key in sorted(totals):
@@ -372,6 +397,9 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
         writer.writerow(row)
     pnl_payload = _coerce_mapping(report.get("pnl"))
     for row in _iter_pnl_rows(pnl_payload):
+        writer.writerow(row)
+    daily_loss_payload = _coerce_mapping(report.get("daily_loss_cap"))
+    for row in _iter_daily_loss_rows(daily_loss_payload):
         writer.writerow(row)
     positions_payload = _coerce_mapping(report.get("positions_snapshot"))
     for row in _iter_positions_rows(positions_payload):

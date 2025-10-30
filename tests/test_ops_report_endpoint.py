@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from app.risk import accounting as risk_accounting, core as risk_core
 from app.strategy_budget import StrategyBudgetManager, reset_strategy_budget_manager_for_tests
 from app.strategy_risk import get_strategy_risk_manager, reset_strategy_risk_manager_for_tests
 from app.strategy_pnl import reset_state_for_tests as reset_strategy_pnl_state
@@ -58,10 +59,14 @@ def ops_report_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNTIME_STATE_PATH", str(tmp_path / "runtime.json"))
     monkeypatch.setenv("STRATEGY_PNL_STATE_PATH", str(tmp_path / "strategy_pnl.json"))
     monkeypatch.setenv("POSITIONS_STORE_PATH", str(tmp_path / "positions.json"))
+    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "200")
+    monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
 
     reset_strategy_pnl_state()
     reset_positions()
     reset_strategy_risk_manager_for_tests()
+    risk_accounting.reset_risk_accounting_for_tests()
+    risk_core.reset_risk_governor_for_tests()
     budget_manager = reset_strategy_budget_manager_for_tests(
         StrategyBudgetManager(
             initial_budgets={
@@ -92,6 +97,7 @@ def ops_report_environment(monkeypatch, tmp_path):
     risk_manager = get_strategy_risk_manager()
     risk_manager.record_fill("alpha", -50.0)
     risk_manager.record_failure("alpha", "spread_below_threshold")
+    risk_accounting.record_fill("alpha", 0.0, -80.0, simulated=False)
 
     dummy_state = SimpleNamespace(
         control=SimpleNamespace(
@@ -196,6 +202,10 @@ def test_ops_report_json_accessible_for_roles(
     assert payload["pnl"]["unrealized_pnl_usdt"] == 42.0
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
+    daily_loss = payload["daily_loss_cap"]
+    assert daily_loss["max_daily_loss_usdt"] == pytest.approx(200.0)
+    assert daily_loss["losses_usdt"] == pytest.approx(80.0)
+    assert daily_loss["breached"] is False
 
     assert "strategy_status" in payload
     alpha_status = payload["strategy_status"]["alpha"]
@@ -218,6 +228,7 @@ def test_ops_report_json_accessible_for_roles(
     auditor_payload = auditor_response.json()
     assert auditor_payload["runtime"]["mode"] == "HOLD"
     assert auditor_payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
+    assert auditor_payload["daily_loss_cap"]["losses_usdt"] == pytest.approx(80.0)
 
 
 def test_ops_report_csv_export(client, ops_report_environment) -> None:
@@ -235,5 +246,9 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
         row["section"] == "strategy_status:alpha"
         and row["key"] == "budget_blocked"
         and row["value"] == "True"
+        for row in rows
+    )
+    assert any(
+        row["section"] == "daily_loss_cap" and row["key"] == "losses_usdt" and row["value"] == "80.0"
         for row in rows
     )

@@ -23,6 +23,7 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("RISK_ENFORCE_BUDGETS", raising=False)
     monkeypatch.delenv("DRY_RUN_MODE", raising=False)
     monkeypatch.delenv("DAILY_LOSS_CAP_USDT", raising=False)
+    monkeypatch.delenv("ENFORCE_DAILY_LOSS_CAP", raising=False)
     risk_core.reset_risk_governor_for_tests()
     risk_accounting.reset_risk_accounting_for_tests()
     reset_risk_skip_metrics_for_tests()
@@ -102,7 +103,7 @@ def test_risk_gate_blocks_when_caps_breached(monkeypatch):
 
 def test_risk_gate_blocks_when_daily_loss_cap_breached(monkeypatch):
     monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
-    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
     monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "100")
     risk_core.reset_risk_governor_for_tests()
     monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(0.0, 0))
@@ -117,11 +118,12 @@ def test_risk_gate_blocks_when_daily_loss_cap_breached(monkeypatch):
     result = risk_core.risk_gate(intent)
 
     assert result["allowed"] is False
-    assert result["reason"] == "daily_loss_cap"
+    assert result["reason"] == "DAILY_LOSS_CAP"
     assert result["state"] == "SKIPPED_BY_RISK"
     assert result.get("strategy") == "unit_test"
     details = result.get("details")
     assert isinstance(details, dict)
     assert "bot_loss_cap" in details
+    assert "daily_loss_cap" in details
     counts = get_risk_skip_counts()
     assert counts.get("unit_test", {}).get("daily_loss_cap") == 1
