@@ -20,6 +20,7 @@ def reset_accounting(monkeypatch):
     monkeypatch.delenv("RISK_ENFORCE_BUDGETS", raising=False)
     monkeypatch.delenv("DRY_RUN_MODE", raising=False)
     monkeypatch.delenv("DAILY_LOSS_CAP_USDT", raising=False)
+    monkeypatch.delenv("ENFORCE_DAILY_LOSS_CAP", raising=False)
     monkeypatch.setattr(
         risk_accounting,
         "get_state",
@@ -204,7 +205,7 @@ def test_daily_loss_cap_blocks_when_breached(monkeypatch):
     _configure_caps(monkeypatch, notional=10_000.0, positions=50)
     monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "100")
     monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
-    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
     risk_core.reset_risk_governor_for_tests()
 
     risk_accounting.record_fill(STRATEGY, 0.0, -120.0, simulated=False)
@@ -212,18 +213,20 @@ def test_daily_loss_cap_blocks_when_breached(monkeypatch):
     snapshot, result = risk_accounting.record_intent(STRATEGY, 10.0, simulated=False)
 
     assert result["ok"] is False
-    assert result["reason"] == "daily_loss_cap"
+    assert result["reason"] == "DAILY_LOSS_CAP"
     assert result["state"] == "SKIPPED_BY_RISK"
     last_denial = snapshot.get("last_denial", {})
-    assert last_denial.get("reason") == "daily_loss_cap"
+    assert last_denial.get("reason") == "DAILY_LOSS_CAP"
     bot_cap = snapshot.get("bot_loss_cap", {})
     assert bot_cap.get("breached") is True
+    daily_cap = snapshot.get("daily_loss_cap", {})
+    assert daily_cap.get("losses_usdt") == pytest.approx(120.0)
     assert bot_cap.get("realized_today_usdt") == pytest.approx(-120.0)
     counts = get_risk_skip_counts()
     assert counts.get(STRATEGY, {}).get("daily_loss_cap") == 1
 
 
-@pytest.mark.parametrize("scenario", ["checks_disabled", "caps_disabled", "dry_run"])
+@pytest.mark.parametrize("scenario", ["checks_disabled", "enforcement_disabled", "dry_run"])
 def test_daily_loss_cap_not_enforced_when_disabled(monkeypatch, scenario):
     _configure_caps(monkeypatch, notional=10_000.0, positions=50)
     monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "100")
@@ -231,11 +234,11 @@ def test_daily_loss_cap_not_enforced_when_disabled(monkeypatch, scenario):
 
     if scenario != "checks_disabled":
         monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
-    if scenario != "caps_disabled":
-        monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+    if scenario != "enforcement_disabled":
+        monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
     if scenario == "dry_run":
         monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
-        monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
+        monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
         monkeypatch.setattr(
             risk_accounting,
             "get_state",
@@ -259,6 +262,7 @@ def test_daily_loss_cap_auto_resets_at_utc_midnight(monkeypatch):
     next_day = start + timedelta(days=1)
 
     monkeypatch.setattr(risk_accounting, "_utc_now", lambda: start)
+    monkeypatch.setattr("app.risk.daily_loss._utc_now", lambda: start)
     _configure_caps(monkeypatch, notional=10_000.0, positions=50)
     monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "200")
     risk_core.reset_risk_governor_for_tests()
@@ -270,6 +274,7 @@ def test_daily_loss_cap_auto_resets_at_utc_midnight(monkeypatch):
     assert cap_before.get("remaining_usdt") == pytest.approx(160.0)
 
     monkeypatch.setattr(risk_accounting, "_utc_now", lambda: next_day)
+    monkeypatch.setattr("app.risk.daily_loss._utc_now", lambda: next_day)
     snapshot_after = risk_accounting.get_risk_snapshot()
     cap_after = snapshot_after.get("bot_loss_cap", {})
     assert cap_after.get("realized_today_usdt") == pytest.approx(0.0)

@@ -1025,38 +1025,64 @@
         }
       };
 
-      function renderBotLossCap(lossCap) {
+      function renderBotLossCap(lossCap, { dryRun = false } = {}) {
         if (!botLossCapEl) return;
         if (!lossCap || typeof lossCap !== 'object') {
-          botLossCapEl.textContent = 'Not configured';
+          botLossCapEl.textContent = 'Daily loss data unavailable';
           botLossCapEl.classList.add('muted');
           return;
         }
-        const capValue = Number(lossCap.cap_usdt ?? lossCap.cap);
+        const capValue = Number(lossCap.max_daily_loss_usdt ?? lossCap.cap_usdt ?? 0);
+        const realizedValue = Number(lossCap.realized_pnl_today_usdt ?? lossCap.realized_today_usdt ?? 0);
+        const lossesValue = Number(lossCap.losses_usdt ?? Math.max(-realizedValue, 0));
+        const percentage = Number(lossCap.percentage_used ?? 0);
+        const remainingRaw = lossCap.remaining_usdt;
+        const remainingValue = Number(remainingRaw);
+        const breached = Boolean(lossCap.breached);
+        const enabled = Boolean(lossCap.enabled);
+        const blocking = Boolean(lossCap.blocking ?? (enabled && capValue > 0));
+        const effectiveBlocking = blocking && !dryRun;
+
         if (!Number.isFinite(capValue) || capValue <= 0) {
           botLossCapEl.textContent = 'Cap disabled';
           botLossCapEl.classList.add('muted');
           return;
         }
-        const realizedValue = Number(lossCap.realized_today_usdt ?? 0);
-        const remainingRaw = lossCap.remaining_usdt;
-        const remainingValue = Number(remainingRaw);
-        const breached = Boolean(lossCap.breached);
-        const statusIcon = breached ? '🔴' : '🟢';
-        const statusText = breached ? 'Breached' : 'OK';
-        const statusClass = breached ? 'value bad' : 'value good';
+
+        let badgeText;
+        let badgeClass;
+        if (breached && effectiveBlocking) {
+          badgeText = 'BREACHED (trading blocked)';
+          badgeClass = 'badge badge-error';
+        } else if (breached) {
+          badgeText = dryRun ? 'BREACHED (dry run)' : 'BREACHED (monitoring)';
+          badgeClass = 'badge badge-warning';
+        } else if (effectiveBlocking) {
+          badgeText = 'ACTIVE';
+          badgeClass = 'badge badge-info';
+        } else {
+          badgeText = dryRun ? 'DRY RUN' : 'MONITORING ONLY';
+          badgeClass = 'badge badge-info';
+        }
+
+        const percentLabel = Number.isFinite(percentage) ? `${percentage.toFixed(1)}%` : '—';
+        const remainingLabel = Number.isFinite(remainingValue) ? formatNumber(remainingValue) : '—';
+        const lossesLabel = formatNumber(lossesValue);
+        const realizedClass = realizedValue >= 0 ? 'value good' : 'value bad';
         const remainingClass = Number.isFinite(remainingValue)
           ? `value ${remainingValue >= 0 ? 'good' : 'bad'}`
           : 'value muted';
-        const remainingLabel = Number.isFinite(remainingValue)
-          ? formatNumber(remainingValue)
-          : '—';
+
         const lines = [
-          `<div class="risk-metric"><span>Status</span><span class="${statusClass}">${statusIcon} ${statusText}</span></div>`,
-          `<div class="risk-metric"><span>Cap</span><span class="value">${formatNumber(capValue)}</span></div>`,
-          `<div class="risk-metric"><span>Realized</span><span class="value">${formatNumber(realizedValue)}</span></div>`,
-          `<div class="risk-metric"><span>Remaining</span><span class="${remainingClass}">${remainingLabel}</span></div>`,
+          `<div class="risk-metric"><span>Status</span><span class="value"><span class="${badgeClass}">${badgeText}</span></span></div>`,
+          `<div class="risk-metric"><span>Realized (UTC)</span><span class="${realizedClass}">${formatNumber(realizedValue)}</span></div>`,
+          `<div class="risk-metric"><span>Loss cap</span><span class="value">${formatNumber(capValue)}</span></div>`,
+          `<div class="risk-metric"><span>Losses used</span><span class="value">${lossesLabel}</span></div>`,
+          `<div class="risk-metric"><span>Usage</span><span class="value">${percentLabel}</span></div>`,
         ];
+        lines.push(
+          `<div class="risk-metric"><span>Remaining</span><span class="${remainingClass}">${remainingLabel}</span></div>`
+        );
         botLossCapEl.classList.remove('muted');
         botLossCapEl.innerHTML = lines.join('');
       }
@@ -1523,15 +1549,20 @@
 
       const fetchState = async () => {
         try {
-          const [stateResp, secretResp, ordersResp] = await Promise.all([
+          const [stateResp, secretResp, ordersResp, dailyLossResp] = await Promise.all([
             fetch('/api/ui/state'),
             fetch('/api/ui/secret'),
             fetch('/api/ui/orders'),
+            fetch('/api/ui/daily_loss_status'),
           ]);
           if (!stateResp.ok) {
             throw new Error('failed to load state');
           }
           const data = await stateResp.json();
+          let dailyLossSnapshot = null;
+          if (dailyLossResp.ok) {
+            dailyLossSnapshot = await dailyLossResp.json();
+          }
           state.control = data.control || state.control;
           const eventsBlock = data.events || {};
           const eventItems = Array.isArray(eventsBlock.items) ? eventsBlock.items : [];
@@ -1564,8 +1595,13 @@
           renderAutopilot(data.autopilot || {});
           renderRisk(data.risk);
           const lossCapSnapshot =
-            data.bot_loss_cap || (data.risk_accounting && data.risk_accounting.bot_loss_cap) || null;
-          renderBotLossCap(lossCapSnapshot);
+            dailyLossSnapshot ||
+            data.daily_loss_cap ||
+            data.bot_loss_cap ||
+            (data.risk_accounting &&
+              (data.risk_accounting.daily_loss_cap || data.risk_accounting.bot_loss_cap)) ||
+            null;
+          renderBotLossCap(lossCapSnapshot, { dryRun: Boolean(data.dry_run) });
 
           if (secretResp.ok) {
             state.secret = await secretResp.json();

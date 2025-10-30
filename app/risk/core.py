@@ -216,6 +216,10 @@ class FeatureFlags:
     def dry_run_mode(cls) -> bool:
         return cls._flag("DRY_RUN_MODE")
 
+    @classmethod
+    def enforce_daily_loss_cap(cls) -> bool:
+        return cls._flag("ENFORCE_DAILY_LOSS_CAP")
+
 
 @dataclass(frozen=True)
 class _RiskMetrics:
@@ -430,18 +434,21 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
 
     if (
         FeatureFlags.risk_checks_enabled()
-        and FeatureFlags.enforce_caps()
+        and FeatureFlags.enforce_daily_loss_cap()
         and not dry_run
     ):
-        from .accounting import get_bot_loss_cap_state, is_loss_cap_breached
+        from .accounting import get_daily_loss_cap_state
+        from .daily_loss import get_daily_loss_cap
 
-        if is_loss_cap_breached():
+        daily_cap = get_daily_loss_cap()
+        if daily_cap.is_breached():
             record_risk_skip(strategy_name, "daily_loss_cap")
-            details = {"bot_loss_cap": get_bot_loss_cap_state()}
+            snapshot = get_daily_loss_cap_state()
+            details = {"daily_loss_cap": snapshot, "bot_loss_cap": snapshot}
             response: Dict[str, object | None] = {
                 "allowed": False,
                 "state": "SKIPPED_BY_RISK",
-                "reason": "daily_loss_cap",
+                "reason": "DAILY_LOSS_CAP",
                 "details": details,
             }
             if strategy_name is not None:

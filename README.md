@@ -176,17 +176,25 @@ notional'а, например:
 ### Bot-wide daily loss cap
 
 - Глобальный дневной loss-cap настраивается через переменную окружения
-  `DAILY_LOSS_CAP_USDT`. Пустое значение или `0` отключает ограничение.
-- Реализованный PnL агрегируется по всем стратегиям. При активных флагах
-  `RISK_CHECKS_ENABLED=1`, `RISK_ENFORCE_CAPS=1` и в отсутствии DRY_RUN новые
-  intents блокируются с состоянием `SKIPPED_BY_RISK` и причиной
-  `daily_loss_cap`, как только дневной убыток превысит кап.
+-  `DAILY_LOSS_CAP_USDT`. Пустое значение или `0` отключает ограничение.
+- Включение enforcement контролируется флагом `ENFORCE_DAILY_LOSS_CAP=1`
+  (одновременно с `RISK_CHECKS_ENABLED=1`). В режиме DRY_RUN лимит отображается,
+  но новые сделки не блокируются.
+- Реализованный PnL агрегируется по всем стратегиям. При активных флагах и в
+  отсутствии DRY_RUN intents блокируются с состоянием `SKIPPED_BY_RISK` и
+  причиной `DAILY_LOSS_CAP`, как только дневной убыток превысит кап.
 - Счётчик сбрасывается автоматически в 00:00 UTC (тот же epoch-day, что и у
   бюджетов), ручных ресетов нет.
-- `/api/ui/risk_snapshot` и `/ui/dashboard` получают дополнительный блок
-  `bot_loss_cap` (`cap_usdt`, `realized_today_usdt`, `remaining_usdt`,
-  `breached`). На дашборде отображается компактный статус со световой
-  подсветкой.
+- `/api/ui/daily_loss_status` возвращает текущий снимок лимита (реализованный
+  PnL за UTC-день, лимит, % использования, breached/enabled). Те же данные
+  публикуются в `/api/ui/state` (поля `daily_loss_cap` и `bot_loss_cap`) и в
+  risk snapshot.
+- `/ui/dashboard` отображает блок **Daily loss cap** с бейджем статуса,
+  текущим дневным PnL, лимитом, потерями и процентом использования. При
+  превышении лимита и активном enforcement выводится красный бейдж
+  «BREACHED (trading blocked)».
+- Ops report (JSON/CSV) содержит секцию `daily_loss_cap` с текущим значением,
+  лимитом и признаками breach/enabled.
 - В Prometheus публикуются новые метрики: `bot_daily_loss_realized_usdt`,
   `bot_daily_loss_cap_usdt`, а счётчик `risk_skips_total{reason="daily_loss_cap"}`
   инкрементируется при каждом отказе.

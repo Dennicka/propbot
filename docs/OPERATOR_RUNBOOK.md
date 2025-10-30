@@ -239,19 +239,27 @@
 
 - Глобальный дневной лимит убытков настраивается переменной окружения
   `DAILY_LOSS_CAP_USDT`. Пустое значение или `0` полностью отключает защиту.
+- Enforcement включается флагом `ENFORCE_DAILY_LOSS_CAP=1` (совместно с
+  `RISK_CHECKS_ENABLED=1`). В DRY_RUN лимит отображается, но торговля не
+  останавливается.
 - Учёт ведётся по суммарному реализованному PnL всех стратегий. При активных
-  `RISK_CHECKS_ENABLED=1`, `RISK_ENFORCE_CAPS=1` и в режиме без DRY_RUN новые
-  intents блокируются с `state=SKIPPED_BY_RISK`, `reason=daily_loss_cap`.
+  флагах и в режиме без DRY_RUN новые intents блокируются с
+  `state=SKIPPED_BY_RISK`, `reason=DAILY_LOSS_CAP`.
 - Автосброс выполняется в 00:00 UTC (тот же epoch-day, что у бюджетов). Ручных
   команд сброса нет — дождитесь смены суток, чтобы лимит обновился.
-- `/api/ui/risk_snapshot` и `/ui/dashboard` получают блок `bot_loss_cap` c
-  полями `cap_usdt`, `realized_today_usdt`, `remaining_usdt`, `breached`. На
-  дашборде отображается отдельный статус «Daily loss cap» с цветовым индикатором.
+- `/api/ui/daily_loss_status` возвращает снимок лимита (реализованный PnL,
+  лимит, % использования, breached/enabled). Те же данные включены в
+  `/api/ui/state` и `/api/ui/risk_snapshot` (`daily_loss_cap` и `bot_loss_cap`).
+- На дашборде отображается блок «Daily loss cap» с бейджем статуса, текущим PnL,
+  лимитом и процентом использования. Если лимит превышен и enforcement включён,
+  выводится красный бейдж «BREACHED (trading blocked)».
+- Ops report (JSON/CSV) содержит секцию `daily_loss_cap` с тем же snapshot.
 - Метрики Prometheus: `bot_daily_loss_realized_usdt`,
   `bot_daily_loss_cap_usdt`. Счётчик `risk_skips_total{reason="daily_loss_cap"}`
   помогает следить за количеством отказов.
-- При срабатывании лимита проверьте, что не активирован `DRY_RUN_MODE` и
-  `RISK_CHECKS_ENABLED`. До полуночи UTC новые сделки не будут приниматься.
+- При срабатывании лимита проверьте, что не активирован `DRY_RUN_MODE`, а также
+  что `ENFORCE_DAILY_LOSS_CAP` не выключен. До полуночи UTC новые сделки не
+  будут приниматься.
 
 ## Autopilot resume safety
 
