@@ -38,6 +38,7 @@ from services.execution_stats_store import (
 )
 from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
+from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
@@ -264,6 +265,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
     pnl_snapshot = build_pnl_snapshot(positions_payload)
     risk_snapshot = await build_risk_snapshot()
+    risk_accounting_snapshot = get_risk_accounting_snapshot()
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
@@ -425,6 +427,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "execution_quality": execution_quality,
         "daily_report": daily_report or {},
         "risk_snapshot": risk_snapshot,
+        "risk_accounting_snapshot": risk_accounting_snapshot,
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
         "strategy_pnl_snapshot": strategy_pnl_snapshot,
@@ -649,6 +652,25 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     risk_snapshot_score = risk_snapshot.get("risk_score") or "TBD"
     risk_snapshot_per_venue = risk_snapshot.get("per_venue") or {}
 
+    risk_accounting_snapshot = context.get("risk_accounting_snapshot", {}) or {}
+    if not isinstance(risk_accounting_snapshot, Mapping):
+        risk_accounting_snapshot = {}
+    accounting_totals_raw = risk_accounting_snapshot.get("totals")
+    accounting_totals = (
+        accounting_totals_raw
+        if isinstance(accounting_totals_raw, Mapping)
+        else {}
+    )
+    accounting_per_strategy_raw = risk_accounting_snapshot.get("per_strategy")
+    accounting_per_strategy = (
+        accounting_per_strategy_raw
+        if isinstance(accounting_per_strategy_raw, Mapping)
+        else {}
+    )
+    accounting_simulated = accounting_totals.get("simulated")
+    if not isinstance(accounting_simulated, Mapping):
+        accounting_simulated = {}
+
     strategy_risk_snapshot = context.get("strategy_risk_snapshot", {}) or {}
     if not isinstance(strategy_risk_snapshot, Mapping):
         strategy_risk_snapshot = {}
@@ -756,6 +778,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".risk-snapshot table{margin-top:1rem;}"
         ".risk-snapshot .risk-label{font-weight:600;color:#374151;margin-right:0.5rem;}"
         ".risk-snapshot .risk-pill{font-weight:700;}"
+        ".risk-accounting{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".risk-accounting h2{margin-top:0;}"
+        ".risk-accounting table{margin-top:1rem;}"
+        ".risk-accounting .breach{color:#b91c1c;font-weight:700;}"
+        ".risk-accounting .breach-ok{color:#166534;font-weight:700;}"
         "button:disabled{background:#9ca3af;cursor:not-allowed;}"
         "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
         "</style></head><body>"
@@ -1513,6 +1540,62 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     risk_autopilot_html = (
         f'<span class="risk-pill" style="color:{risk_autopilot_color};">{risk_autopilot_label}</span>'
     )
+
+    parts.append("<div class=\"risk-accounting\">")
+    parts.append("<h2>Risk snapshot (execution)</h2>")
+    parts.append(
+        f"<p><strong>Total open notional:</strong> {_fmt(accounting_totals.get('open_notional'))}</p>"
+    )
+    parts.append(
+        f"<p><strong>Total open positions:</strong> {_fmt(accounting_totals.get('open_positions'))}</p>"
+    )
+    parts.append(
+        f"<p><strong>Realized PnL today:</strong> {_fmt(accounting_totals.get('realized_pnl_today'))}</p>"
+    )
+    if accounting_totals.get("budget_used") not in (None, ""):
+        parts.append(
+            f"<p><strong>Loss budget used:</strong> {_fmt(accounting_totals.get('budget_used'))}</p>"
+        )
+    if accounting_simulated:
+        parts.append(
+            "<p class=\"note\">Simulated totals — "
+            f"notional: {_fmt(accounting_simulated.get('open_notional'))}, "
+            f"positions: {_fmt(accounting_simulated.get('open_positions'))}</p>"
+        )
+    if accounting_per_strategy:
+        parts.append(
+            "<table><thead><tr><th>Strategy</th><th>Open notional</th>"
+            "<th>Open positions</th><th>Realized PnL today</th>"
+            "<th>Budget used / limit</th><th>Breaches</th></tr></thead><tbody>"
+        )
+        for name in sorted(accounting_per_strategy):
+            entry = accounting_per_strategy.get(name) or {}
+            budget_payload = entry.get("budget") if isinstance(entry.get("budget"), Mapping) else {}
+            used_value = budget_payload.get("used") if isinstance(budget_payload, Mapping) else entry.get("budget_used")
+            limit_value = budget_payload.get("limit") if isinstance(budget_payload, Mapping) else None
+            used_text = _fmt(used_value)
+            limit_text = _fmt(limit_value) if limit_value not in (None, "") else "n/a"
+            breaches = entry.get("breaches") if isinstance(entry.get("breaches"), list) else []
+            if breaches:
+                breach_cell = f'<span class="breach">{_fmt(", ".join(str(b) for b in breaches))}</span>'
+            else:
+                breach_cell = '<span class="breach-ok">ok</span>'
+            parts.append(
+                "<tr><td>{strategy}</td><td>{open_notional}</td><td>{open_positions}</td>"
+                "<td>{realized}</td><td>{budget}</td><td>{breaches}</td></tr>".format(
+                    strategy=_fmt(name),
+                    open_notional=_fmt(entry.get("open_notional")),
+                    open_positions=_fmt(entry.get("open_positions")),
+                    realized=_fmt(entry.get("realized_pnl_today")),
+                    budget=f"{used_text} / {limit_text}",
+                    breaches=breach_cell,
+                )
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p class=\"note\">No strategy entries recorded.</p>")
+    parts.append("</div>")
+
     parts.append("<div class=\"risk-snapshot\">")
     parts.append("<h2>Risk snapshot</h2>")
     parts.append(

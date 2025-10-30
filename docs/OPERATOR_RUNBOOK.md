@@ -182,6 +182,19 @@
   PnL. На `/ui/dashboard` этот же snapshot лежит в блоке «Strategy Performance /
   Risk» и считается основным источником правды по стратегиям.
 
+## Execution risk accounting snapshot
+
+- Новый endpoint `GET /api/ui/risk_snapshot` (тот же bearer-токен, что и для
+  прочих `/api/ui/*`) публикует оперативную сводку по исполнению: суммарный open
+  notional, число открытых позиций, дневной реализованный PnL и накопленное
+  потребление бюджетов (`budget_used`). Для DRY_RUN/Safe Mode счётчики ведутся
+  отдельно — поле `totals.simulated` отражает, что происходило в тренировочных
+  запусках, не влияя на реальные лимиты.
+- На `/ui/dashboard` появилась карточка **Risk snapshot (execution)**: в ней
+  видно aggregated totals и таблицу по стратегиям с колонками «open notional»,
+  «open positions», «realized PnL today» и `budget used / limit`. Строки, где
+  лимит или дневной убыток исчерпаны, подсвечиваются и получают ярлык `breach`.
+
 ## Autopilot resume safety
 
 - Автопилот больше не снимает HOLD автоматически, если StrategyRiskManager

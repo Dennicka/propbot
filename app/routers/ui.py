@@ -52,6 +52,7 @@ from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
+from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_risk import get_strategy_risk_manager
 from ..services.strategy_status import build_strategy_status
@@ -137,6 +138,14 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     snapshot = build_strategy_status()
     rows = [dict(entry) for entry in snapshot.values()]
     return {"strategies": rows, "snapshot": snapshot}
+
+
+@router.get("/risk_snapshot")
+def risk_accounting_snapshot(request: Request) -> dict[str, Any]:
+    """Expose the execution risk accounting snapshot for UI consumers."""
+
+    require_token(request)
+    return get_risk_accounting_snapshot()
 
 
 def _log_operator_event(
