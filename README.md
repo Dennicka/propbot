@@ -663,6 +663,11 @@ dashboard ("Risk skips (last run)") and via the `/metrics` endpoint as the
 Операторы отслеживают жизнеспособность инстанса следующими инструментами:
 
 - `GET /healthz` — базовая проверка живости контейнера.
+- `GET /live-readiness` — агрегированная готовность для оркестраторов: проверяет
+  глобальный HOLD, состояние exchange watchdog, факт превышения дневного loss cap
+  (с учётом `ENFORCE_DAILY_LOSS_CAP`) и наличие хотя бы одного торгуемого
+  инструмента во вселенной. Возвращает HTTP 200 c `{"ready": true}` либо 503 с
+  `{"ready": false, "reasons": [...]}`.
 - `GET /api/ui/status/overview` — общий статус, включающий SAFE_MODE, HOLD,
   runaway guard, auto-hedge (`consecutive_failures`).
 - `GET /api/ui/status/components` и `GET /api/ui/status/slo` — детализация

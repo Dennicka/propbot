@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import ledger
 from .version import APP_VERSION
-from .routers import arb, health, risk, ui, ui_ops_report, ui_secrets
+from .routers import arb, health, live, risk, ui, ui_ops_report, ui_secrets
 from .routers import ui_universe
 from .routers import ui_strategy
 from .routers import ui_status
@@ -62,6 +62,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware, limiter=limiter, should_guard=_should_guard)
     app.add_middleware(IdempotencyMiddleware, cache=cache, should_guard=_should_guard)
     app.include_router(health.router)
+    app.include_router(live.router)
     app.include_router(risk.router)
     app.include_router(ui.router)
     app.include_router(ui_secrets.router)

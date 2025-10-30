@@ -46,6 +46,7 @@ from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
 from .strategy_status import build_strategy_status
+from .live_readiness import compute_readiness
 
 
 def _env_int(name: str, default: int) -> int:
@@ -486,6 +487,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
                     f"Auto-HOLD by Daily Loss Cap — {auto_hold_daily_loss['message']}"
                 )
 
+    live_readiness = compute_readiness()
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -542,6 +545,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
         "auto_hold_daily_loss": auto_hold_daily_loss,
+        "live_readiness": live_readiness,
     }
 
 
@@ -830,6 +834,19 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     operator_role_label = operator_role.upper()
     is_operator = operator_role == "operator"
     is_auditor = operator_role == "auditor"
+    live_readiness = context.get("live_readiness", {}) or {}
+    live_ready = bool(live_readiness.get("ready"))
+    readiness_label = "READY" if live_ready else "NOT READY"
+    readiness_class = "live-ready" if live_ready else "live-not-ready"
+    readiness_reasons = [
+        str(reason).strip()
+        for reason in live_readiness.get("reasons", [])
+        if str(reason).strip()
+    ]
+    readiness_title_attr = ""
+    if readiness_reasons:
+        joined_reasons = "; ".join(readiness_reasons)
+        readiness_title_attr = f' title="{escape(joined_reasons)}"'
     summary_highlights = [
         str(item)
         for item in context.get("summary_highlights", [])
@@ -858,6 +875,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".footer-warning{color:#9a3412;font-weight:600;}"
         ".operator-meta{background:#fff;padding:1rem 1.5rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;gap:2rem;align-items:center;flex-wrap:wrap;}"
         ".operator-meta .label{color:#4b5563;font-weight:600;margin-right:0.5rem;}"
+        ".live-readiness{margin-left:auto;display:flex;align-items:center;gap:0.5rem;}"
+        ".live-readiness .pill{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;}"
+        ".live-readiness .live-ready{background:#dcfce7;color:#166534;}"
+        ".live-readiness .live-not-ready{background:#fee2e2;color:#991b1b;}"
         ".role-badge{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;text-transform:uppercase;}"
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
@@ -950,6 +971,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "<div class=\"operator-meta\">"
         f"<div><span class=\"label\">Operator:</span> <strong>{_fmt(operator_name)}</strong></div>"
         f"<div><span class=\"label\">Role:</span> <span class=\"role-badge role-{operator_role}\">{_fmt(operator_role_label)}</span></div>"
+        f"<div class=\"live-readiness\"><span class=\"label\">Live:</span> <span class=\"pill {readiness_class}\"{readiness_title_attr}>{_fmt(readiness_label)}</span></div>"
         "</div>"
     )
 
