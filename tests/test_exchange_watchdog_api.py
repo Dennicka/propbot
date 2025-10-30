@@ -47,3 +47,10 @@ def test_exchange_health_endpoint_allows_viewer(monkeypatch) -> None:
     assert payload.get("overall_ok") is False
     assert exchanges["binance"]["ok"] is False
     assert exchanges["binance"].get("reason") == "rate_limit"
+    transitions = payload.get("recent_transitions")
+    assert isinstance(transitions, list)
+    assert transitions
+    current = transitions[0]
+    assert current.get("exchange") == "binance"
+    assert current.get("current") in {"DEGRADED", "AUTO_HOLD"}
+    assert current.get("reason") == "rate_limit"

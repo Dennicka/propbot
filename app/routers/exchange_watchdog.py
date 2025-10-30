@@ -35,6 +35,7 @@ async def get_watchdog_status(request: Request) -> Dict[str, Any]:
     return {
         "overall_ok": watchdog.overall_ok(),
         "exchanges": watchdog.get_state(),
+        "recent_transitions": watchdog.get_recent_transitions(window_minutes=50),
     }
 
 

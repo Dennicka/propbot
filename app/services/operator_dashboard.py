@@ -296,24 +296,29 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     watchdog_instance = get_exchange_watchdog()
     watchdog_snapshot = watchdog_instance.get_state()
+    watchdog_transitions = watchdog_instance.get_recent_transitions(window_minutes=50)
     watchdog_rows: list[dict[str, Any]] = []
     if isinstance(watchdog_snapshot, Mapping):
         for exchange in sorted(watchdog_snapshot):
             entry = watchdog_snapshot.get(exchange) or {}
             if not isinstance(entry, Mapping):
                 entry = {}
+            status = str(entry.get("status") or ("OK" if entry.get("ok") else "DEGRADED"))
             watchdog_rows.append(
                 {
                     "exchange": str(exchange),
                     "ok": bool(entry.get("ok", False)),
+                    "status": status,
                     "last_check_ts": entry.get("last_check_ts"),
                     "reason": str(entry.get("reason") or ""),
+                    "auto_hold": bool(entry.get("auto_hold")),
                 }
             )
     watchdog_status = {
         "overall_ok": watchdog_instance.overall_ok(),
         "exchanges": watchdog_snapshot,
         "rows": watchdog_rows,
+        "recent_transitions": watchdog_transitions,
     }
 
     control_flags = state.control.flags
@@ -573,6 +578,20 @@ def _status_span(ok: bool) -> str:
 
 def _tag(text: str, *, color: str, weight: str = "700") -> str:
     return f'<span style="color:{color};font-weight:{weight};margin-left:0.5rem;">{escape(text)}</span>'
+
+
+def _watchdog_status_badge(status: str) -> str:
+    normalized = str(status or "").strip().upper()
+    if normalized == "AUTO_HOLD":
+        return (
+            '<span style="background:#fee2e2;color:#991b1b;padding:0.1rem 0.5rem;'
+            'border-radius:999px;font-weight:700;">AUTO-HOLD</span>'
+        )
+    if normalized == "DEGRADED":
+        return '<span style="color:#b00020;font-weight:700;">DEGRADED</span>'
+    if normalized == "OK":
+        return _status_span(True)
+    return escape(normalized or "UNKNOWN")
 
 
 def _extra_block(extra: object) -> str:
@@ -2110,17 +2129,20 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<table><thead><tr><th>Exchange</th><th>Status</th><th>Last check</th><th>Reason</th></tr></thead><tbody>"
         )
         for row in watchdog_rows:
-            ts_value = row.get("last_check_ts") if isinstance(row, Mapping) else None
+            mapping = row if isinstance(row, Mapping) else {}
+            ts_value = mapping.get("last_check_ts")
             if isinstance(ts_value, (int, float)):
                 ts_text = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).isoformat()
             else:
                 ts_text = _fmt(ts_value)
+            status_html = _watchdog_status_badge(mapping.get("status"))
+            reason_html = _fmt(mapping.get("reason"))
             parts.append(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                    _fmt(row.get("exchange") if isinstance(row, Mapping) else ""),
-                    _status_span(bool(row.get("ok") if isinstance(row, Mapping) else False)),
+                    _fmt(mapping.get("exchange")),
+                    status_html,
                     _fmt(ts_text),
-                    _fmt(row.get("reason") if isinstance(row, Mapping) else ""),
+                    reason_html,
                 )
             )
         parts.append("</tbody></table>")

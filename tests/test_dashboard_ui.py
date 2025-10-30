@@ -11,6 +11,10 @@ from app.services import approvals_store, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
 from app.version import APP_VERSION
+from app.watchdog.exchange_watchdog import (
+    get_exchange_watchdog,
+    reset_exchange_watchdog_for_tests,
+)
 
 
 def test_dashboard_requires_token(monkeypatch, client) -> None:
@@ -572,6 +576,25 @@ def test_dashboard_shows_exchange_watchdog_reason(monkeypatch, client) -> None:
     html = response.text.lower()
     assert "exchange watchdog" in html
     assert "binance unreachable" in html
+
+
+def test_dashboard_watchdog_table(monkeypatch, client) -> None:
+    runtime.reset_for_tests()
+    reset_exchange_watchdog_for_tests()
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+
+    watchdog = get_exchange_watchdog()
+    watchdog.check_once(lambda: {"binance": {"ok": False, "reason": "timeout"}})
+    watchdog.mark_auto_hold("binance", reason="timeout")
+
+    response = client.get("/ui/dashboard")
+
+    assert response.status_code == 200
+    html = response.text.lower()
+    assert "binance" in html
+    assert "timeout" in html
+    assert "auto-hold" in html
+    reset_exchange_watchdog_for_tests()
 
 
 def test_dashboard_proxy_routes(monkeypatch, client) -> None:

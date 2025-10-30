@@ -51,6 +51,7 @@ async def test_watchdog_auto_hold_engages_hold_and_audit(monkeypatch) -> None:
     recorded = next(event for event in audit_events if event["action"] == "AUTO_HOLD_WATCHDOG")
     assert recorded["details"].get("exchange") == "binance"
     assert recorded["details"].get("reason") == "ping failure"
+    reset_exchange_watchdog_for_tests()
 
 
 @pytest.mark.asyncio
@@ -96,7 +97,49 @@ async def test_watchdog_notifications_on_status_changes(monkeypatch) -> None:
     assert len(emitted) == 2
     down_event, up_event = emitted
     assert down_event["kind"] == "watchdog_status"
-    assert down_event["extra"].get("current") is False
+    assert down_event["extra"].get("current") == "DEGRADED"
+    assert down_event["extra"].get("previous") == "OK"
     assert down_event["extra"].get("exchange") == "binance"
-    assert up_event["extra"].get("current") is True
+    assert down_event["extra"].get("reason") == "timeout"
+    assert down_event["extra"].get("auto_hold") is False
+    assert "OK -> DEGRADED" in down_event["text"]
+
+    assert up_event["extra"].get("current") == "OK"
+    assert up_event["extra"].get("previous") == "DEGRADED"
     assert up_event["extra"].get("exchange") == "binance"
+    assert up_event["extra"].get("auto_hold") is False
+    reset_exchange_watchdog_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_auto_hold_transition_alert(monkeypatch) -> None:
+    runtime.reset_for_tests()
+    reset_exchange_watchdog_for_tests()
+
+    monkeypatch.setenv("WATCHDOG_ENABLED", "true")
+    monkeypatch.setenv("WATCHDOG_AUTO_HOLD", "true")
+    monkeypatch.setenv("NOTIFY_WATCHDOG", "true")
+
+    watchdog = get_exchange_watchdog()
+    runner = ExchangeWatchdogRunner(watchdog, interval=0.01)
+
+    runner.set_probe(lambda: {"binance": {"ok": False, "reason": "timeout"}})
+
+    emitted: list[dict[str, Any]] = []
+
+    def _emit(kind: str, text: str, *, extra: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+        record = {"kind": kind, "text": text, "extra": dict(extra or {})}
+        emitted.append(record)
+        return record
+
+    monkeypatch.setattr("app.services.exchange_watchdog_runner.notifier.emit_alert", _emit)
+
+    await runner.check_once()
+
+    assert emitted
+    transition = emitted[-1]
+    assert transition["extra"].get("current") == "AUTO_HOLD"
+    assert transition["extra"].get("previous") == "DEGRADED"
+    assert transition["extra"].get("auto_hold") is True
+    assert "auto_hold=true" in transition["text"].lower()
+    reset_exchange_watchdog_for_tests()
