@@ -93,7 +93,11 @@ async def test_clock_skew_triggers_hold(monkeypatch):
 @pytest.mark.asyncio
 async def test_exchange_watchdog_triggers_auto_hold(monkeypatch):
     watchdog = get_exchange_watchdog()
-    watchdog.update_from_client("binance", ok=False, rate_limited=False, error="connection lost")
+
+    def _probe() -> dict[str, object]:
+        return {"binance": {"ok": False, "reason": "connection lost"}}
+
+    watchdog.check_once(_probe)
 
     captured: list[dict[str, object]] = []
 
@@ -131,8 +135,8 @@ async def test_exchange_watchdog_triggers_auto_hold(monkeypatch):
 
     assert captured, "audit log should record AUTO_HOLD event"
     event = captured[-1]
-    assert event["action"] == "AUTO_HOLD_BY_EXCHANGE_WATCHDOG"
+    assert event["action"] == "AUTO_HOLD_WATCHDOG"
     details = event.get("details") or {}
     assert isinstance(details, dict)
     assert details.get("exchange") == "binance"
-    assert "binance" in str(details.get("reason") or "")
+    assert details.get("reason") == "connection lost"

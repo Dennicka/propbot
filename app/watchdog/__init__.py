@@ -1,8 +1,6 @@
-"""Backward-compatible import helpers for the exchange watchdog."""
+"""Watchdog utilities package."""
 
-from __future__ import annotations
-
-from .watchdog.exchange_watchdog import (
+from .exchange_watchdog import (
     ExchangeWatchdog,
     WatchdogCheckResult,
     get_exchange_watchdog,

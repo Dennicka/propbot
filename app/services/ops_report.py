@@ -15,6 +15,7 @@ from ..pnl_report import build_pnl_snapshot
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
+from ..watchdog.exchange_watchdog import get_exchange_watchdog
 from . import runtime
 from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
@@ -119,6 +120,12 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
     strategy_status_snapshot = build_strategy_status()
+    watchdog_instance = get_exchange_watchdog()
+    watchdog_snapshot = watchdog_instance.get_state()
+    watchdog_report = {
+        "overall_ok": watchdog_instance.overall_ok(),
+        "exchanges": watchdog_snapshot,
+    }
 
     control = state.control
     autopilot = state.autopilot.as_dict() if hasattr(state.autopilot, "as_dict") else {}
@@ -161,6 +168,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
         ),
         "strategy_status": strategy_status_snapshot,
         "strategy_budgets": strategy_budget_snapshot,
+        "watchdog": watchdog_report,
         "audit": {
             "operator_actions": operator_actions,
             "ops_events": ops_events,
@@ -287,6 +295,38 @@ def _iter_positions_rows(positions_payload: Mapping[str, Any]) -> Iterable[dict[
                 }
 
 
+def _iter_watchdog_rows(snapshot: Mapping[str, Any]) -> Iterable[dict[str, str]]:
+    overall = snapshot.get("overall_ok")
+    if overall is not None:
+        yield {
+            "section": "watchdog",
+            "key": "overall_ok",
+            "value": _stringify(overall),
+        }
+    exchanges = _coerce_mapping(snapshot.get("exchanges"))
+    for name in sorted(exchanges):
+        entry = _coerce_mapping(exchanges.get(name))
+        section = f"watchdog:{name}"
+        if "ok" in entry:
+            yield {
+                "section": section,
+                "key": "ok",
+                "value": _stringify(entry.get("ok")),
+            }
+        if "last_check_ts" in entry:
+            yield {
+                "section": section,
+                "key": "last_check_ts",
+                "value": _stringify(entry.get("last_check_ts")),
+            }
+        if "reason" in entry:
+            yield {
+                "section": section,
+                "key": "reason",
+                "value": _stringify(entry.get("reason")),
+            }
+
+
 def _iter_audit_rows(audit_payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
     actions = audit_payload.get("operator_actions")
     if isinstance(actions, Sequence):
@@ -335,6 +375,9 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
         writer.writerow(row)
     positions_payload = _coerce_mapping(report.get("positions_snapshot"))
     for row in _iter_positions_rows(positions_payload):
+        writer.writerow(row)
+    watchdog_payload = _coerce_mapping(report.get("watchdog"))
+    for row in _iter_watchdog_rows(watchdog_payload):
         writer.writerow(row)
     audit_payload = _coerce_mapping(report.get("audit"))
     for row in _iter_audit_rows(audit_payload):

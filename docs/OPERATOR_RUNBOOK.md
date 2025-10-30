@@ -264,13 +264,20 @@
 
 ## Exchange watchdog
 
-- `GET /api/ui/exchange_health` показывает агрегированное состояние биржевых
-  клиентов: `reachable`, `rate_limited`, `last_ok_ts`, `error`. Роли `viewer`
-  и `auditor` имеют read-only доступ, `operator` видит тот же JSON.
-- Watchdog — каркас мониторинга: он не выполняет пинги самостоятельно и не
-  включает HOLD автоматически. Клиенты бирж должны звать
-  `update_from_client(...)`, чтобы обновить состояние; операторы читают этот
-  снимок и принимают решения о HOLD/RESUME вручную.
+- `GET /api/ui/watchdog_status` возвращает снимок здоровья биржевых адаптеров:
+  `overall_ok` и словарь `exchanges` с полями `ok`, `last_check_ts`, `reason` по
+  каждой площадке. Роли `viewer` и `auditor` имеют read-only доступ, `operator`
+  видит тот же JSON.
+- На `/ui/dashboard` добавлен компактный блок **Exchanges Health** с текущим
+  статусом и последним временем проверки.
+- Фоновый вотчдог включается флагом окружения `WATCHDOG_ENABLED=true`. Интервал
+  пингов задаётся через `WATCHDOG_INTERVAL_SEC` (по умолчанию ~7 секунд). Если
+  оставить флаг выключенным, состояние остаётся пустым и авто-HOLD не
+  активируется.
+- Дополнительные флаги: `WATCHDOG_AUTO_HOLD=true` включает автоматическое HOLD
+  при деградации, `NOTIFY_WATCHDOG=true` отправляет короткие оповещения при
+  переходах `ok→fail` и `fail→ok`. Без этих флагов вотчдог работает в режиме
+  мониторинга без управляющих действий.
 
 ## Strategy risk monitor
 
@@ -512,30 +519,24 @@
 
 ### Exchange watchdog auto-HOLD
 
-- Runtime safety опрашивает `ExchangeWatchdog` перед любым реальным исполнением.
-- Если `binance` или `okx` помечены как критические (биржа умерла или нас душат
-  rate limit > 60 секунд), бот автоматически включает HOLD и SAFE_MODE через
-  штатный механизм аварий.
-- Причина фиксируется как `exchange_watchdog:<биржа> <деталь>` и отображается в
-  `/ui/dashboard` в summary-блоке — оператор сразу видит, что HOLD включён
-  автоматически из-за биржи.
-- Audit log получает запись `AUTO_HOLD_BY_EXCHANGE_WATCHDOG`, которая видна в
-  дашборде и telemetry.
-- Перед возобновлением торговли оператор должен убедиться, что биржа снова
-  стабильна, после чего пройти стандартный двухшаговый RESUME (request +
-  approval). Это не обходит two-man rule и не снимает SAFE_MODE автоматически.
+- При включённом флаге `WATCHDOG_AUTO_HOLD` каждое срабатывание вотчдога
+  инициирует системный HOLD через `runtime.evaluate_exchange_watchdog()`.
+- Причина записывается как `exchange_watchdog:<биржа> <деталь>` и отображается в
+  summary-блоке `/ui/dashboard`, а также в ops_report и audit trail.
+- Audit log фиксирует действие `AUTO_HOLD_WATCHDOG` с биржей и текстовой
+  причиной. Это системное действие: двухоператорный flow не обходится, но HOLD
+  включается без ручного подтверждения, как и оговаривалось.
+- Оператор обязан убедиться, что деградация устранена, и пройти стандартный
+  двухшаговый RESUME (request → approve → resume). SAFE_MODE не снимается
+  автоматически.
 
 ### Telegram watchdog alerts
 
-- При критическом падении биржи (unreachable, жёсткий rate limit и т.д.)
-  exchange watchdog автоматически переводит runtime в HOLD и SAFE_MODE —
-  двухшаговый RESUME остаётся обязательным.
-- Ops notifier/Telegram-бот отправляет в операторский чат сообщение
-  `[ALERT] Exchange watchdog triggered AUTO-HOLD` с биржей, причиной и статусом
-  `HOLD active; trading paused`.
-- После авто-HOLD бот ждёт ручного безопасного RESUME: оператор должен убедиться,
-  что проблема устранена, и пройти стандартный workflow (request + approve).
-  Viewer по-прежнему read-only и не может снимать HOLD.
+- При активном `NOTIFY_WATCHDOG=true` все переходы состояния (`ok→fail`,
+  `fail→ok`) публикуются через ops notifier/Telegram коротким сообщением вида
+  `[WATCHDOG] <биржа> FAIL/OK`.
+- Это уведомления информационные: они не отменяют требования к RESUME, но дают
+  мгновенный сигнал об ухудшении/восстановлении соединения.
 
 ### Daily report / инвестор апдейт
 

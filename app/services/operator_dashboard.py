@@ -15,6 +15,7 @@ from ..runtime_state_store import load_runtime_payload
 from ..pnl_report import build_pnl_snapshot
 from ..version import APP_VERSION
 from ..orchestrator import orchestrator as strategy_orchestrator
+from ..watchdog.exchange_watchdog import get_exchange_watchdog
 from .approvals_store import list_requests as list_pending_requests
 from .audit_log import list_recent_events
 from . import risk_alerts, risk_guard
@@ -290,13 +291,35 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         _scanner_health(request.app),
     ]
 
+    watchdog_instance = get_exchange_watchdog()
+    watchdog_snapshot = watchdog_instance.get_state()
+    watchdog_rows: list[dict[str, Any]] = []
+    if isinstance(watchdog_snapshot, Mapping):
+        for exchange in sorted(watchdog_snapshot):
+            entry = watchdog_snapshot.get(exchange) or {}
+            if not isinstance(entry, Mapping):
+                entry = {}
+            watchdog_rows.append(
+                {
+                    "exchange": str(exchange),
+                    "ok": bool(entry.get("ok", False)),
+                    "last_check_ts": entry.get("last_check_ts"),
+                    "reason": str(entry.get("reason") or ""),
+                }
+            )
+    watchdog_status = {
+        "overall_ok": watchdog_instance.overall_ok(),
+        "exchanges": watchdog_snapshot,
+        "rows": watchdog_rows,
+    }
+
     control_flags = state.control.flags
     active_alerts = risk_alerts.evaluate_alerts()
     recent_audit = notifier.get_recent_alerts(limit=10)
     last_watchdog_alert: dict[str, str] | None = None
     for entry in recent_audit:
         kind = str(entry.get("kind") or "").strip().lower()
-        if kind != "watchdog_alert":
+        if kind not in {"watchdog_alert", "watchdog_status"}:
             continue
         extra_payload = entry.get("extra") if isinstance(entry.get("extra"), Mapping) else {}
         exchange_value = extra_payload.get("exchange") if isinstance(extra_payload, Mapping) else None
@@ -360,6 +383,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             summary_highlights.append(
                 f"Auto-HOLD by exchange watchdog: {display_detail}"
             )
+    elif not watchdog_status.get("overall_ok", True):
+        summary_highlights.append("Exchange watchdog reports degraded venues")
     limits_for_advisor = {
         "MAX_TOTAL_NOTIONAL_USDT": risk_limits_env.get("MAX_TOTAL_NOTIONAL_USDT"),
         "MAX_OPEN_POSITIONS": risk_limits_env.get("MAX_OPEN_POSITIONS"),
@@ -449,6 +474,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "active_alerts": active_alerts,
         "recent_audit": recent_audit,
         "last_watchdog_alert": last_watchdog_alert,
+        "watchdog_status": watchdog_status,
         "recent_operator_actions": recent_operator_actions,
         "recent_ops_incidents": recent_ops_incidents,
         "liquidity": liquidity_status,
@@ -638,6 +664,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     recent_ops_incidents = context.get("recent_ops_incidents", []) or []
 
     risk_advice = context.get("risk_advice", {}) or {}
+
+    watchdog_status = context.get("watchdog_status", {}) or {}
+    if not isinstance(watchdog_status, Mapping):
+        watchdog_status = {}
+    watchdog_rows = watchdog_status.get("rows") or []
+    if not isinstance(watchdog_rows, Sequence):
+        watchdog_rows = []
+    watchdog_overall_ok = bool(watchdog_status.get("overall_ok", True))
 
     pnl_history = context.get("pnl_history", []) or []
     execution_quality = context.get("execution_quality", {}) or {}
@@ -2017,6 +2051,32 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append("</tbody></table>")
     else:
         parts.append("<p>No open hedge positions.</p>")
+
+    parts.append("<h2>Exchanges Health</h2>")
+    parts.append(
+        f"<p>Overall status: {_status_span(watchdog_overall_ok)}</p>"
+    )
+    if watchdog_rows:
+        parts.append(
+            "<table><thead><tr><th>Exchange</th><th>Status</th><th>Last check</th><th>Reason</th></tr></thead><tbody>"
+        )
+        for row in watchdog_rows:
+            ts_value = row.get("last_check_ts") if isinstance(row, Mapping) else None
+            if isinstance(ts_value, (int, float)):
+                ts_text = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).isoformat()
+            else:
+                ts_text = _fmt(ts_value)
+            parts.append(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                    _fmt(row.get("exchange") if isinstance(row, Mapping) else ""),
+                    _status_span(bool(row.get("ok") if isinstance(row, Mapping) else False)),
+                    _fmt(ts_text),
+                    _fmt(row.get("reason") if isinstance(row, Mapping) else ""),
+                )
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p>No watchdog checks recorded.</p>")
 
     parts.append("<h2>Background Health</h2><table><thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead><tbody>")
     for entry in health_checks:
