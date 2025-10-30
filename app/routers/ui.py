@@ -52,6 +52,7 @@ from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
 from positions import list_positions
 from ..risk_snapshot import build_risk_snapshot
+from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_risk import get_strategy_risk_manager
 from ..services.strategy_status import build_strategy_status
@@ -137,6 +138,18 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     snapshot = build_strategy_status()
     rows = [dict(entry) for entry in snapshot.values()]
     return {"strategies": rows, "snapshot": snapshot}
+
+
+@router.get("/risk_snapshot")
+async def risk_snapshot(request: Request) -> dict[str, Any]:
+    """Return combined portfolio and execution risk telemetry."""
+
+    require_token(request)
+    accounting_snapshot = get_risk_accounting_snapshot()
+    base_snapshot = await build_risk_snapshot()
+    payload = dict(base_snapshot)
+    payload["accounting"] = accounting_snapshot
+    return payload
 
 
 def _log_operator_event(
@@ -364,14 +377,6 @@ async def hedge_positions(request: Request) -> dict:
     if not positions:
         return {"positions": [], "exposure": {}, "totals": {"unrealized_pnl_usdt": 0.0}}
     return await build_positions_snapshot(state, positions)
-
-
-@router.get("/risk_snapshot")
-async def risk_snapshot(request: Request) -> dict:
-    """Return an aggregate risk snapshot for operators."""
-
-    require_token(request)
-    return await build_risk_snapshot()
 
 
 @router.get("/orchestrator_plan")

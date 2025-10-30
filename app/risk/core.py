@@ -115,40 +115,74 @@ class RiskGovernor:
 
     def validate(
         self,
-        order_intent: Mapping[str, object] | None,
         *,
-        metrics: "_RiskMetrics" | None = None,
-    ) -> Dict[str, object | None]:
-        """Validate the provided order intent against enforced caps."""
+        intent_notional: float,
+        projected_positions: int,
+        dry_run: bool,
+        current_total_notional: float | None = None,
+        current_open_positions: int | None = None,
+        budget_limit: float | None = None,
+        budget_used: float | None = None,
+    ) -> Dict[str, object]:
+        """Validate projected exposure against configured limits and feature flags."""
 
-        metrics = metrics or _current_risk_metrics()
-        intent_notional = _intent_notional(order_intent)
-        intent_positions = _intent_positions(order_intent)
+        if dry_run:
+            return {"ok": True, "why": "dry_run_no_enforce"}
 
-        total_after = max(metrics.total_notional + intent_notional, 0.0)
-        open_after = max(metrics.open_positions + intent_positions, 0)
+        if not FeatureFlags.risk_checks_enabled():
+            return {"ok": True, "why": "risk_checks_disabled"}
 
-        if self._enforce_total_notional and total_after > self._caps.max_total_notional_usdt:
+        tolerance = 1e-6
+
+        if (
+            self._enforce_total_notional
+            and FeatureFlags.enforce_caps()
+            and intent_notional > self._caps.max_total_notional_usdt + tolerance
+        ):
             return {
-                "allowed": False,
-                "reason": "risk.max_notional",
-                "cap": "max_total_notional_usdt",
-                "current_notional": metrics.total_notional,
-                "projected_notional": total_after,
-                "limit": self._caps.max_total_notional_usdt,
+                "ok": False,
+                "reason": "SKIPPED_BY_RISK",
+                "details": {
+                    "breach": "max_total_notional_usdt",
+                    "limit": self._caps.max_total_notional_usdt,
+                    "projected_notional": intent_notional,
+                    "current_notional": current_total_notional,
+                    "type": "caps",
+                },
             }
 
-        if self._enforce_open_positions and open_after > self._caps.max_open_positions:
+        if (
+            self._enforce_open_positions
+            and FeatureFlags.enforce_caps()
+            and projected_positions > self._caps.max_open_positions
+        ):
             return {
-                "allowed": False,
-                "reason": "risk.max_open_positions",
-                "cap": "max_open_positions",
-                "current_open_positions": metrics.open_positions,
-                "projected_open_positions": open_after,
-                "limit": self._caps.max_open_positions,
+                "ok": False,
+                "reason": "SKIPPED_BY_RISK",
+                "details": {
+                    "breach": "max_open_positions",
+                    "limit": self._caps.max_open_positions,
+                    "projected_open_positions": projected_positions,
+                    "current_open_positions": current_open_positions,
+                    "type": "caps",
+                },
             }
 
-        return {"allowed": True, "reason": "ok", "cap": None}
+        if FeatureFlags.enforce_budgets() and budget_limit is not None:
+            used = budget_used or 0.0
+            if used >= budget_limit - tolerance:
+                return {
+                    "ok": False,
+                    "reason": "SKIPPED_BY_RISK",
+                    "details": {
+                        "breach": "budget_exhausted",
+                        "limit": budget_limit,
+                        "used": used,
+                        "type": "budgets",
+                    },
+                }
+
+        return {"ok": True}
 
 
 LOGGER = logging.getLogger(__name__)
@@ -158,11 +192,27 @@ class FeatureFlags:
     """Feature flag helpers for the risk core."""
 
     @staticmethod
-    def risk_checks_enabled() -> bool:
-        raw = os.getenv("RISK_CHECKS_ENABLED")
+    def _flag(name: str) -> bool:
+        raw = os.getenv(name)
         if raw is None:
             return False
-        return raw.strip().lower() in {"1", "true", "yes", "on"}
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def risk_checks_enabled(cls) -> bool:
+        return cls._flag("RISK_CHECKS_ENABLED")
+
+    @classmethod
+    def enforce_caps(cls) -> bool:
+        return cls._flag("RISK_ENFORCE_CAPS")
+
+    @classmethod
+    def enforce_budgets(cls) -> bool:
+        return cls._flag("RISK_ENFORCE_BUDGETS")
+
+    @classmethod
+    def dry_run_mode(cls) -> bool:
+        return cls._flag("DRY_RUN_MODE")
 
 
 @dataclass(frozen=True)
@@ -304,8 +354,8 @@ def _build_risk_governor_from_env() -> RiskGovernor:
     enforce_total_notional = bool(max_total_notional_raw)
 
     caps = RiskCaps(
-        max_open_positions=max_open_positions_raw or 1,
-        max_total_notional_usdt=max_total_notional_raw or 1.0,
+        max_open_positions=max_open_positions_raw or 1_000_000_000,
+        max_total_notional_usdt=max_total_notional_raw or float("inf"),
     )
     return RiskGovernor(
         caps,
@@ -347,12 +397,47 @@ def reset_risk_governor_for_tests() -> None:
 def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | None]:
     """Evaluate whether an order intent is allowed under configured risk caps."""
 
-    if not FeatureFlags.risk_checks_enabled():
-        return {"allowed": True, "reason": "disabled", "cap": None}
-
     governor = get_risk_governor()
+    metrics = _current_risk_metrics()
+    intent_notional_delta = _intent_notional(order_intent)
+    projected_notional = max(metrics.total_notional + intent_notional_delta, 0.0)
+    projected_positions = max(metrics.open_positions + _intent_positions(order_intent), 0)
+
+    state = get_state()
+    control = getattr(state, "control", None)
+    dry_run = bool(getattr(control, "dry_run", False)) or FeatureFlags.dry_run_mode()
+
     try:
-        return governor.validate(order_intent)
+        result = governor.validate(
+            intent_notional=projected_notional,
+            projected_positions=projected_positions,
+            dry_run=dry_run,
+            current_total_notional=metrics.total_notional,
+            current_open_positions=metrics.open_positions,
+        )
     except RiskValidationError as exc:  # pragma: no cover - defensive
         LOGGER.warning("risk gate validation failed", extra={"error": str(exc)})
         return {"allowed": True, "reason": "error", "cap": None}
+
+    if result.get("ok", False):
+        payload: Dict[str, object | None] = {
+            "allowed": True,
+            "reason": result.get("why", "ok"),
+        }
+        payload["cap"] = None
+        details = result.get("details")
+        if details:
+            payload["details"] = details
+        return payload
+
+    details = result.get("details")
+    response: Dict[str, object | None] = {
+        "allowed": False,
+        "reason": result.get("reason", "SKIPPED_BY_RISK"),
+    }
+    if isinstance(details, Mapping):
+        breach = details.get("breach")
+        if breach:
+            response["cap"] = breach
+        response["details"] = details
+    return response

@@ -151,17 +151,21 @@
   оркестраторских планов вызывается helper `risk_gate(order_intent)`.
 - Проверка включается только если `RISK_CHECKS_ENABLED=1`
   (`FeatureFlags.risk_checks_enabled()`); по умолчанию флаг выключен и gate
-  возвращает `{"allowed": true, "reason": "disabled"}` без побочных
-  эффектов.
+  возвращает `{"allowed": true, "reason": "risk_checks_disabled"}` без
+  побочных эффектов.
 - При активном флаге хелпер подтягивает `safety.risk_snapshot`, добавляет
   желаемый notional и прирост позиций (`intent_notional`,
   `intent_open_positions`) и проверяет лимиты `MAX_TOTAL_NOTIONAL_USDT` и
-  `MAX_OPEN_POSITIONS` через `RiskGovernor`/`RiskCaps`.
+  `MAX_OPEN_POSITIONS`, но только если `FeatureFlags.enforce_caps()` вернул `True`.
+  Та же функция `RiskGovernor.validate(...)` используется в риск-аккаунтинге —
+  расхождений между проверками больше нет.
 - Если сделка выбивает лимит, API отвечает HTTP 200 c телом вида
-  `{"status": "skipped", "reason": "risk.max_notional", "cap": "max_total_notional_usdt"}`
-  (или `risk.max_open_positions`) и не размещает ордера. В `dry_run` режимах
-  проверка пропускается, чтобы можно было репетировать сценарии без изменения
-  лимитов.
+  `{"status": "skipped", "reason": "SKIPPED_BY_RISK", "cap": "max_total_notional_usdt"}`
+  (или `max_open_positions`) и не размещает ордера. В `dry_run` режимах (контрол
+  runtime или флаг `DRY_RUN_MODE`) проверка сразу возвращает
+  `why="dry_run_no_enforce"`, чтобы можно было репетировать сценарии без
+  изменения лимитов. Перестраховочные бюджеты (`StrategyBudgetManager`) также
+  блокируют intents только когда `FeatureFlags.enforce_budgets()` включён.
 
 ## Per-Strategy PnL & Drawdown
 
@@ -181,6 +185,20 @@
 - `GET /api/ui/strategy_status` возвращает объединённый снимок риска, бюджета и
   PnL. На `/ui/dashboard` этот же snapshot лежит в блоке «Strategy Performance /
   Risk» и считается основным источником правды по стратегиям.
+
+## Execution risk accounting snapshot
+
+- Новый endpoint `GET /api/ui/risk_snapshot` (тот же bearer-токен, что и для
+  прочих `/api/ui/*`) публикует оперативную сводку: флаги autopilot/HOLD/SAFE_MODE,
+  агрегированный per-venue риск и вложенный блок `accounting` с суммарным open
+  notional, числом позиций, дневным реализованным PnL и потреблением бюджетов
+  по стратегиям. Для DRY_RUN/Safe Mode счётчики ведутся отдельно — поле
+  `totals.simulated` отражает, что происходило в тренировочных запусках, не влияя
+  на реальные лимиты.
+- На `/ui/dashboard` появилась карточка **Risk snapshot (execution)**: в ней
+  видно aggregated totals и таблицу по стратегиям с колонками «open notional»,
+  «open positions», «realized PnL today» и `budget used / limit`. Строки, где
+  лимит или дневной убыток исчерпаны, подсвечиваются и получают ярлык `breach`.
 
 ## Autopilot resume safety
 

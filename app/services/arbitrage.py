@@ -7,6 +7,12 @@ from typing import Any, Dict, List, Literal, Tuple
 
 from ..broker.router import ExecutionRouter
 from ..core.config import ArbitragePairConfig
+from ..risk.core import risk_gate
+from ..risk.accounting import (
+    get_risk_snapshot as get_risk_accounting_snapshot,
+    record_fill as accounting_record_fill,
+    record_intent as accounting_record_intent,
+)
 from ..strategy_risk import get_strategy_risk_manager
 from . import risk
 from .derivatives import DerivativesRuntime
@@ -175,6 +181,9 @@ class ExecutionReport:
     orders: List[Dict[str, object]] = field(default_factory=list)
     exposures: List[Dict[str, object]] = field(default_factory=list)
     pnl_summary: Dict[str, float] = field(default_factory=dict)
+    state: str = "DONE"
+    risk_gate: Dict[str, object] = field(default_factory=dict)
+    risk_snapshot: Dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -189,6 +198,9 @@ class ExecutionReport:
             "orders": list(self.orders),
             "exposures": list(self.exposures),
             "pnl_summary": dict(self.pnl_summary),
+            "state": self.state,
+            "risk_gate": dict(self.risk_gate),
+            "risk_snapshot": dict(self.risk_snapshot),
         }
 
 
@@ -386,12 +398,79 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
     safe_mode = state.control.safe_mode
     dry_run = state.control.dry_run
     router = ExecutionRouter()
-    result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
+    simulated = dry_run or safe_mode
+    strategy_name = "cross_exchange_arb"
+
+    intent_payload = {
+        "strategy": strategy_name,
+        "intent_notional": plan.notional,
+        "intent_open_positions": 1,
+    }
+    gate_result = risk_gate(intent_payload)
+    if not gate_result.get("allowed", False):
+        logger.info(
+            "risk gate blocked execution",
+            extra={
+                "strategy": strategy_name,
+                "reason": gate_result.get("reason"),
+                "cap": gate_result.get("cap"),
+            },
+        )
+        snapshot = get_risk_accounting_snapshot()
+        return ExecutionReport(
+            symbol=plan.symbol,
+            simulated=simulated,
+            pnl_usdt=0.0,
+            pnl_bps=0.0,
+            legs=plan.legs,
+            plan_viable=False,
+            safe_mode=safe_mode,
+            dry_run=dry_run,
+            orders=[],
+            exposures=[],
+            pnl_summary={},
+            state="SKIPPED_BY_RISK",
+            risk_gate=gate_result,
+            risk_snapshot=snapshot,
+        )
+
+    _, intent_allowed = accounting_record_intent(strategy_name, plan.notional, simulated=simulated)
+    if not intent_allowed:
+        logger.info(
+            "risk accounting blocked execution",
+            extra={"strategy": strategy_name, "notional": plan.notional},
+        )
+        snapshot = get_risk_accounting_snapshot()
+        return ExecutionReport(
+            symbol=plan.symbol,
+            simulated=simulated,
+            pnl_usdt=0.0,
+            pnl_bps=0.0,
+            legs=plan.legs,
+            plan_viable=False,
+            safe_mode=safe_mode,
+            dry_run=dry_run,
+            orders=[],
+            exposures=[],
+            pnl_summary={},
+            state="SKIPPED_BY_RISK",
+            risk_gate={"allowed": False, "reason": "accounting"},
+            risk_snapshot=snapshot,
+        )
+
+    try:
+        result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
+    except Exception:
+        accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
+        raise
+
     pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}
     orders = result.get("orders", []) if isinstance(result, dict) else []
     exposures = result.get("exposures", []) if isinstance(result, dict) else []
     pnl_usdt = float(pnl_summary.get("total", plan.est_pnl_usdt if plan.viable else 0.0))
     pnl_bps = (pnl_usdt / plan.notional) * 10_000 if plan.notional else 0.0
+    pnl_delta = 0.0 if simulated else pnl_usdt
+    snapshot = accounting_record_fill(strategy_name, plan.notional, pnl_delta, simulated=simulated)
     logger.info(
         "arbitrage plan executed",
         extra={
@@ -403,7 +482,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
     )
     return ExecutionReport(
         symbol=plan.symbol,
-        simulated=dry_run or safe_mode,
+        simulated=simulated,
         pnl_usdt=pnl_usdt,
         pnl_bps=pnl_bps,
         legs=plan.legs,
@@ -413,6 +492,9 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
         orders=orders,
         exposures=exposures,
         pnl_summary=pnl_summary,
+        state="DONE",
+        risk_gate=gate_result,
+        risk_snapshot=snapshot,
     )
 
 

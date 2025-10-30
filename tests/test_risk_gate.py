@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from types import SimpleNamespace
+
 from app.risk import core as risk_core
 from app.risk.core import _RiskMetrics
 
@@ -12,7 +14,15 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USDT", raising=False)
     monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USD", raising=False)
     monkeypatch.delenv("MAX_OPEN_POSITIONS", raising=False)
+    monkeypatch.delenv("RISK_ENFORCE_CAPS", raising=False)
+    monkeypatch.delenv("RISK_ENFORCE_BUDGETS", raising=False)
+    monkeypatch.delenv("DRY_RUN_MODE", raising=False)
     risk_core.reset_risk_governor_for_tests()
+    monkeypatch.setattr(
+        risk_core,
+        "get_state",
+        lambda: SimpleNamespace(control=SimpleNamespace(dry_run=False)),
+    )
     yield
     risk_core.reset_risk_governor_for_tests()
 
@@ -23,17 +33,19 @@ def _stub_metrics(total_notional: float, open_positions: int) -> _RiskMetrics:
 
 def test_risk_gate_allows_when_flag_disabled(monkeypatch):
     monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(0.0, 0))
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
 
     result = risk_core.risk_gate({"intent_notional": 200.0})
 
     assert result["allowed"] is True
-    assert result["reason"] == "disabled"
+    assert result["reason"] == "risk_checks_disabled"
 
 
 def test_risk_gate_allows_under_caps(monkeypatch):
     monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
     monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "1000")
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "5")
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
     risk_core.reset_risk_governor_for_tests()
     monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(100.0, 1))
 
@@ -55,6 +67,7 @@ def test_risk_gate_blocks_when_caps_breached(monkeypatch):
     monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
     monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "1000")
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "3")
+    monkeypatch.setenv("RISK_ENFORCE_CAPS", "1")
     risk_core.reset_risk_governor_for_tests()
     monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(950.0, 3))
 
@@ -69,5 +82,6 @@ def test_risk_gate_blocks_when_caps_breached(monkeypatch):
     result = risk_core.risk_gate(intent)
 
     assert result["allowed"] is False
-    assert result["reason"] == "risk.max_notional"
+    assert result["reason"] == "SKIPPED_BY_RISK"
     assert result["cap"] == "max_total_notional_usdt"
+    assert result.get("details", {}).get("breach") == "max_total_notional_usdt"

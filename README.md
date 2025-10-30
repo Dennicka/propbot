@@ -136,6 +136,20 @@ notional'а, например:
   уткнулись в бюджет. Это основной источник правды: таблица синхронизирована с
   runtime и ops_report.
 
+### Execution risk accounting snapshot
+
+- Добавлен read-only эндпоинт `GET /api/ui/risk_snapshot`. Он требует тот же
+  bearer-токен, что и остальные `/api/ui` ручки, и возвращает структуру с
+  флагами autopilot/HOLD/SAFE_MODE, агрегированным per-venue risk snapshot и
+  вложенным блоком `accounting` (open notional, позиции, дневной PnL и budgets
+  per strategy). Симуляционные (DRY_RUN / SAFE_MODE) подсчёты публикуются
+  отдельно, чтобы их можно было мониторить без влияния на реальное исполнение.
+- `/ui/dashboard` расширен карточкой **Risk snapshot (execution)**: в ней
+  отображаются агрегированные показатели и таблица per-strategy с колонками
+  «open notional», «open positions», «realized PnL today» и
+  `budget used / limit`. Если дневной убыток или кап исчерпаны, строка
+  подсвечивается флагом breach.
+
 ### Autopilot resume safety
 
 - Автопилот больше не снимает HOLD автоматически, если стратегия заморожена
@@ -400,18 +414,24 @@ flow to clear HOLD.
 ## Pre-trade risk gate
 
 Routers and orchestrator flows now run a lightweight `risk_gate(order_intent)`
-helper before dispatching manual hedges or orchestrated plans. The helper first
-checks `FeatureFlags.risk_checks_enabled()` (backed by the
-`RISK_CHECKS_ENABLED` environment flag, disabled by default). When the flag is
-off the gate returns `{"allowed": true, "reason": "disabled"}` and has no
-side effects. With the flag enabled the gate reads the current exposure snapshot
-and verifies that adding the requested intent (`intent_notional`, optional
-position increments) would stay inside `MAX_TOTAL_NOTIONAL_USDT` and
-`MAX_OPEN_POSITIONS`. Manual routes **skip without raising** when a cap would be
-breached, returning an HTTP 200 body such as
-`{"status": "skipped", "reason": "risk.max_notional", "cap": "max_total_notional_usdt"}`
-so operators can see why the order was ignored. Dry-run executions bypass the
-gate so operators can rehearse flows without touching live limits.
+helper before dispatching manual hedges or orchestrated plans. The helper
+delegates to `RiskGovernor.validate(...)` so both pre-trade checks and risk
+accounting share the same enforcement path. The call first evaluates
+`FeatureFlags.risk_checks_enabled()` (backed by the `RISK_CHECKS_ENABLED`
+environment flag, disabled by default). When the flag is off the gate returns
+`{"allowed": true, "reason": "risk_checks_disabled"}` and has no side effects.
+With the flag enabled the gate reads the current exposure snapshot and verifies
+that adding the requested intent (`intent_notional`, optional position
+increments) would stay inside the configured caps when
+`FeatureFlags.enforce_caps()` is true. Manual routes **skip without raising**
+when a cap would be breached, returning an HTTP 200 body such as
+`{"status": "skipped", "reason": "SKIPPED_BY_RISK", "cap": "max_total_notional_usdt"}`
+so operators can see why the order was ignored. Dry-run executions (either via
+the runtime control toggle or the `DRY_RUN_MODE` flag) short-circuit with
+`why="dry_run_no_enforce"`, keeping simulated counters in the snapshot without
+blocking execution. Per-strategy drawdown budgets (when configured) are guarded
+only when `FeatureFlags.enforce_budgets()` returns true, letting operators
+observe loss telemetry without immediately halting trading.
 
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional
