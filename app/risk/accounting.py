@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import threading
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Mapping, Tuple
 
 from ..budget.strategy_budget import StrategyBudgetManager
 from ..services.runtime import get_state
@@ -41,6 +41,7 @@ __all__ = [
     "record_intent",
     "record_fill",
     "set_strategy_budget_cap",
+    "reset_strategy_budget_usage",
     "reset_risk_accounting_for_tests",
 ]
 
@@ -114,18 +115,41 @@ def _tolerance() -> float:
     return 1e-6
 
 
-def _budget_limit(strategy: str) -> float | None:
+def _budget_info(strategy: str, entry: _StrategyAccounting) -> Mapping[str, object]:
     try:
-        return _BUDGET_MANAGER.get_cap(strategy)
+        info: Mapping[str, object] = _BUDGET_MANAGER.get_budget_state(strategy)
     except Exception:  # pragma: no cover - defensive
-        return None
+        info = {}
+    used = float(info.get("used_today_usdt") or 0.0)
+    entry.budget_used = used
+    return info
 
 
-def _budget_breached(entry: _StrategyAccounting, *, strategy: str) -> bool:
-    limit = _budget_limit(strategy)
+def _recalculate_budget_totals() -> None:
+    _TOTALS.budget_used = sum(item.budget_used for item in _STRATEGY_STATE.values())
+
+
+def _budget_blocked(budget_info: Mapping[str, object]) -> bool:
+    limit = budget_info.get("limit_usdt")
     if limit is None:
         return False
-    return entry.budget_used >= (limit - _tolerance())
+    try:
+        limit_value = float(limit)
+    except (TypeError, ValueError):
+        return False
+    used = float(budget_info.get("used_today_usdt") or 0.0)
+    return used >= (limit_value - _tolerance())
+
+
+def _epoch_day_to_iso(epoch_day: object) -> str | None:
+    try:
+        day = int(epoch_day)
+    except (TypeError, ValueError):
+        return None
+    if day < 0:
+        return None
+    ts = datetime.fromtimestamp(day * 86_400, tz=timezone.utc)
+    return ts.isoformat()
 
 
 def _totals_breaches(governor: RiskGovernor) -> Iterable[str]:
@@ -138,16 +162,39 @@ def _totals_breaches(governor: RiskGovernor) -> Iterable[str]:
     return breaches
 
 
-def _strategy_snapshot(strategy: str, entry: _StrategyAccounting) -> dict:
-    limit = _budget_limit(strategy)
+def _strategy_snapshot(
+    strategy: str, entry: _StrategyAccounting, budget_info: Mapping[str, object]
+) -> dict:
     breaches: list[str] = []
-    if _budget_breached(entry, strategy=strategy):
+    blocked = _budget_blocked(budget_info)
+    if blocked:
         breaches.append("budget_exhausted")
+    limit = budget_info.get("limit_usdt")
+    try:
+        limit_value = float(limit) if limit is not None else None
+    except (TypeError, ValueError):
+        limit_value = None
+    used = float(budget_info.get("used_today_usdt") or entry.budget_used)
+    remaining: float | None
+    if limit_value is None:
+        remaining = None
+    else:
+        remaining = limit_value - used
+    budget_payload = {
+        "used": used,
+        "limit": limit_value,
+        "used_today_usdt": used,
+        "limit_usdt": limit_value,
+        "remaining_usdt": remaining,
+        "last_reset_epoch_day": budget_info.get("last_reset_epoch_day"),
+        "last_reset_ts_utc": _epoch_day_to_iso(budget_info.get("last_reset_epoch_day")),
+    }
     snapshot = {
         "open_notional": entry.open_notional,
         "open_positions": entry.open_positions,
         "realized_pnl_today": entry.realised_pnl_today,
-        "budget": {"used": entry.budget_used, "limit": limit},
+        "budget": budget_payload,
+        "blocked_by_budget": blocked,
         "breaches": breaches,
         "simulated": {
             "open_notional": entry.simulated_open_notional,
@@ -160,10 +207,19 @@ def _strategy_snapshot(strategy: str, entry: _StrategyAccounting) -> dict:
 
 def _snapshot_unlocked() -> dict:
     governor = get_risk_governor()
-    per_strategy = {
-        name: _strategy_snapshot(name, entry)
-        for name, entry in sorted(_STRATEGY_STATE.items())
-    }
+    try:
+        budget_snapshot = _BUDGET_MANAGER.snapshot()
+    except Exception:  # pragma: no cover - defensive
+        budget_snapshot = {}
+    per_strategy: dict[str, dict[str, object]] = {}
+    for name, entry in sorted(_STRATEGY_STATE.items()):
+        info = budget_snapshot.get(name)
+        if not isinstance(info, Mapping):
+            info = _budget_info(name, entry)
+        else:
+            entry.budget_used = float(info.get("used_today_usdt") or entry.budget_used)
+        per_strategy[name] = _strategy_snapshot(name, entry, info)
+    _recalculate_budget_totals()
     snapshot = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "totals": {
@@ -211,25 +267,59 @@ def record_intent(strategy: str, notional: float, *, simulated: bool) -> Tuple[d
     with _LOCK:
         _maybe_reset_day_unlocked()
         entry = _strategy_entry(strategy)
+        budget_info = _budget_info(strategy, entry)
+        _recalculate_budget_totals()
         state = get_state()
         control = getattr(state, "control", None)
-        dry_run = bool(getattr(control, "dry_run", False)) or FeatureFlags.dry_run_mode() or simulated
+        dry_run = (
+            bool(getattr(control, "dry_run", False))
+            or FeatureFlags.dry_run_mode()
+            or simulated
+        )
+        runtime_dry_run_mode = bool(getattr(control, "dry_run_mode", False))
+        budgets_enabled = (
+            FeatureFlags.risk_checks_enabled()
+            and FeatureFlags.enforce_budgets()
+            and not runtime_dry_run_mode
+        )
+        enforce_budget_now = budgets_enabled and not dry_run
         governor = get_risk_governor()
         projected_notional = _TOTALS.open_notional + (0.0 if simulated else notional_value)
         projected_positions = _TOTALS.open_positions + (0 if simulated else 1)
-        limit = _budget_limit(strategy)
         validation = governor.validate(
             intent_notional=projected_notional,
             projected_positions=projected_positions,
             dry_run=dry_run,
             current_total_notional=_TOTALS.open_notional,
             current_open_positions=_TOTALS.open_positions,
-            budget_limit=limit,
+            budget_limit=None,
             budget_used=entry.budget_used,
         )
         global _LAST_DENIAL
         if not validation.get("ok", False):
             _LAST_DENIAL = {"source": "accounting", "strategy": strategy, **validation}
+            snapshot = _snapshot_unlocked()
+            return snapshot, False
+
+        blocked = _budget_blocked(budget_info)
+        if enforce_budget_now and blocked:
+            limit = budget_info.get("limit_usdt")
+            try:
+                limit_value = float(limit) if limit is not None else None
+            except (TypeError, ValueError):
+                limit_value = None
+            used = float(budget_info.get("used_today_usdt") or entry.budget_used)
+            details: dict[str, object] = {"used": used}
+            if limit_value is not None:
+                details["limit"] = limit_value
+            _LAST_DENIAL = {
+                "source": "accounting",
+                "strategy": strategy,
+                "ok": False,
+                "state": "SKIPPED_BY_RISK",
+                "reason": "budget_exceeded",
+                "details": details,
+            }
             snapshot = _snapshot_unlocked()
             return snapshot, False
 
@@ -258,6 +348,8 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
     with _LOCK:
         _maybe_reset_day_unlocked()
         entry = _strategy_entry(strategy)
+        _budget_info(strategy, entry)
+        _recalculate_budget_totals()
         if simulated:
             entry.simulated_open_notional = max(entry.simulated_open_notional - notional_value, 0.0)
             entry.simulated_open_positions = max(entry.simulated_open_positions - 1, 0)
@@ -276,8 +368,15 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
 
         if pnl_value < 0:
             loss = abs(pnl_value)
-            entry.budget_used += loss
-            _TOTALS.budget_used += loss
+            try:
+                updated = _BUDGET_MANAGER.add_usage(strategy, loss)
+            except Exception:  # pragma: no cover - defensive
+                updated = {}
+            if isinstance(updated, Mapping):
+                entry.budget_used = float(updated.get("used_today_usdt") or entry.budget_used)
+            else:
+                entry.budget_used += loss
+            _recalculate_budget_totals()
 
         return _snapshot_unlocked()
 
@@ -287,6 +386,26 @@ def set_strategy_budget_cap(strategy: str, cap: float) -> None:
 
     with _LOCK:
         _BUDGET_MANAGER.set_cap(strategy, cap)
+        entry = _STRATEGY_STATE.get(strategy.strip())
+        if entry is not None:
+            _budget_info(strategy, entry)
+            _recalculate_budget_totals()
+
+
+def reset_strategy_budget_usage(strategy: str) -> dict[str, object]:
+    """Reset the recorded budget usage for ``strategy`` and return the state."""
+
+    with _LOCK:
+        state: Mapping[str, object]
+        try:
+            state = _BUDGET_MANAGER.reset_usage(strategy)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise ValueError(f"unable to reset budget for {strategy}") from exc
+        entry = _STRATEGY_STATE.get(strategy.strip())
+        if entry is not None:
+            entry.budget_used = float(state.get("used_today_usdt") or 0.0)
+        _recalculate_budget_totals()
+        return dict(state)
 
 
 def reset_risk_accounting_for_tests() -> None:
@@ -305,3 +424,4 @@ def reset_risk_accounting_for_tests() -> None:
         _TOTALS.budget_used = 0.0
         global _LAST_DENIAL
         _LAST_DENIAL = None
+        _BUDGET_MANAGER.reset_all()

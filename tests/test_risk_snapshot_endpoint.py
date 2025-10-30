@@ -72,5 +72,15 @@ def test_risk_snapshot_endpoint(monkeypatch, client) -> None:
     assert "binance-um" in venues
     assert venues["binance-um"]["open_positions_count"] >= 1
 
+    accounting = payload.get("accounting", {})
+    per_strategy = accounting.get("per_strategy", {})
+    for details in per_strategy.values():
+        assert "blocked_by_budget" in details
+        budget_info = details.get("budget", {})
+        assert "limit_usdt" in budget_info
+        assert "used_today_usdt" in budget_info
+        assert "remaining_usdt" in budget_info
+        assert "last_reset_ts_utc" in budget_info
+
     unauth_response = client.get("/api/ui/risk_snapshot")
     assert unauth_response.status_code in {401, 403}

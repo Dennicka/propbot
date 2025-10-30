@@ -83,27 +83,23 @@ class TestRiskGovernor:
 
 
 class TestStrategyBudgetManager:
-    def test_positive_caps_and_allocations(self) -> None:
+    def test_tracks_usage_and_remaining(self) -> None:
         manager = StrategyBudgetManager()
         manager.set_cap("alpha", 10_000)
-        manager.allocate("alpha", 5_000)
-        assert manager.get_allocation("alpha") == 5_000
-        assert manager.get_remaining("alpha") == 5_000
-        manager.release("alpha", 2_000)
-        assert manager.get_allocation("alpha") == 3_000
+        state = manager.add_usage("alpha", 5_000)
+        assert state["used_today_usdt"] == pytest.approx(5_000.0)
+        assert manager.get_allocation("alpha") == pytest.approx(5_000.0)
+        assert manager.get_remaining("alpha") == pytest.approx(5_000.0)
+        reset_state = manager.reset_usage("alpha")
+        assert reset_state["used_today_usdt"] == pytest.approx(0.0)
 
-    def test_rejects_invalid_cap_and_allocation(self) -> None:
+    def test_rejects_invalid_cap_and_usage(self) -> None:
         manager = StrategyBudgetManager()
         with pytest.raises(BudgetValidationError):
             manager.set_cap("alpha", -1)
         manager.set_cap("alpha", 5_000)
         with pytest.raises(BudgetValidationError):
-            manager.allocate("alpha", -10)
-        with pytest.raises(BudgetValidationError):
-            manager.allocate("alpha", 6_000)
-        manager.allocate("alpha", 1_000)
-        with pytest.raises(BudgetValidationError):
-            manager.release("alpha", 2_000)
+            manager.add_usage("alpha", -10)
 
 
 class TestFeatureFlags:

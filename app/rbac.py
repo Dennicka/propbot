@@ -15,6 +15,7 @@ Action = Literal[
     "UNFREEZE_STRATEGY_APPROVE",
     "CANCEL_ALL",
     "SET_STRATEGY_ENABLED",
+    "BUDGET_RESET",
 ]
 
 
@@ -33,6 +34,7 @@ _ROLE_PERMISSIONS: dict[Role, FrozenSet[Action]] = {
             "UNFREEZE_STRATEGY_APPROVE",
             "CANCEL_ALL",
             "SET_STRATEGY_ENABLED",
+            "BUDGET_RESET",
         }
     ),
 }
