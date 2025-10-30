@@ -511,6 +511,11 @@
 ## Ежедневный мониторинг
 
 - `GET /healthz` — проверка живости.
+- `GET /live-readiness` — сводная проверка готовности: учитывает глобальный HOLD,
+  статус exchange watchdog, превышение дневного loss cap (при включённом
+  `ENFORCE_DAILY_LOSS_CAP`) и наличие хотя бы одного торгуемого инструмента в
+  текущей вселенной. Возвращает `200` при `{"ready": true}` и `503`, если
+  готовность заблокирована (причины приходят в массиве `reasons`).
 - `GET /api/ui/status/overview` — сводка SAFE_MODE/HOLD, причина HOLD,
   `two_man_resume_required`, runaway guard, `auto_hedge.consecutive_failures`.
 - `GET /api/ui/status/components` и `/api/ui/status/slo` — детализация
