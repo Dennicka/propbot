@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Tuple
 
 from ..broker.router import ExecutionRouter
 from ..core.config import ArbitragePairConfig
+from ..metrics import slo
 from ..risk.core import risk_gate
 from ..risk.telemetry import record_risk_skip
 from ..risk.accounting import (
@@ -395,125 +396,126 @@ def plan_from_payload(payload: Dict[str, Any]) -> Plan:
 
 
 async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> ExecutionReport:
-    state = get_state()
-    safe_mode = state.control.safe_mode
-    dry_run = state.control.dry_run
-    router = ExecutionRouter()
-    simulated = dry_run or safe_mode
-    strategy_name = "cross_exchange_arb"
-
-    intent_payload = {
-        "strategy": strategy_name,
-        "intent_notional": plan.notional,
-        "intent_open_positions": 1,
-    }
-    gate_result = risk_gate(intent_payload)
-    if not gate_result.get("allowed", False):
-        logger.info(
-            "risk gate blocked execution",
-            extra={
+    with slo.order_cycle_timer():
+        state = get_state()
+        safe_mode = state.control.safe_mode
+        dry_run = state.control.dry_run
+        router = ExecutionRouter()
+        simulated = dry_run or safe_mode
+        strategy_name = "cross_exchange_arb"
+    
+        intent_payload = {
+            "strategy": strategy_name,
+            "intent_notional": plan.notional,
+            "intent_open_positions": 1,
+        }
+        gate_result = risk_gate(intent_payload)
+        if not gate_result.get("allowed", False):
+            logger.info(
+                "risk gate blocked execution",
+                extra={
+                    "strategy": strategy_name,
+                    "reason": gate_result.get("reason"),
+                    "cap": gate_result.get("cap"),
+                },
+            )
+            snapshot = get_risk_accounting_snapshot()
+            return ExecutionReport(
+                symbol=plan.symbol,
+                simulated=simulated,
+                pnl_usdt=0.0,
+                pnl_bps=0.0,
+                legs=plan.legs,
+                plan_viable=False,
+                safe_mode=safe_mode,
+                dry_run=dry_run,
+                orders=[],
+                exposures=[],
+                pnl_summary={},
+                state="SKIPPED_BY_RISK",
+                risk_gate=gate_result,
+                risk_snapshot=snapshot,
+            )
+    
+        snapshot, intent_result = accounting_record_intent(
+            strategy_name, plan.notional, simulated=simulated
+        )
+        if not intent_result.get("ok", False):
+            reason_code = str(intent_result.get("reason") or "other_risk")
+            logger.info(
+                "risk accounting blocked execution",
+                extra={
+                    "strategy": strategy_name,
+                    "notional": plan.notional,
+                    "reason": reason_code,
+                },
+            )
+            risk_gate_payload: Dict[str, object] = {
+                "allowed": False,
+                "state": intent_result.get("state", "SKIPPED_BY_RISK"),
+                "reason": reason_code,
                 "strategy": strategy_name,
-                "reason": gate_result.get("reason"),
-                "cap": gate_result.get("cap"),
+            }
+            if "details" in intent_result:
+                risk_gate_payload["details"] = intent_result["details"]
+            snapshot = get_risk_accounting_snapshot()
+            return ExecutionReport(
+                symbol=plan.symbol,
+                simulated=simulated,
+                pnl_usdt=0.0,
+                pnl_bps=0.0,
+                legs=plan.legs,
+                plan_viable=False,
+                safe_mode=safe_mode,
+                dry_run=dry_run,
+                orders=[],
+                exposures=[],
+                pnl_summary={},
+                state=intent_result.get("state", "SKIPPED_BY_RISK"),
+                risk_gate=risk_gate_payload,
+                risk_snapshot=snapshot,
+            )
+    
+        try:
+            result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
+        except Exception:
+            accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
+            raise
+    
+        pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}
+        orders = result.get("orders", []) if isinstance(result, dict) else []
+        exposures = result.get("exposures", []) if isinstance(result, dict) else []
+        pnl_usdt = float(pnl_summary.get("total", plan.est_pnl_usdt if plan.viable else 0.0))
+        pnl_bps = (pnl_usdt / plan.notional) * 10_000 if plan.notional else 0.0
+        pnl_delta = 0.0 if simulated else pnl_usdt
+        snapshot = accounting_record_fill(strategy_name, plan.notional, pnl_delta, simulated=simulated)
+        logger.info(
+            "arbitrage plan executed",
+            extra={
+                "symbol": plan.symbol,
+                "safe_mode": safe_mode,
+                "dry_run": dry_run,
+                "pnl_usdt": pnl_usdt,
             },
         )
-        snapshot = get_risk_accounting_snapshot()
         return ExecutionReport(
             symbol=plan.symbol,
             simulated=simulated,
-            pnl_usdt=0.0,
-            pnl_bps=0.0,
+            pnl_usdt=pnl_usdt,
+            pnl_bps=pnl_bps,
             legs=plan.legs,
-            plan_viable=False,
+            plan_viable=plan.viable,
             safe_mode=safe_mode,
             dry_run=dry_run,
-            orders=[],
-            exposures=[],
-            pnl_summary={},
-            state="SKIPPED_BY_RISK",
+            orders=orders,
+            exposures=exposures,
+            pnl_summary=pnl_summary,
+            state="DONE",
             risk_gate=gate_result,
             risk_snapshot=snapshot,
         )
-
-    snapshot, intent_result = accounting_record_intent(
-        strategy_name, plan.notional, simulated=simulated
-    )
-    if not intent_result.get("ok", False):
-        reason_code = str(intent_result.get("reason") or "other_risk")
-        logger.info(
-            "risk accounting blocked execution",
-            extra={
-                "strategy": strategy_name,
-                "notional": plan.notional,
-                "reason": reason_code,
-            },
-        )
-        risk_gate_payload: Dict[str, object] = {
-            "allowed": False,
-            "state": intent_result.get("state", "SKIPPED_BY_RISK"),
-            "reason": reason_code,
-            "strategy": strategy_name,
-        }
-        if "details" in intent_result:
-            risk_gate_payload["details"] = intent_result["details"]
-        snapshot = get_risk_accounting_snapshot()
-        return ExecutionReport(
-            symbol=plan.symbol,
-            simulated=simulated,
-            pnl_usdt=0.0,
-            pnl_bps=0.0,
-            legs=plan.legs,
-            plan_viable=False,
-            safe_mode=safe_mode,
-            dry_run=dry_run,
-            orders=[],
-            exposures=[],
-            pnl_summary={},
-            state=intent_result.get("state", "SKIPPED_BY_RISK"),
-            risk_gate=risk_gate_payload,
-            risk_snapshot=snapshot,
-        )
-
-    try:
-        result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
-    except Exception:
-        accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
-        raise
-
-    pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}
-    orders = result.get("orders", []) if isinstance(result, dict) else []
-    exposures = result.get("exposures", []) if isinstance(result, dict) else []
-    pnl_usdt = float(pnl_summary.get("total", plan.est_pnl_usdt if plan.viable else 0.0))
-    pnl_bps = (pnl_usdt / plan.notional) * 10_000 if plan.notional else 0.0
-    pnl_delta = 0.0 if simulated else pnl_usdt
-    snapshot = accounting_record_fill(strategy_name, plan.notional, pnl_delta, simulated=simulated)
-    logger.info(
-        "arbitrage plan executed",
-        extra={
-            "symbol": plan.symbol,
-            "safe_mode": safe_mode,
-            "dry_run": dry_run,
-            "pnl_usdt": pnl_usdt,
-        },
-    )
-    return ExecutionReport(
-        symbol=plan.symbol,
-        simulated=simulated,
-        pnl_usdt=pnl_usdt,
-        pnl_bps=pnl_bps,
-        legs=plan.legs,
-        plan_viable=plan.viable,
-        safe_mode=safe_mode,
-        dry_run=dry_run,
-        orders=orders,
-        exposures=exposures,
-        pnl_summary=pnl_summary,
-        state="DONE",
-        risk_gate=gate_result,
-        risk_snapshot=snapshot,
-    )
-
-
+    
+    
 def execute_plan(plan: Plan) -> ExecutionReport:
     """Synchronous wrapper for CLI contexts."""
     return asyncio.run(execute_plan_async(plan, allow_safe_mode=True))
@@ -701,6 +703,7 @@ class ArbitrageEngine:
             }
         if manager.is_frozen(strategy_name):
             record_risk_skip(strategy_name, "strategy_frozen")
+            slo.inc_skipped("hold")
             return {
                 "ok": False,
                 "executed": False,
@@ -779,6 +782,7 @@ class ArbitrageEngine:
                 "Runaway guard blocked leg A",
                 {"reason": exc.reason, "stage": "leg_a"},
             )
+            slo.inc_skipped("hold")
             return {
                 "ok": False,
                 "executed": False,
@@ -801,6 +805,7 @@ class ArbitrageEngine:
                     "Runaway guard blocked hedge unwind",
                     {"reason": exc.reason, "stage": "hedge"},
                 )
+                slo.inc_skipped("hold")
                 return {
                     "ok": False,
                     "executed": False,
@@ -823,6 +828,7 @@ class ArbitrageEngine:
                 "Runaway guard blocked leg B",
                 {"reason": exc.reason, "stage": "leg_b"},
             )
+            slo.inc_skipped("hold")
             return {
                 "ok": False,
                 "executed": False,
@@ -878,6 +884,7 @@ def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: 
         }
     if manager.is_frozen(strategy_name):
         record_risk_skip(strategy_name, "strategy_frozen")
+        slo.inc_skipped("hold")
         return {
             "ok": False,
             "executed": False,

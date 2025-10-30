@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple
 
+from ..metrics import slo
 
 RECENT_TRANSITION_LIMIT = 50
 
@@ -107,6 +108,7 @@ class ExchangeWatchdog:
                     "reason": reason,
                 }
                 self._state[exchange] = entry
+                slo.set_watchdog_ok(exchange, ok)
                 if previous_status != status:
                     transition = WatchdogStateTransition(
                         previous=previous_status,
@@ -143,6 +145,7 @@ class ExchangeWatchdog:
                 entry["reason"] = reason_text
             entry.setdefault("last_check_ts", now)
             self._state[exchange] = entry
+            slo.set_watchdog_ok(exchange, False)
             transition = WatchdogStateTransition(
                 previous=previous_status,
                 current="AUTO_HOLD",

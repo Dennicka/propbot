@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from prometheus_client import Gauge
 
+from ..metrics import slo
 from .core import FeatureFlags
 
 __all__ = [
@@ -107,15 +108,23 @@ class DailyLossCap:
     def maybe_reset(self) -> None:
         with self._lock:
             self._ensure_current_day_locked()
-            _DAILY_LOSS_CAP_GAUGE.set(self.max_daily_loss_usdt)
+            limit = self.max_daily_loss_usdt
+            _DAILY_LOSS_CAP_GAUGE.set(limit)
             _DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+            losses = self._losses_today_locked()
+            breached = limit > 0 and losses >= limit - 1e-6
+            slo.set_daily_loss_breached(breached)
 
     def record_realized(self, pnl_delta: float, *, timestamp: datetime | None = None) -> None:
         with self._lock:
             self._ensure_current_day_locked(timestamp=timestamp)
             self._realized_today += float(pnl_delta or 0.0)
-            _DAILY_LOSS_CAP_GAUGE.set(self.max_daily_loss_usdt)
+            limit = self.max_daily_loss_usdt
+            _DAILY_LOSS_CAP_GAUGE.set(limit)
             _DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+            losses = self._losses_today_locked()
+            breached = limit > 0 and losses >= limit - 1e-6
+            slo.set_daily_loss_breached(breached)
 
     def _losses_today_locked(self) -> float:
         return max(-self._realized_today, 0.0)
@@ -125,9 +134,12 @@ class DailyLossCap:
             self._ensure_current_day_locked()
             limit = self.max_daily_loss_usdt
             if limit <= 0:
+                slo.set_daily_loss_breached(False)
                 return False
             tolerance = 1e-6
-            return self._losses_today_locked() >= limit - tolerance
+            breached = self._losses_today_locked() >= limit - tolerance
+            slo.set_daily_loss_breached(breached)
+            return breached
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -141,6 +153,7 @@ class DailyLossCap:
                 percentage_used = min((losses / limit) * 100.0, 1_000.0)
                 breached = losses >= limit - 1e-6
                 remaining = limit - losses
+            slo.set_daily_loss_breached(breached)
             snapshot = DailyLossSnapshot(
                 utc_day=(self._utc_day or _current_utc_day()).isoformat(),
                 realized_pnl_today_usdt=self._realized_today,
@@ -160,8 +173,10 @@ class DailyLossCap:
         with self._lock:
             self._utc_day = _current_utc_day()
             self._realized_today = 0.0
-            _DAILY_LOSS_CAP_GAUGE.set(self.max_daily_loss_usdt)
+            limit = self.max_daily_loss_usdt
+            _DAILY_LOSS_CAP_GAUGE.set(limit)
             _DAILY_LOSS_REALIZED_GAUGE.set(self._realized_today)
+            slo.set_daily_loss_breached(False)
 
 
 _SINGLETON: DailyLossCap | None = None

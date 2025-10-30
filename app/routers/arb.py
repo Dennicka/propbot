@@ -7,6 +7,7 @@ import secrets
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..metrics import slo
 from ..services import arbitrage
 from ..risk.core import risk_gate
 from ..services.runtime import (
@@ -46,6 +47,7 @@ def _maybe_skip_for_risk(intent: Mapping[str, object]) -> dict | None:
     gate_result = risk_gate(intent)
     if gate_result.get("allowed", False):
         return None
+    slo.inc_skipped(gate_result.get("reason"))
     response = {
         "status": "skipped",
         "allowed": False,
@@ -298,6 +300,7 @@ async def execute(plan_body: ExecutePayload) -> dict:
     try:
         report = await arbitrage.execute_plan_async(plan)
     except HoldActiveError as exc:
+        slo.inc_skipped("hold")
         safety = get_safety_status()
         detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
