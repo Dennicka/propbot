@@ -15,6 +15,7 @@ from app.services.runtime import (
     record_incident,
     register_order_attempt,
 )
+from app.metrics import slo
 from app.risk.telemetry import record_risk_skip
 from app.strategy_budget import get_strategy_budget_manager
 from app.strategy_risk import get_strategy_risk_manager
@@ -477,360 +478,362 @@ def _persist_partial_position(
 def execute_hedged_trade(
     symbol: str, notion_usdt: float, leverage: float, min_spread: float
 ) -> dict:
-    """Open a hedged position across exchanges when spread exceeds threshold."""
-
-    spread_info = check_spread(symbol)
-    spread_value = float(spread_info["spread"])
-
-    if spread_value < float(min_spread):
-        _record_failure("spread_below_threshold")
-        return {
-            "symbol": spread_info["symbol"],
-            "min_spread": float(min_spread),
-            "spread": spread_value,
-            "success": False,
-            "reason": "spread_below_threshold",
-            "details": spread_info,
-        }
-
-    notional = float(notion_usdt)
-    leverage_value = float(leverage)
-    cheap_price = _coerce_float(spread_info.get("cheap_mark"))
-    expensive_price = _coerce_float(spread_info.get("expensive_mark"))
-    long_size = notional / cheap_price if cheap_price > 0 else 0.0
-    short_size = notional / expensive_price if expensive_price > 0 else 0.0
-
-    long_plan = dict(choose_venue("long", spread_info["symbol"], long_size) or {})
-    short_plan = dict(choose_venue("short", spread_info["symbol"], short_size) or {})
-
-    dry_run_mode = is_dry_run_mode()
-    budget_manager = get_strategy_budget_manager()
-    risk_manager = get_strategy_risk_manager()
-
-    if not risk_manager.is_enabled(STRATEGY_NAME):
-        return {
-            "ok": False,
-            "executed": False,
-            "state": "DISABLED_BY_OPERATOR",
-            "reason": "disabled_by_operator",
-            "strategy": STRATEGY_NAME,
-        }
-    if risk_manager.is_frozen(STRATEGY_NAME):
-        record_risk_skip(STRATEGY_NAME, "strategy_frozen")
-        return {
-            "ok": False,
-            "executed": False,
-            "state": "SKIPPED_BY_RISK",
-            "reason": "strategy_frozen",
-            "strategy": STRATEGY_NAME,
-        }
-
-    def _record_failure(reason: str) -> None:
-        try:
-            risk_manager.record_failure(STRATEGY_NAME, reason)
-        except Exception:
-            LOGGER.exception(
-                "failed to record strategy failure",
-                extra={"strategy": STRATEGY_NAME, "reason": reason},
-            )
-
-    def _record_success() -> None:
-        try:
-            risk_manager.record_success(STRATEGY_NAME)
-        except Exception:
-            LOGGER.exception(
-                "failed to record strategy success",
-                extra={"strategy": STRATEGY_NAME},
-            )
-
-    def _record_and_return(reason: str, *, record_failure: bool = True) -> dict:
-        if record_failure:
-            _record_failure(reason)
-        _record_execution_stat(
-            symbol=spread_info["symbol"],
-            side="long",
-            plan=long_plan,
-            leg=None,
-            success=False,
-            dry_run=dry_run_mode,
-            failure_reason=reason,
-        )
-        _record_execution_stat(
-            symbol=spread_info["symbol"],
-            side="short",
-            plan=short_plan,
-            leg=None,
-            success=False,
-            dry_run=dry_run_mode,
-            failure_reason=reason,
-        )
-        return {
-            "symbol": spread_info["symbol"],
-            "min_spread": float(min_spread),
-            "spread": spread_value,
-            "success": False,
-            "reason": reason,
-            "details": spread_info,
-            "long_plan": long_plan,
-            "short_plan": short_plan,
-        }
-
-    if not dry_run_mode and not budget_manager.can_allocate(
-        STRATEGY_NAME, notional, requested_positions=1
-    ):
-        result = _record_and_return("strategy_budget_exceeded", record_failure=False)
-        result.update(
-            {
-                "ok": False,
-                "state": "BUDGET_BLOCKED",
-                "strategy": STRATEGY_NAME,
-                "limits": budget_manager.get_limits(STRATEGY_NAME),
-                "requested_notional": notional,
+    with slo.order_cycle_timer():
+    
+        spread_info = check_spread(symbol)
+        spread_value = float(spread_info["spread"])
+    
+        if spread_value < float(min_spread):
+            _record_failure("spread_below_threshold")
+            return {
+                "symbol": spread_info["symbol"],
+                "min_spread": float(min_spread),
+                "spread": spread_value,
+                "success": False,
+                "reason": "spread_below_threshold",
+                "details": spread_info,
             }
-        )
-        return result
-
-    if not long_plan or not short_plan:
-        return _record_and_return("routing_unavailable")
-
-    if _coerce_float(long_plan.get("expected_fill_px")) <= 0.0 or _coerce_float(
-        short_plan.get("expected_fill_px")
-    ) <= 0.0:
-        return _record_and_return("quote_unavailable")
-
-    if not bool(long_plan.get("liquidity_ok", True)) or not bool(
-        short_plan.get("liquidity_ok", True)
-    ):
-        return _record_and_return("insufficient_liquidity")
-
-    cheap_exchange = str(long_plan.get("venue") or spread_info["cheap"])
-    expensive_exchange = str(short_plan.get("venue") or spread_info["expensive"])
-
-    guard_allowed, guard_reason = guard_allowed_to_trade(spread_info["symbol"])
-    if not guard_allowed:
-        guard_code = f"edge_guard:{guard_reason or 'blocked'}"
-        _record_failure(guard_code)
-        _record_execution_stat(
-            symbol=spread_info["symbol"],
-            side="long",
-            plan=long_plan,
-            leg=None,
-            success=False,
-            dry_run=dry_run_mode,
-            failure_reason=guard_code,
-        )
-        _record_execution_stat(
-            symbol=spread_info["symbol"],
-            side="short",
-            plan=short_plan,
-            leg=None,
-            success=False,
-            dry_run=dry_run_mode,
-            failure_reason=guard_code,
-        )
-        _log_edge_guard_block(
-            symbol=spread_info["symbol"],
-            reason=guard_reason,
-            spread_info=spread_info,
-            long_plan=long_plan,
-            short_plan=short_plan,
-        )
-        return {
-            "symbol": spread_info["symbol"],
-            "min_spread": float(min_spread),
-            "spread": spread_value,
-            "success": False,
-            "reason": guard_code,
-            "details": spread_info,
-            "long_plan": long_plan,
-            "short_plan": short_plan,
-            "edge_guard_reason": guard_reason,
-        }
-
-    long_client = _client_for(cheap_exchange)
-    short_client = _client_for(expensive_exchange)
-
-    long_price_hint = _coerce_float(long_plan.get("expected_fill_px")) or cheap_price
-    short_price_hint = _coerce_float(short_plan.get("expected_fill_px")) or expensive_price
-
-    long_leg = None
-    short_leg = None
-    error_reason: str | None = None
-    result: Dict[str, Any] | None = None
-
-    try:
-        register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
-        if dry_run_mode:
-            long_leg = _simulate_leg(
-                exchange=cheap_exchange,
+    
+        notional = float(notion_usdt)
+        leverage_value = float(leverage)
+        cheap_price = _coerce_float(spread_info.get("cheap_mark"))
+        expensive_price = _coerce_float(spread_info.get("expensive_mark"))
+        long_size = notional / cheap_price if cheap_price > 0 else 0.0
+        short_size = notional / expensive_price if expensive_price > 0 else 0.0
+    
+        long_plan = dict(choose_venue("long", spread_info["symbol"], long_size) or {})
+        short_plan = dict(choose_venue("short", spread_info["symbol"], short_size) or {})
+    
+        dry_run_mode = is_dry_run_mode()
+        budget_manager = get_strategy_budget_manager()
+        risk_manager = get_strategy_risk_manager()
+    
+        if not risk_manager.is_enabled(STRATEGY_NAME):
+            return {
+                "ok": False,
+                "executed": False,
+                "state": "DISABLED_BY_OPERATOR",
+                "reason": "disabled_by_operator",
+                "strategy": STRATEGY_NAME,
+            }
+        if risk_manager.is_frozen(STRATEGY_NAME):
+            record_risk_skip(STRATEGY_NAME, "strategy_frozen")
+            slo.inc_skipped("hold")
+            return {
+                "ok": False,
+                "executed": False,
+                "state": "SKIPPED_BY_RISK",
+                "reason": "strategy_frozen",
+                "strategy": STRATEGY_NAME,
+            }
+    
+        def _record_failure(reason: str) -> None:
+            try:
+                risk_manager.record_failure(STRATEGY_NAME, reason)
+            except Exception:
+                LOGGER.exception(
+                    "failed to record strategy failure",
+                    extra={"strategy": STRATEGY_NAME, "reason": reason},
+                )
+    
+        def _record_success() -> None:
+            try:
+                risk_manager.record_success(STRATEGY_NAME)
+            except Exception:
+                LOGGER.exception(
+                    "failed to record strategy success",
+                    extra={"strategy": STRATEGY_NAME},
+                )
+    
+        def _record_and_return(reason: str, *, record_failure: bool = True) -> dict:
+            if record_failure:
+                _record_failure(reason)
+            _record_execution_stat(
                 symbol=spread_info["symbol"],
                 side="long",
-                notional_usdt=notional,
-                leverage=leverage_value,
-                price=long_price_hint,
+                plan=long_plan,
+                leg=None,
+                success=False,
+                dry_run=dry_run_mode,
+                failure_reason=reason,
             )
-        else:
-            long_order = long_client.place_order(
-                spread_info["symbol"],
-                "long",
-                notional,
-                leverage_value,
+            _record_execution_stat(
+                symbol=spread_info["symbol"],
+                side="short",
+                plan=short_plan,
+                leg=None,
+                success=False,
+                dry_run=dry_run_mode,
+                failure_reason=reason,
             )
-            long_leg = _normalise_order(
-                order=long_order,
-                exchange=cheap_exchange,
+            return {
+                "symbol": spread_info["symbol"],
+                "min_spread": float(min_spread),
+                "spread": spread_value,
+                "success": False,
+                "reason": reason,
+                "details": spread_info,
+                "long_plan": long_plan,
+                "short_plan": short_plan,
+            }
+    
+        if not dry_run_mode and not budget_manager.can_allocate(
+            STRATEGY_NAME, notional, requested_positions=1
+        ):
+            result = _record_and_return("strategy_budget_exceeded", record_failure=False)
+            result.update(
+                {
+                    "ok": False,
+                    "state": "BUDGET_BLOCKED",
+                    "strategy": STRATEGY_NAME,
+                    "limits": budget_manager.get_limits(STRATEGY_NAME),
+                    "requested_notional": notional,
+                }
+            )
+            return result
+    
+        if not long_plan or not short_plan:
+            return _record_and_return("routing_unavailable")
+    
+        if _coerce_float(long_plan.get("expected_fill_px")) <= 0.0 or _coerce_float(
+            short_plan.get("expected_fill_px")
+        ) <= 0.0:
+            return _record_and_return("quote_unavailable")
+    
+        if not bool(long_plan.get("liquidity_ok", True)) or not bool(
+            short_plan.get("liquidity_ok", True)
+        ):
+            return _record_and_return("insufficient_liquidity")
+    
+        cheap_exchange = str(long_plan.get("venue") or spread_info["cheap"])
+        expensive_exchange = str(short_plan.get("venue") or spread_info["expensive"])
+    
+        guard_allowed, guard_reason = guard_allowed_to_trade(spread_info["symbol"])
+        if not guard_allowed:
+            guard_code = f"edge_guard:{guard_reason or 'blocked'}"
+            _record_failure(guard_code)
+            _record_execution_stat(
                 symbol=spread_info["symbol"],
                 side="long",
-                notional_usdt=notional,
-                leverage=leverage_value,
-                fallback_price=long_price_hint,
+                plan=long_plan,
+                leg=None,
+                success=False,
+                dry_run=dry_run_mode,
+                failure_reason=guard_code,
             )
-
-        register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
-        if dry_run_mode:
-            short_leg = _simulate_leg(
-                exchange=expensive_exchange,
+            _record_execution_stat(
                 symbol=spread_info["symbol"],
                 side="short",
-                notional_usdt=notional,
-                leverage=leverage_value,
-                price=short_price_hint,
+                plan=short_plan,
+                leg=None,
+                success=False,
+                dry_run=dry_run_mode,
+                failure_reason=guard_code,
             )
-        else:
-            short_order = short_client.place_order(
-                spread_info["symbol"],
-                "short",
-                notional,
-                leverage_value,
-            )
-            short_leg = _normalise_order(
-                order=short_order,
-                exchange=expensive_exchange,
+            _log_edge_guard_block(
                 symbol=spread_info["symbol"],
-                side="short",
-                notional_usdt=notional,
-                leverage=leverage_value,
-                fallback_price=short_price_hint,
-            )
-        legs = [leg for leg in (long_leg, short_leg) if leg]
-        result = {
-            "symbol": spread_info["symbol"],
-            "min_spread": float(min_spread),
-            "spread": spread_value,
-            "spread_bps": float(spread_info.get("spread_bps", 0.0)),
-            "cheap_exchange": cheap_exchange,
-            "expensive_exchange": expensive_exchange,
-            "legs": legs,
-            "long_order": long_leg,
-            "short_order": short_leg,
-            "long_plan": long_plan,
-            "short_plan": short_plan,
-            "success": True,
-            "status": "simulated" if dry_run_mode else "executed",
-            "dry_run_mode": dry_run_mode,
-            "simulated": dry_run_mode,
-            "details": spread_info,
-        }
-    except HoldActiveError as exc:
-        error_reason = exc.reason
-        partial_record = None
-        if not dry_run_mode and ((long_leg and not short_leg) or (short_leg and not long_leg)):
-            partial_record = _persist_partial_position(
-                symbol=spread_info["symbol"],
-                notional_usdt=notional,
-                leverage=leverage_value,
-                cheap_exchange=cheap_exchange,
-                expensive_exchange=expensive_exchange,
+                reason=guard_reason,
                 spread_info=spread_info,
-                long_leg=long_leg,
-                short_leg=short_leg,
+                long_plan=long_plan,
+                short_plan=short_plan,
             )
-        result = {
+            return {
+                "symbol": spread_info["symbol"],
+                "min_spread": float(min_spread),
+                "spread": spread_value,
+                "success": False,
+                "reason": guard_code,
+                "details": spread_info,
+                "long_plan": long_plan,
+                "short_plan": short_plan,
+                "edge_guard_reason": guard_reason,
+            }
+    
+        long_client = _client_for(cheap_exchange)
+        short_client = _client_for(expensive_exchange)
+    
+        long_price_hint = _coerce_float(long_plan.get("expected_fill_px")) or cheap_price
+        short_price_hint = _coerce_float(short_plan.get("expected_fill_px")) or expensive_price
+    
+        long_leg = None
+        short_leg = None
+        error_reason: str | None = None
+        result: Dict[str, Any] | None = None
+    
+        try:
+            register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
+            if dry_run_mode:
+                long_leg = _simulate_leg(
+                    exchange=cheap_exchange,
+                    symbol=spread_info["symbol"],
+                    side="long",
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    price=long_price_hint,
+                )
+            else:
+                long_order = long_client.place_order(
+                    spread_info["symbol"],
+                    "long",
+                    notional,
+                    leverage_value,
+                )
+                long_leg = _normalise_order(
+                    order=long_order,
+                    exchange=cheap_exchange,
+                    symbol=spread_info["symbol"],
+                    side="long",
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    fallback_price=long_price_hint,
+                )
+    
+            register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
+            if dry_run_mode:
+                short_leg = _simulate_leg(
+                    exchange=expensive_exchange,
+                    symbol=spread_info["symbol"],
+                    side="short",
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    price=short_price_hint,
+                )
+            else:
+                short_order = short_client.place_order(
+                    spread_info["symbol"],
+                    "short",
+                    notional,
+                    leverage_value,
+                )
+                short_leg = _normalise_order(
+                    order=short_order,
+                    exchange=expensive_exchange,
+                    symbol=spread_info["symbol"],
+                    side="short",
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    fallback_price=short_price_hint,
+                )
+            legs = [leg for leg in (long_leg, short_leg) if leg]
+            result = {
+                "symbol": spread_info["symbol"],
+                "min_spread": float(min_spread),
+                "spread": spread_value,
+                "spread_bps": float(spread_info.get("spread_bps", 0.0)),
+                "cheap_exchange": cheap_exchange,
+                "expensive_exchange": expensive_exchange,
+                "legs": legs,
+                "long_order": long_leg,
+                "short_order": short_leg,
+                "long_plan": long_plan,
+                "short_plan": short_plan,
+                "success": True,
+                "status": "simulated" if dry_run_mode else "executed",
+                "dry_run_mode": dry_run_mode,
+                "simulated": dry_run_mode,
+                "details": spread_info,
+            }
+        except HoldActiveError as exc:
+            error_reason = exc.reason
+            partial_record = None
+            if not dry_run_mode and ((long_leg and not short_leg) or (short_leg and not long_leg)):
+                partial_record = _persist_partial_position(
+                    symbol=spread_info["symbol"],
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    cheap_exchange=cheap_exchange,
+                    expensive_exchange=expensive_exchange,
+                    spread_info=spread_info,
+                    long_leg=long_leg,
+                    short_leg=short_leg,
+                )
+            slo.inc_skipped("hold")
+            result = {
+                "symbol": spread_info["symbol"],
+                "min_spread": float(min_spread),
+                "spread": spread_value,
+                "success": False,
+                "reason": exc.reason,
+                "details": spread_info,
+                "hold_active": True,
+                "partial_position": partial_record,
+                "long_plan": long_plan,
+                "short_plan": short_plan,
+            }
+            _record_failure(exc.reason or "hold_active")
+        except Exception as exc:
+            reason = str(exc)
+            error_reason = reason
+            partial = bool(long_leg and not short_leg and not dry_run_mode)
+            if partial:
+                _log_partial_failure(
+                    symbol=spread_info["symbol"],
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    cheap_exchange=cheap_exchange,
+                    expensive_exchange=expensive_exchange,
+                    reason=reason,
+                    long_leg=long_leg,
+                    short_leg=short_leg,
+                )
+                engage_safety_hold("hedge_leg_failed", source="cross_exchange_hedge")
+                _persist_partial_position(
+                    symbol=spread_info["symbol"],
+                    notional_usdt=notional,
+                    leverage=leverage_value,
+                    cheap_exchange=cheap_exchange,
+                    expensive_exchange=expensive_exchange,
+                    spread_info=spread_info,
+                    long_leg=long_leg,
+                    short_leg=short_leg,
+                )
+            result = {
+                "symbol": spread_info["symbol"],
+                "min_spread": float(min_spread),
+                "spread": spread_value,
+                "success": False,
+                "reason": "short_leg_failed" if partial else "order_failed",
+                "details": spread_info,
+                "long_leg": long_leg,
+                "short_leg": short_leg,
+                "error": reason,
+                "hold_engaged": partial,
+                "long_plan": long_plan,
+                "short_plan": short_plan,
+            }
+            _record_failure(result.get("reason") or reason or "order_failed")
+        finally:
+            long_success = _leg_successful(long_leg)
+            short_success = _leg_successful(short_leg)
+            _record_execution_stat(
+                symbol=spread_info["symbol"],
+                side="long",
+                plan=long_plan,
+                leg=long_leg,
+                success=long_success,
+                dry_run=dry_run_mode,
+                failure_reason=None if long_success else error_reason,
+            )
+            _record_execution_stat(
+                symbol=spread_info["symbol"],
+                side="short",
+                plan=short_plan,
+                leg=short_leg,
+                success=short_success,
+                dry_run=dry_run_mode,
+                failure_reason=None if short_success else error_reason,
+            )
+    
+        final_result = result or {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),
             "spread": spread_value,
             "success": False,
-            "reason": exc.reason,
+            "reason": error_reason or "execution_failed",
             "details": spread_info,
-            "hold_active": True,
-            "partial_position": partial_record,
             "long_plan": long_plan,
             "short_plan": short_plan,
         }
-        _record_failure(exc.reason or "hold_active")
-    except Exception as exc:
-        reason = str(exc)
-        error_reason = reason
-        partial = bool(long_leg and not short_leg and not dry_run_mode)
-        if partial:
-            _log_partial_failure(
-                symbol=spread_info["symbol"],
-                notional_usdt=notional,
-                leverage=leverage_value,
-                cheap_exchange=cheap_exchange,
-                expensive_exchange=expensive_exchange,
-                reason=reason,
-                long_leg=long_leg,
-                short_leg=short_leg,
-            )
-            engage_safety_hold("hedge_leg_failed", source="cross_exchange_hedge")
-            _persist_partial_position(
-                symbol=spread_info["symbol"],
-                notional_usdt=notional,
-                leverage=leverage_value,
-                cheap_exchange=cheap_exchange,
-                expensive_exchange=expensive_exchange,
-                spread_info=spread_info,
-                long_leg=long_leg,
-                short_leg=short_leg,
-            )
-        result = {
-            "symbol": spread_info["symbol"],
-            "min_spread": float(min_spread),
-            "spread": spread_value,
-            "success": False,
-            "reason": "short_leg_failed" if partial else "order_failed",
-            "details": spread_info,
-            "long_leg": long_leg,
-            "short_leg": short_leg,
-            "error": reason,
-            "hold_engaged": partial,
-            "long_plan": long_plan,
-            "short_plan": short_plan,
-        }
-        _record_failure(result.get("reason") or reason or "order_failed")
-    finally:
-        long_success = _leg_successful(long_leg)
-        short_success = _leg_successful(short_leg)
-        _record_execution_stat(
-            symbol=spread_info["symbol"],
-            side="long",
-            plan=long_plan,
-            leg=long_leg,
-            success=long_success,
-            dry_run=dry_run_mode,
-            failure_reason=None if long_success else error_reason,
-        )
-        _record_execution_stat(
-            symbol=spread_info["symbol"],
-            side="short",
-            plan=short_plan,
-            leg=short_leg,
-            success=short_success,
-            dry_run=dry_run_mode,
-            failure_reason=None if short_success else error_reason,
-        )
-
-    final_result = result or {
-        "symbol": spread_info["symbol"],
-        "min_spread": float(min_spread),
-        "spread": spread_value,
-        "success": False,
-        "reason": error_reason or "execution_failed",
-        "details": spread_info,
-        "long_plan": long_plan,
-        "short_plan": short_plan,
-    }
-    if final_result.get("success") and not final_result.get("simulated"):
-        _record_success()
-    return final_result
+        if final_result.get("success") and not final_result.get("simulated"):
+            _record_success()
+        return final_result

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 from ..audit_log import log_operator_action
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
+from ..metrics import slo
 from ..runtime_state_store import (
     load_runtime_payload as _store_load_runtime_payload,
     write_runtime_payload as _store_write_runtime_payload,
@@ -1088,6 +1089,8 @@ def evaluate_exchange_watchdog(*, context: str = "runtime") -> str | None:
     with _STATE_LOCK:
         previous_reason = str(_STATE.safety.hold_reason or "")
     engaged = engage_safety_hold(hold_reason, source=f"watchdog:{exchange}")
+    if engaged:
+        slo.inc_skipped("watchdog")
     if engaged or previous_reason != hold_reason:
         log_operator_action(
             "system",

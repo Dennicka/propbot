@@ -11,6 +11,7 @@ from typing import Dict, Mapping, Optional
 from .auto_hold import auto_hold_on_daily_loss_breach
 from .telemetry import record_risk_skip
 
+from ..metrics import slo
 from ..runtime_state_store import load_runtime_payload
 from ..services.runtime import get_state
 
@@ -448,6 +449,7 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
         daily_cap = get_daily_loss_cap()
         if daily_cap.is_breached():
             record_risk_skip(strategy_name, "daily_loss_cap")
+            slo.inc_skipped("daily_loss_cap")
             snapshot = get_daily_loss_cap_state()
             details = {"daily_loss_cap": snapshot, "bot_loss_cap": snapshot}
             hold_engaged = auto_hold_on_daily_loss_breach(
@@ -494,6 +496,7 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
     details = result.get("details")
     reason_code = _reason_code_from_validation(result)
     record_risk_skip(strategy_name, reason_code)
+    slo.inc_skipped("risk_gate")
     response: Dict[str, object | None] = {
         "allowed": False,
         "state": "SKIPPED_BY_RISK",

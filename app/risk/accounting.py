@@ -33,6 +33,7 @@ import threading
 from typing import Dict, Iterable, Mapping, Tuple
 
 from ..budget.strategy_budget import StrategyBudgetManager
+from ..metrics import slo
 from ..services.runtime import get_state
 from .auto_hold import auto_hold_on_daily_loss_breach
 from .core import FeatureFlags, RiskGovernor, get_risk_governor
@@ -360,6 +361,7 @@ def record_intent(
             and is_daily_loss_cap_breached()
         ):
             record_risk_skip(strategy, "daily_loss_cap")
+            slo.inc_skipped("daily_loss_cap")
             cap_snapshot = get_bot_loss_cap_state()
             loss_cap_details = {
                 "daily_loss_cap": cap_snapshot,
@@ -411,6 +413,7 @@ def record_intent(
             details = validation.get("details")
             reason_code = _reason_code_from_details(details, default="caps_exceeded")
             record_risk_skip(strategy, reason_code)
+            slo.inc_skipped("risk_gate")
             denial_payload = {
                 "source": "accounting",
                 "strategy": strategy,
@@ -446,6 +449,7 @@ def record_intent(
             if limit_value is not None:
                 details["limit"] = limit_value
             record_risk_skip(strategy, "budget_exceeded")
+            slo.inc_skipped("risk_gate")
             _LAST_DENIAL = {
                 "source": "accounting",
                 "strategy": strategy,

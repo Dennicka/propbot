@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from ..audit_log import log_operator_action
+from ..metrics import slo
 from ..services.runtime import engage_safety_hold, send_notifier_alert
 
 
@@ -45,6 +46,8 @@ def auto_hold_on_daily_loss_breach(
     engaged = engage_safety_hold(AUTO_HOLD_REASON, source=source)
     if not engaged:
         return False
+
+    slo.inc_skipped("daily_loss_cap")
 
     realized = _extract_float(payload, "realized_pnl_today_usdt")
     if realized is None:
