@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import logging
 from collections.abc import Mapping as ABCMapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,6 +11,10 @@ from typing import Dict, Mapping, Optional, Tuple
 
 from .runtime_state_store import load_runtime_payload
 from .services.runtime import get_state
+from .risk.core import _current_risk_metrics
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _env_int(name: str) -> Optional[int]:
@@ -56,57 +61,7 @@ def check_risk_gates() -> Dict[str, object | None]:
     dry_run_mode = bool(getattr(control, "dry_run_mode", False) or getattr(control, "dry_run", False))
     autopilot_enabled = bool(getattr(autopilot, "enabled", False))
 
-    runtime_payload = load_runtime_payload()
-    positions_payload = runtime_payload.get("positions") if isinstance(runtime_payload, Mapping) else None
-
-    open_positions = 0
-    total_notional = 0.0
-
-    risk_snapshot = getattr(safety, "risk_snapshot", {}) if safety is not None else {}
-    if isinstance(risk_snapshot, Mapping):
-        snapshot_notional = risk_snapshot.get("total_notional_usd")
-        if isinstance(snapshot_notional, (int, float)):
-            total_notional = float(snapshot_notional)
-        per_venue = risk_snapshot.get("per_venue")
-        if isinstance(per_venue, Mapping):
-            counted = 0
-            for payload in per_venue.values():
-                if not isinstance(payload, Mapping):
-                    continue
-                count_value = payload.get("open_positions_count")
-                try:
-                    counted += int(float(count_value))
-                except (TypeError, ValueError):
-                    continue
-            if counted:
-                open_positions = counted
-
-    if open_positions == 0 or total_notional == 0.0:
-        if isinstance(positions_payload, list):
-            for entry in positions_payload:
-                if not isinstance(entry, ABCMapping):
-                    continue
-                status = str(entry.get("status") or "").lower()
-                if status not in {"open", "partial"}:
-                    continue
-                if bool(entry.get("simulated")):
-                    continue
-                open_positions += 1
-                legs = entry.get("legs")
-                if isinstance(legs, list):
-                    for leg in legs:
-                        if not isinstance(leg, ABCMapping):
-                            continue
-                        try:
-                            leg_notional = float(leg.get("notional_usdt") or 0.0)
-                        except (TypeError, ValueError):
-                            continue
-                        total_notional += abs(leg_notional)
-                else:
-                    try:
-                        total_notional += abs(float(entry.get("notional_usdt") or 0.0))
-                    except (TypeError, ValueError):
-                        continue
+    metrics = _current_risk_metrics()
 
     max_open_positions = _env_int("MAX_OPEN_POSITIONS")
     max_total_notional = _env_float("MAX_TOTAL_NOTIONAL_USDT")
@@ -117,10 +72,10 @@ def check_risk_gates() -> Dict[str, object | None]:
     if hold_active or safe_mode:
         risk_caps_ok = False
         reason_if_blocked = "hold_active"
-    elif max_open_positions and max_open_positions > 0 and open_positions > max_open_positions:
+    elif max_open_positions and max_open_positions > 0 and metrics.open_positions > max_open_positions:
         risk_caps_ok = False
         reason_if_blocked = "risk_limit"
-    elif max_total_notional and max_total_notional > 0 and total_notional > max_total_notional:
+    elif max_total_notional and max_total_notional > 0 and metrics.total_notional > max_total_notional:
         risk_caps_ok = False
         reason_if_blocked = "risk_limit"
 

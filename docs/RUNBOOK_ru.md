@@ -23,6 +23,20 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
   3. `POST /api/arb/execute` — с IOC/Post Only параметрами (см. `configs/config.*.yaml`).
 - После сделки — `POST /api/hedge/flatten` для reduceOnly закрытия всех ног.
 
+## Pre-trade risk gate
+- Перед тем как выводить систему из SAFE_MODE и отдавать `/api/arb/execute`/
+  `/api/arb/confirm`, убедитесь, что `risk_gate(order_intent)` разрешает сделку.
+- Проверка активируется только при `RISK_CHECKS_ENABLED=1`
+  (`FeatureFlags.risk_checks_enabled()`); без флага gate отвечает
+  `{"allowed": true, "reason": "disabled"}` и не блокирует сделки.
+- При активном флаге хелпер суммирует `intent_notional` и прирост позиций с
+  текущим snapshot'ом (`safety.risk_snapshot`) и проверяет лимиты
+  `MAX_TOTAL_NOTIONAL_USDT` и `MAX_OPEN_POSITIONS` через `RiskGovernor`.
+- При превышении API вернёт HTTP 200 с телом вида
+  `{ "status": "skipped", "reason": "risk.max_notional", "cap": "max_total_notional_usdt" }`
+  (или `risk.max_open_positions`) и не отправит ордера. В DRY_RUN режимах
+  проверка не срабатывает, можно безопасно тренироваться.
+
 ## 4. Обработка инцидентов
 - P0-гард переведён в WARN/HOLD → сервис переходит в HOLD.
 - Проверить `/api/ui/status/components` (компонент `runaway_breaker`, `cancel_on_disconnect` и т.д.).
