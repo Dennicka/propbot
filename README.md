@@ -400,14 +400,18 @@ flow to clear HOLD.
 ## Pre-trade risk gate
 
 Routers and orchestrator flows now run a lightweight `risk_gate(order_intent)`
-helper before dispatching manual hedges or orchestrated plans. The helper reads
-the current exposure snapshot and verifies that adding the requested intent
-(`intent_notional`, optional position increments) would stay inside
-`MAX_TOTAL_NOTIONAL_USDT` and `MAX_OPEN_POSITIONS`. When a cap would be
-breached the API responds with `{"ok": false, "reason": "risk.max_notional"}`
-or `{..., "reason": "risk.max_open_positions"}` and skips order submission.
-Dry-run executions bypass the gate so operators can rehearse flows without
-touching live limits.
+helper before dispatching manual hedges or orchestrated plans. The helper first
+checks `FeatureFlags.risk_checks_enabled()` (backed by the
+`RISK_CHECKS_ENABLED` environment flag, disabled by default). When the flag is
+off the gate returns `{"allowed": true, "reason": "disabled"}` and has no
+side effects. With the flag enabled the gate reads the current exposure snapshot
+and verifies that adding the requested intent (`intent_notional`, optional
+position increments) would stay inside `MAX_TOTAL_NOTIONAL_USDT` and
+`MAX_OPEN_POSITIONS`. Manual routes **skip without raising** when a cap would be
+breached, returning an HTTP 200 body such as
+`{"status": "skipped", "reason": "risk.max_notional", "cap": "max_total_notional_usdt"}`
+so operators can see why the order was ignored. Dry-run executions bypass the
+gate so operators can rehearse flows without touching live limits.
 
 - **Risk limits**
   - `MAX_POSITION_USDT` and `MAX_POSITION_USDT__<SYMBOL>` — per-symbol notional

@@ -1,63 +1,73 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
-from app import orchestrator
-
-
-def _make_state(total_notional: float, open_positions: int) -> SimpleNamespace:
-    risk_snapshot = {
-        "total_notional_usd": total_notional,
-        "per_venue": {"binance": {"open_positions_count": open_positions}},
-    }
-    safety = SimpleNamespace(hold_active=False, risk_snapshot=risk_snapshot)
-    control = SimpleNamespace(safe_mode=False, dry_run=False, dry_run_mode=False)
-    autopilot = SimpleNamespace(enabled=False)
-    return SimpleNamespace(safety=safety, control=control, autopilot=autopilot)
+from app.risk import core as risk_core
+from app.risk.core import _RiskMetrics
 
 
 @pytest.fixture(autouse=True)
 def _reset_env(monkeypatch):
+    monkeypatch.delenv("RISK_CHECKS_ENABLED", raising=False)
     monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USDT", raising=False)
+    monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USD", raising=False)
     monkeypatch.delenv("MAX_OPEN_POSITIONS", raising=False)
+    risk_core.reset_risk_governor_for_tests()
+    yield
+    risk_core.reset_risk_governor_for_tests()
 
 
-def test_risk_gate_blocks_total_notional(monkeypatch):
-    state = _make_state(total_notional=900.0, open_positions=2)
-    monkeypatch.setattr(orchestrator, "get_state", lambda: state)
-    monkeypatch.setattr(orchestrator, "load_runtime_payload", lambda: {})
+def _stub_metrics(total_notional: float, open_positions: int) -> _RiskMetrics:
+    return _RiskMetrics(total_notional=total_notional, open_positions=open_positions)
+
+
+def test_risk_gate_allows_when_flag_disabled(monkeypatch):
+    monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(0.0, 0))
+
+    result = risk_core.risk_gate({"intent_notional": 200.0})
+
+    assert result["allowed"] is True
+    assert result["reason"] == "disabled"
+
+
+def test_risk_gate_allows_under_caps(monkeypatch):
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
     monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "1000")
-    monkeypatch.setenv("MAX_OPEN_POSITIONS", "10")
-
-    result = orchestrator.risk_gate({"intent_notional": 200.0, "intent_open_positions": 1})
-
-    assert result["ok"] is False
-    assert result["reason"] == "risk.max_notional"
-
-
-def test_risk_gate_blocks_open_positions(monkeypatch):
-    state = _make_state(total_notional=100.0, open_positions=3)
-    monkeypatch.setattr(orchestrator, "get_state", lambda: state)
-    monkeypatch.setattr(orchestrator, "load_runtime_payload", lambda: {})
-    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "100000")
-    monkeypatch.setenv("MAX_OPEN_POSITIONS", "3")
-
-    result = orchestrator.risk_gate({"intent_notional": 50.0, "intent_open_positions": 2})
-
-    assert result["ok"] is False
-    assert result["reason"] == "risk.max_open_positions"
-
-
-def test_risk_gate_allows_intent_within_caps(monkeypatch):
-    state = _make_state(total_notional=400.0, open_positions=2)
-    monkeypatch.setattr(orchestrator, "get_state", lambda: state)
-    monkeypatch.setattr(orchestrator, "load_runtime_payload", lambda: {})
-    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "1200")
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "5")
+    risk_core.reset_risk_governor_for_tests()
+    monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(100.0, 1))
 
-    result = orchestrator.risk_gate({"intent_notional": 200.0, "intent_open_positions": 1})
+    intent = {
+        "intent_notional": 200.0,
+        "intent_open_positions": 1,
+        "symbol": "BTCUSDT",
+        "venue": "manual_test",
+        "strategy": "unit_test",
+        "side": "buy",
+    }
+    result = risk_core.risk_gate(intent)
 
-    assert result["ok"] is True
-    assert result["reason"] is None
+    assert result["allowed"] is True
+    assert result["reason"] == "ok"
+
+
+def test_risk_gate_blocks_when_caps_breached(monkeypatch):
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
+    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "1000")
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "3")
+    risk_core.reset_risk_governor_for_tests()
+    monkeypatch.setattr(risk_core, "_current_risk_metrics", lambda: _stub_metrics(950.0, 3))
+
+    intent = {
+        "intent_notional": 200.0,
+        "intent_open_positions": 1,
+        "symbol": "BTCUSDT",
+        "venue": "manual_test",
+        "strategy": "unit_test",
+        "side": "buy",
+    }
+    result = risk_core.risk_gate(intent)
+
+    assert result["allowed"] is False
+    assert result["reason"] == "risk.max_notional"
+    assert result["cap"] == "max_total_notional_usdt"

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..services import arbitrage
-from ..orchestrator import risk_gate
+from ..risk.core import risk_gate
 from ..services.runtime import (
     HoldActiveError,
     get_last_opportunity_state,
@@ -27,6 +27,34 @@ router = APIRouter()
 
 
 STRATEGY_NAME = "cross_exchange_arb"
+
+
+def _build_manual_intent(
+    *, symbol: str, side: str, notional: float, strategy: str, venue: str
+) -> dict:
+    return {
+        "symbol": symbol,
+        "side": side,
+        "strategy": strategy,
+        "venue": venue,
+        "intent_notional": max(float(notional), 0.0),
+        "intent_open_positions": 1,
+    }
+
+
+def _maybe_skip_for_risk(intent: Mapping[str, object]) -> dict | None:
+    gate_result = risk_gate(intent)
+    if gate_result.get("allowed", False):
+        return None
+    response = {
+        "status": "skipped",
+        "allowed": False,
+        "reason": gate_result.get("reason"),
+        "cap": gate_result.get("cap"),
+        "intent": dict(intent),
+    }
+    response.update({k: v for k, v in gate_result.items() if k not in response})
+    return response
 
 
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
@@ -172,13 +200,16 @@ async def execute(plan_body: ExecutePayload) -> dict:
         if not can_open:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
         if not state.control.dry_run:
-            gate_result = risk_gate(
-                {"intent_notional": plan_body.notion_usdt, "intent_open_positions": 1}
+            intent = _build_manual_intent(
+                symbol=plan_body.symbol,
+                side="multi-leg",
+                notional=plan_body.notion_usdt,
+                strategy=STRATEGY_NAME,
+                venue="manual_cross",
             )
-            if not gate_result.get("ok", False):
-                gate_result.setdefault("ok", False)
-                gate_result.setdefault("executed", False)
-                return gate_result
+            skip_response = _maybe_skip_for_risk(intent)
+            if skip_response is not None:
+                return skip_response
         trade_result = execute_hedged_trade(
             plan_body.symbol,
             plan_body.notion_usdt,
@@ -247,11 +278,23 @@ async def execute(plan_body: ExecutePayload) -> dict:
         detail = plan.reason or "plan not viable"
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
     if not dry_run:
-        gate_result = risk_gate({"intent_notional": plan.notional, "intent_open_positions": 1})
-        if not gate_result.get("ok", False):
-            gate_result.setdefault("ok", False)
-            gate_result.setdefault("executed", False)
-            return gate_result
+        legs = list(getattr(plan, "legs", []) or [])
+        venue = legs[0].ex if legs else "manual_plan"
+        side = legs[0].side if legs else "multi-leg"
+        symbol = getattr(plan, "symbol", None) or payload.get("symbol") or "manual_plan"
+        notional_value = getattr(plan, "notional", None)
+        if notional_value is None:
+            notional_value = payload.get("notional") or payload.get("notional_usdt") or 0.0
+        intent = _build_manual_intent(
+            symbol=str(symbol),
+            side=str(side),
+            notional=float(notional_value),
+            strategy=STRATEGY_NAME,
+            venue=str(venue),
+        )
+        skip_response = _maybe_skip_for_risk(intent)
+        if skip_response is not None:
+            return skip_response
     try:
         report = await arbitrage.execute_plan_async(plan)
     except HoldActiveError as exc:
@@ -306,11 +349,18 @@ async def confirm(payload: ConfirmPayload) -> dict:
         set_last_opportunity_state(opportunity, "blocked_by_risk")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
     if not state.control.dry_run:
-        gate_result = risk_gate({"intent_notional": notional, "intent_open_positions": 1})
-        if not gate_result.get("ok", False):
-            gate_result.setdefault("ok", False)
-            gate_result.setdefault("executed", False)
-            return gate_result
+        venue = str(opportunity.get("cheap_exchange") or opportunity.get("venue") or "manual_confirm")
+        side = str(opportunity.get("direction") or "multi-leg")
+        intent = _build_manual_intent(
+            symbol=str(opportunity.get("symbol")),
+            side=side,
+            notional=notional,
+            strategy=STRATEGY_NAME,
+            venue=venue,
+        )
+        skip_response = _maybe_skip_for_risk(intent)
+        if skip_response is not None:
+            return skip_response
     min_spread = float(opportunity.get("min_spread", opportunity.get("spread", 0.0)) or 0.0)
     trade_result = execute_hedged_trade(
         str(opportunity.get("symbol")),

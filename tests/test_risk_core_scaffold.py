@@ -109,6 +109,6 @@ class TestStrategyBudgetManager:
 class TestFeatureFlags:
     def test_risk_checks_disabled_by_default(self, monkeypatch) -> None:
         monkeypatch.delenv("RISK_CHECKS_ENABLED", raising=False)
-        module = importlib.import_module("app.risk.flags")
+        module = importlib.import_module("app.risk.core")
         importlib.reload(module)
-        assert module.FeatureFlags.RISK_CHECKS_ENABLED is False
+        assert module.FeatureFlags.risk_checks_enabled() is False

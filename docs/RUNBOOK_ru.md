@@ -25,12 +25,16 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
 
 ## Pre-trade risk gate
 - Перед тем как выводить систему из SAFE_MODE и отдавать `/api/arb/execute`/
-  `/api/arb/confirm`, убедитесь, что `risk_gate(order_intent)` возвращает `ok`.
-- Хелпер суммирует `intent_notional` и прирост позиций с текущим snapshot'ом
-  (`safety.risk_snapshot`) и проверяет лимиты `MAX_TOTAL_NOTIONAL_USDT` и
-  `MAX_OPEN_POSITIONS` через `RiskGovernor`.
-- При превышении API вернёт `{ "ok": false, "reason": "risk.max_notional" }`
-  или `"risk.max_open_positions"` и не отправит ордера. В DRY_RUN режимах
+  `/api/arb/confirm`, убедитесь, что `risk_gate(order_intent)` разрешает сделку.
+- Проверка активируется только при `RISK_CHECKS_ENABLED=1`
+  (`FeatureFlags.risk_checks_enabled()`); без флага gate отвечает
+  `{"allowed": true, "reason": "disabled"}` и не блокирует сделки.
+- При активном флаге хелпер суммирует `intent_notional` и прирост позиций с
+  текущим snapshot'ом (`safety.risk_snapshot`) и проверяет лимиты
+  `MAX_TOTAL_NOTIONAL_USDT` и `MAX_OPEN_POSITIONS` через `RiskGovernor`.
+- При превышении API вернёт HTTP 200 с телом вида
+  `{ "status": "skipped", "reason": "risk.max_notional", "cap": "max_total_notional_usdt" }`
+  (или `risk.max_open_positions`) и не отправит ордера. В DRY_RUN режимах
   проверка не срабатывает, можно безопасно тренироваться.
 
 ## 4. Обработка инцидентов
