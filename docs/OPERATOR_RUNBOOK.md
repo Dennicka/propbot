@@ -235,6 +235,24 @@
   «open positions», «realized PnL today» и `budget used / limit`. Строки, где
   лимит или дневной убыток исчерпаны, подсвечиваются и получают ярлык `breach`.
 
+## Bot-wide daily loss cap
+
+- Глобальный дневной лимит убытков настраивается переменной окружения
+  `DAILY_LOSS_CAP_USDT`. Пустое значение или `0` полностью отключает защиту.
+- Учёт ведётся по суммарному реализованному PnL всех стратегий. При активных
+  `RISK_CHECKS_ENABLED=1`, `RISK_ENFORCE_CAPS=1` и в режиме без DRY_RUN новые
+  intents блокируются с `state=SKIPPED_BY_RISK`, `reason=daily_loss_cap`.
+- Автосброс выполняется в 00:00 UTC (тот же epoch-day, что у бюджетов). Ручных
+  команд сброса нет — дождитесь смены суток, чтобы лимит обновился.
+- `/api/ui/risk_snapshot` и `/ui/dashboard` получают блок `bot_loss_cap` c
+  полями `cap_usdt`, `realized_today_usdt`, `remaining_usdt`, `breached`. На
+  дашборде отображается отдельный статус «Daily loss cap» с цветовым индикатором.
+- Метрики Prometheus: `bot_daily_loss_realized_usdt`,
+  `bot_daily_loss_cap_usdt`. Счётчик `risk_skips_total{reason="daily_loss_cap"}`
+  помогает следить за количеством отказов.
+- При срабатывании лимита проверьте, что не активирован `DRY_RUN_MODE` и
+  `RISK_CHECKS_ENABLED`. До полуночи UTC новые сделки не будут приниматься.
+
 ## Autopilot resume safety
 
 - Автопилот больше не снимает HOLD автоматически, если StrategyRiskManager

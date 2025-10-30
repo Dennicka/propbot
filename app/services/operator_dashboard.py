@@ -716,6 +716,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     accounting_simulated = accounting_totals.get("simulated")
     if not isinstance(accounting_simulated, Mapping):
         accounting_simulated = {}
+    bot_loss_cap_raw = risk_accounting_snapshot.get("bot_loss_cap")
+    bot_loss_cap = bot_loss_cap_raw if isinstance(bot_loss_cap_raw, Mapping) else {}
 
     strategy_risk_snapshot = context.get("strategy_risk_snapshot", {}) or {}
     if not isinstance(strategy_risk_snapshot, Mapping):
@@ -1721,6 +1723,24 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append(
         f"<p><strong>Realized PnL today:</strong> {_fmt(accounting_totals.get('realized_pnl_today'))}</p>"
     )
+    if bot_loss_cap:
+        breached = bool(bot_loss_cap.get("breached"))
+        status_color = "#b91c1c" if breached else "#166534"
+        status_label = "BREACHED" if breached else "OK"
+        cap_value = bot_loss_cap.get("cap_usdt")
+        realized_value = bot_loss_cap.get("realized_today_usdt")
+        remaining_value = bot_loss_cap.get("remaining_usdt")
+        parts.append(
+            "<div style=\"margin:0.75rem 0;padding:0.75rem 1rem;border:1px solid #d0d5dd;"
+            "background:#f9fafb;border-radius:6px;\">"
+            f"<p style=\"margin:0 0 0.35rem 0;\"><strong>Daily loss cap:</strong> "
+            f"<span style=\"color:{status_color};font-weight:700;\">{status_label}</span></p>"
+            f"<p style=\"margin:0;font-size:0.95rem;\">Cap: {_fmt(cap_value)} · "
+            f"Realized: {_fmt(realized_value)} · Remaining: {_fmt(remaining_value)}</p>"
+            "</div>"
+        )
+    else:
+        parts.append("<p><strong>Daily loss cap:</strong> not configured</p>")
     if accounting_totals.get("budget_used") not in (None, ""):
         parts.append(
             f"<p><strong>Loss budget used:</strong> {_fmt(accounting_totals.get('budget_used'))}</p>"

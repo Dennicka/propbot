@@ -424,6 +424,29 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
     state = get_state()
     control = getattr(state, "control", None)
     dry_run = bool(getattr(control, "dry_run", False)) or FeatureFlags.dry_run_mode()
+    strategy_name = None
+    if isinstance(order_intent, Mapping):
+        strategy_name = order_intent.get("strategy")
+
+    if (
+        FeatureFlags.risk_checks_enabled()
+        and FeatureFlags.enforce_caps()
+        and not dry_run
+    ):
+        from .accounting import get_bot_loss_cap_state, is_loss_cap_breached
+
+        if is_loss_cap_breached():
+            record_risk_skip(strategy_name, "daily_loss_cap")
+            details = {"bot_loss_cap": get_bot_loss_cap_state()}
+            response: Dict[str, object | None] = {
+                "allowed": False,
+                "state": "SKIPPED_BY_RISK",
+                "reason": "daily_loss_cap",
+                "details": details,
+            }
+            if strategy_name is not None:
+                response["strategy"] = strategy_name
+            return response
 
     try:
         result = governor.validate(
@@ -450,9 +473,6 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
 
     details = result.get("details")
     reason_code = _reason_code_from_validation(result)
-    strategy_name = None
-    if isinstance(order_intent, Mapping):
-        strategy_name = order_intent.get("strategy")
     record_risk_skip(strategy_name, reason_code)
     response: Dict[str, object | None] = {
         "allowed": False,
