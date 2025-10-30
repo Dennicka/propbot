@@ -6,6 +6,33 @@ from app.exchange_watchdog import ExchangeWatchdog
 from app.main import app
 
 
+def test_exchange_watchdog_tracks_transitions() -> None:
+    watchdog = ExchangeWatchdog()
+
+    watchdog.check_once(lambda: {"binance": {"ok": True}})
+    result = watchdog.check_once(
+        lambda: {"binance": {"ok": False, "reason": "timeout"}}
+    )
+
+    assert "binance" in result.transitions
+    transition = result.transitions["binance"]
+    assert transition.previous == "OK"
+    assert transition.current == "DEGRADED"
+    assert transition.reason == "timeout"
+
+    auto_transition = watchdog.mark_auto_hold("binance", reason="timeout")
+    assert auto_transition is not None
+    assert auto_transition.previous == "DEGRADED"
+    assert auto_transition.current == "AUTO_HOLD"
+
+    recent = watchdog.get_recent_transitions(window_minutes=50)
+    assert recent
+    latest = recent[0]
+    assert latest["current"] == "AUTO_HOLD"
+    assert latest["previous"] == "DEGRADED"
+    assert latest["reason"] == "timeout"
+
+
 def test_exchange_health_endpoint_viewer_access(monkeypatch) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "viewer-token")

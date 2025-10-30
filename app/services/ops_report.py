@@ -123,9 +123,19 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
     strategy_status_snapshot = build_strategy_status()
     watchdog_instance = get_exchange_watchdog()
     watchdog_snapshot = watchdog_instance.get_state()
+    watchdog_recent = watchdog_instance.get_recent_transitions(window_minutes=50)
+    degraded_reasons = {}
+    if isinstance(watchdog_snapshot, Mapping):
+        for name, entry in watchdog_snapshot.items():
+            payload = entry if isinstance(entry, Mapping) else {}
+            if not bool(payload.get("ok", False)):
+                degraded_reasons[str(name)] = str(payload.get("reason") or "")
     watchdog_report = {
         "overall_ok": watchdog_instance.overall_ok(),
+        "watchdog_ok": watchdog_instance.overall_ok(),
         "exchanges": watchdog_snapshot,
+        "degraded_reasons": degraded_reasons,
+        "recent_transitions": watchdog_recent,
     }
     daily_loss_cap_snapshot = get_daily_loss_cap_state()
 
@@ -328,6 +338,20 @@ def _iter_watchdog_rows(snapshot: Mapping[str, Any]) -> Iterable[dict[str, str]]
             "key": "overall_ok",
             "value": _stringify(overall),
         }
+    if "watchdog_ok" in snapshot:
+        yield {
+            "section": "watchdog",
+            "key": "watchdog_ok",
+            "value": _stringify(snapshot.get("watchdog_ok")),
+        }
+    degraded = snapshot.get("degraded_reasons")
+    if isinstance(degraded, Mapping):
+        for name in sorted(degraded):
+            yield {
+                "section": "watchdog_degraded",
+                "key": str(name),
+                "value": _stringify(degraded.get(name)),
+            }
     exchanges = _coerce_mapping(snapshot.get("exchanges"))
     for name in sorted(exchanges):
         entry = _coerce_mapping(exchanges.get(name))

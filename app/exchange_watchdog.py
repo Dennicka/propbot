@@ -5,6 +5,7 @@ from __future__ import annotations
 from .watchdog.exchange_watchdog import (
     ExchangeWatchdog,
     WatchdogCheckResult,
+    WatchdogStateTransition,
     get_exchange_watchdog,
     reset_exchange_watchdog_for_tests,
 )
@@ -12,6 +13,7 @@ from .watchdog.exchange_watchdog import (
 __all__ = [
     "ExchangeWatchdog",
     "WatchdogCheckResult",
+    "WatchdogStateTransition",
     "get_exchange_watchdog",
     "reset_exchange_watchdog_for_tests",
 ]

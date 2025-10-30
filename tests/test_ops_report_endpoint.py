@@ -12,6 +12,12 @@ from app.strategy_risk import get_strategy_risk_manager, reset_strategy_risk_man
 from app.strategy_pnl import reset_state_for_tests as reset_strategy_pnl_state
 from positions import create_position, reset_positions
 
+from app.watchdog.exchange_watchdog import (
+    ExchangeWatchdog,
+    get_exchange_watchdog,
+    reset_exchange_watchdog_for_tests,
+)
+
 
 class _DummyAutopilot:
     def as_dict(self) -> dict[str, Any]:
@@ -99,6 +105,13 @@ def ops_report_environment(monkeypatch, tmp_path):
     risk_manager.record_failure("alpha", "spread_below_threshold")
     risk_accounting.record_fill("alpha", 0.0, -80.0, simulated=False)
 
+    reset_exchange_watchdog_for_tests()
+    watchdog = get_exchange_watchdog()
+    watchdog.check_once(lambda: {"binance": {"ok": False, "reason": "timeout"}})
+    monkeypatch.setattr(
+        "app.services.ops_report.get_exchange_watchdog", lambda: watchdog
+    )
+
     dummy_state = SimpleNamespace(
         control=SimpleNamespace(
             mode="HOLD",
@@ -175,6 +188,7 @@ def ops_report_environment(monkeypatch, tmp_path):
             "auditor": {"Authorization": "Bearer CCC"},
         }
     finally:
+        reset_exchange_watchdog_for_tests()
         reset_strategy_budget_manager_for_tests()
         reset_strategy_risk_manager_for_tests()
         reset_strategy_pnl_state()
@@ -202,6 +216,13 @@ def test_ops_report_json_accessible_for_roles(
     assert payload["pnl"]["unrealized_pnl_usdt"] == 42.0
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
+    watchdog_payload = payload.get("watchdog")
+    assert watchdog_payload["watchdog_ok"] is False
+    assert watchdog_payload["overall_ok"] is False
+    assert watchdog_payload["degraded_reasons"].get("binance") == "timeout"
+    transitions = watchdog_payload.get("recent_transitions")
+    assert isinstance(transitions, list)
+    assert transitions
     daily_loss = payload["daily_loss_cap"]
     assert daily_loss["max_daily_loss_usdt"] == pytest.approx(200.0)
     assert daily_loss["losses_usdt"] == pytest.approx(80.0)
@@ -250,5 +271,15 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
     )
     assert any(
         row["section"] == "daily_loss_cap" and row["key"] == "losses_usdt" and row["value"] == "80.0"
+        for row in rows
+    )
+    assert any(
+        row["section"] == "watchdog" and row["key"] == "watchdog_ok" and row["value"] == "False"
+        for row in rows
+    )
+    assert any(
+        row["section"] == "watchdog_degraded"
+        and row["key"] == "binance"
+        and row["value"] == "timeout"
         for row in rows
     )

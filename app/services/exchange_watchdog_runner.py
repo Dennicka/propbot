@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Mapping
 
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from . import runtime
 from ..watchdog.exchange_watchdog import (
     ExchangeWatchdog,
     WatchdogCheckResult,
+    WatchdogStateTransition,
     get_exchange_watchdog,
 )
 
@@ -104,26 +106,51 @@ class ExchangeWatchdogRunner:
                 continue
         LOGGER.info("exchange watchdog loop stopped")
 
-    def _handle_transitions(self, report: WatchdogCheckResult) -> None:
-        notify = _env_flag("NOTIFY_WATCHDOG")
-        if not notify:
+    def _maybe_emit_transition_alert(
+        self, exchange: str, transition: WatchdogStateTransition
+    ) -> None:
+        if not _env_flag("NOTIFY_WATCHDOG"):
             return
-        for exchange, (previous, current) in report.transitions.items():
-            status = "OK" if current else "FAIL"
-            headline = f"[WATCHDOG] {exchange} {status}"
-            extra = {
-                "exchange": exchange,
-                "previous": previous,
-                "current": current,
-            }
-            try:
-                notifier.emit_alert(
-                    "watchdog_status",
-                    headline,
-                    extra=extra,
-                )
-            except Exception:  # pragma: no cover - notification errors ignored
-                LOGGER.debug("failed to emit watchdog alert", exc_info=True)
+        previous = transition.previous.upper()
+        current = transition.current.upper()
+        interesting = {
+            ("OK", "DEGRADED"),
+            ("DEGRADED", "OK"),
+            ("DEGRADED", "AUTO_HOLD"),
+            ("AUTO_HOLD", "OK"),
+        }
+        if (previous, current) not in interesting:
+            return
+        reason = transition.reason or "n/a"
+        auto_hold = bool(transition.auto_hold)
+        display_previous = "DEGRADED" if previous == "AUTO_HOLD" and current == "OK" else previous
+        timestamp_iso = datetime.fromtimestamp(
+            transition.timestamp, tz=timezone.utc
+        ).isoformat()
+        headline = (
+            f"[WATCHDOG] {exchange}: {display_previous} -> {current}. "
+            f"reason={reason} (auto_hold={str(auto_hold).lower()})"
+        )
+        extra = {
+            "exchange": exchange,
+            "previous": previous,
+            "current": current,
+            "reason": reason,
+            "auto_hold": auto_hold,
+            "timestamp": timestamp_iso,
+        }
+        try:
+            notifier.emit_alert(
+                "watchdog_status",
+                headline,
+                extra=extra,
+            )
+        except Exception:  # pragma: no cover - notification errors ignored
+            LOGGER.debug("failed to emit watchdog alert", exc_info=True)
+
+    def _handle_transitions(self, report: WatchdogCheckResult) -> None:
+        for exchange, transition in report.transitions.items():
+            self._maybe_emit_transition_alert(exchange, transition)
 
     async def _apply_policies(self, report: WatchdogCheckResult) -> None:
         overall_ok = self._watchdog.overall_ok()
@@ -132,10 +159,16 @@ class ExchangeWatchdogRunner:
         if not enabled or not auto_hold or overall_ok:
             self._last_overall_ok = overall_ok
             return
-        if self._watchdog.most_recent_failure() is None:
+        failure = self._watchdog.most_recent_failure()
+        if failure is None:
             self._last_overall_ok = overall_ok
             return
         runtime.evaluate_exchange_watchdog(context="watchdog_loop")
+        exchange, payload = failure
+        reason = str(payload.get("reason") or "degraded")
+        transition = self._watchdog.mark_auto_hold(exchange, reason=reason)
+        if transition is not None:
+            self._maybe_emit_transition_alert(exchange, transition)
         self._last_overall_ok = overall_ok
 
 
