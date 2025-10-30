@@ -182,12 +182,25 @@
   Та же функция `RiskGovernor.validate(...)` используется в риск-аккаунтинге —
   расхождений между проверками больше нет.
 - Если сделка выбивает лимит, API отвечает HTTP 200 c телом вида
-  `{"status": "skipped", "reason": "SKIPPED_BY_RISK", "cap": "max_total_notional_usdt"}`
+  `{"status": "skipped", "state": "SKIPPED_BY_RISK", "reason": "caps_exceeded", "cap": "max_total_notional_usdt"}`
   (или `max_open_positions`) и не размещает ордера. В `dry_run` режимах (контрол
   runtime или флаг `DRY_RUN_MODE`) проверка сразу возвращает
   `why="dry_run_no_enforce"`, чтобы можно было репетировать сценарии без
   изменения лимитов. Перестраховочные бюджеты (`StrategyBudgetManager`) также
   блокируют intents только когда `FeatureFlags.enforce_budgets()` включён.
+
+### Коды причин пропуска по риску
+
+- Единые коды причин отображаются в блоке `/ui/dashboard` «Risk skips (last run)»
+  и экспортируются в `/metrics` (`risk_skips_total{reason,strategy}`).
+- Справочник кодов:
+
+| Код               | Источник                                      | Где смотреть                 |
+| ----------------- | --------------------------------------------- | ---------------------------- |
+| `caps_exceeded`   | Глобальные лимиты `RiskGovernor`               | UI (Risk skips), `/metrics` |
+| `budget_exceeded` | Перестраховочные бюджеты стратегий            | UI (Risk skips), `/metrics` |
+| `strategy_frozen` | Freeze от `StrategyRiskManager`               | UI (Risk skips), `/metrics` |
+| `other_risk`      | Прочие причины или запасной вариант           | UI (Risk skips), `/metrics` |
 
 ## Per-Strategy PnL & Drawdown
 

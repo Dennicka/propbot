@@ -6,6 +6,10 @@ from types import SimpleNamespace
 
 from app.risk import core as risk_core
 from app.risk.core import _RiskMetrics
+from app.risk.telemetry import (
+    get_risk_skip_counts,
+    reset_risk_skip_metrics_for_tests,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +22,7 @@ def _reset_env(monkeypatch):
     monkeypatch.delenv("RISK_ENFORCE_BUDGETS", raising=False)
     monkeypatch.delenv("DRY_RUN_MODE", raising=False)
     risk_core.reset_risk_governor_for_tests()
+    reset_risk_skip_metrics_for_tests()
     monkeypatch.setattr(
         risk_core,
         "get_state",
@@ -25,6 +30,7 @@ def _reset_env(monkeypatch):
     )
     yield
     risk_core.reset_risk_governor_for_tests()
+    reset_risk_skip_metrics_for_tests()
 
 
 def _stub_metrics(total_notional: float, open_positions: int) -> _RiskMetrics:
@@ -82,6 +88,9 @@ def test_risk_gate_blocks_when_caps_breached(monkeypatch):
     result = risk_core.risk_gate(intent)
 
     assert result["allowed"] is False
-    assert result["reason"] == "SKIPPED_BY_RISK"
+    assert result["reason"] == "caps_exceeded"
+    assert result["state"] == "SKIPPED_BY_RISK"
     assert result["cap"] == "max_total_notional_usdt"
     assert result.get("details", {}).get("breach") == "max_total_notional_usdt"
+    counts = get_risk_skip_counts()
+    assert counts.get("unit_test", {}).get("caps_exceeded") == 1

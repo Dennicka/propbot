@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Tuple
 from ..broker.router import ExecutionRouter
 from ..core.config import ArbitragePairConfig
 from ..risk.core import risk_gate
+from ..risk.telemetry import record_risk_skip
 from ..risk.accounting import (
     get_risk_snapshot as get_risk_accounting_snapshot,
     record_fill as accounting_record_fill,
@@ -434,12 +435,27 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             risk_snapshot=snapshot,
         )
 
-    _, intent_allowed = accounting_record_intent(strategy_name, plan.notional, simulated=simulated)
-    if not intent_allowed:
+    snapshot, intent_result = accounting_record_intent(
+        strategy_name, plan.notional, simulated=simulated
+    )
+    if not intent_result.get("ok", False):
+        reason_code = str(intent_result.get("reason") or "other_risk")
         logger.info(
             "risk accounting blocked execution",
-            extra={"strategy": strategy_name, "notional": plan.notional},
+            extra={
+                "strategy": strategy_name,
+                "notional": plan.notional,
+                "reason": reason_code,
+            },
         )
+        risk_gate_payload: Dict[str, object] = {
+            "allowed": False,
+            "state": intent_result.get("state", "SKIPPED_BY_RISK"),
+            "reason": reason_code,
+            "strategy": strategy_name,
+        }
+        if "details" in intent_result:
+            risk_gate_payload["details"] = intent_result["details"]
         snapshot = get_risk_accounting_snapshot()
         return ExecutionReport(
             symbol=plan.symbol,
@@ -453,8 +469,8 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             orders=[],
             exposures=[],
             pnl_summary={},
-            state="SKIPPED_BY_RISK",
-            risk_gate={"allowed": False, "reason": "accounting"},
+            state=intent_result.get("state", "SKIPPED_BY_RISK"),
+            risk_gate=risk_gate_payload,
             risk_snapshot=snapshot,
         )
 
@@ -684,11 +700,12 @@ class ArbitrageEngine:
                 "strategy": strategy_name,
             }
         if manager.is_frozen(strategy_name):
+            record_risk_skip(strategy_name, "strategy_frozen")
             return {
                 "ok": False,
                 "executed": False,
-                "state": "BLOCKED",
-                "reason": "blocked_by_risk_freeze",
+                "state": "SKIPPED_BY_RISK",
+                "reason": "strategy_frozen",
                 "strategy": strategy_name,
             }
         state = get_state()
@@ -860,11 +877,12 @@ def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: 
             "strategy": strategy_name,
         }
     if manager.is_frozen(strategy_name):
+        record_risk_skip(strategy_name, "strategy_frozen")
         return {
             "ok": False,
             "executed": False,
-            "state": "BLOCKED",
-            "reason": "blocked_by_risk_freeze",
+            "state": "SKIPPED_BY_RISK",
+            "reason": "strategy_frozen",
             "strategy": strategy_name,
         }
     engine = get_engine()

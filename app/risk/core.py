@@ -8,6 +8,8 @@ from collections.abc import Mapping as ABCMapping
 from dataclasses import dataclass, field
 from typing import Dict, Mapping, Optional
 
+from .telemetry import record_risk_skip
+
 from ..runtime_state_store import load_runtime_payload
 from ..services.runtime import get_state
 
@@ -394,6 +396,22 @@ def reset_risk_governor_for_tests() -> None:
         _GOVERNOR_SINGLETON = None
 
 
+def _reason_code_from_validation(result: Mapping[str, object]) -> str:
+    details = result.get("details")
+    if isinstance(details, Mapping):
+        type_value = str(details.get("type") or "").lower()
+        if type_value == "caps":
+            return "caps_exceeded"
+        if type_value == "budgets":
+            return "budget_exceeded"
+        breach = str(details.get("breach") or "").lower()
+        if breach.startswith("max_"):
+            return "caps_exceeded"
+        if breach.startswith("budget"):
+            return "budget_exceeded"
+    return "other_risk"
+
+
 def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | None]:
     """Evaluate whether an order intent is allowed under configured risk caps."""
 
@@ -431,10 +449,18 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
         return payload
 
     details = result.get("details")
+    reason_code = _reason_code_from_validation(result)
+    strategy_name = None
+    if isinstance(order_intent, Mapping):
+        strategy_name = order_intent.get("strategy")
+    record_risk_skip(strategy_name, reason_code)
     response: Dict[str, object | None] = {
         "allowed": False,
-        "reason": result.get("reason", "SKIPPED_BY_RISK"),
+        "state": "SKIPPED_BY_RISK",
+        "reason": reason_code,
     }
+    if strategy_name is not None:
+        response["strategy"] = strategy_name
     if isinstance(details, Mapping):
         breach = details.get("breach")
         if breach:

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app import strategy_pnl
+from app.risk.telemetry import get_risk_skip_counts, reset_risk_skip_metrics_for_tests
 from app.strategy_risk import (
     DEFAULT_LIMITS,
     StrategyRiskManager,
@@ -12,6 +13,13 @@ from app.strategy_risk import (
     reset_strategy_risk_manager_for_tests,
 )
 from app.services.arbitrage import execute_trade
+
+
+@pytest.fixture(autouse=True)
+def _reset_metrics():
+    reset_risk_skip_metrics_for_tests()
+    yield
+    reset_risk_skip_metrics_for_tests()
 
 
 def test_strategy_risk_manager_breach_detection() -> None:
@@ -98,9 +106,11 @@ def test_strategy_auto_freeze_blocks_execution(monkeypatch) -> None:
 
     execution = execute_trade(pair_id=None, size=None)
     assert execution["ok"] is False
-    assert execution["state"] == "BLOCKED"
-    assert execution["reason"] == "blocked_by_risk_freeze"
+    assert execution["state"] == "SKIPPED_BY_RISK"
+    assert execution["reason"] == "strategy_frozen"
     assert execution.get("executed") is False
+    counts = get_risk_skip_counts()
+    assert counts.get("cross_exchange_arb", {}).get("strategy_frozen") == 1
 
     manager.record_success("cross_exchange_arb")
     snapshot = manager.check_limits("cross_exchange_arb")
