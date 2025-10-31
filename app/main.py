@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import ledger
 from .version import APP_VERSION
-from .routers import arb, health, live, risk, ui, ui_ops_report, ui_secrets
+from .routers import arb, health, live, risk, ui, ui_config, ui_ops_report, ui_secrets
 from .routers import ui_universe
 from .routers import ui_strategy
 from .routers import ui_status
@@ -19,6 +21,7 @@ from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
+from .telemetry import observe_ui_latency, setup_slo_monitor
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
 from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
@@ -63,11 +66,32 @@ def create_app() -> FastAPI:
     app.state.default_rate_limits = (limiter.rate_per_min, limiter.burst)
     app.add_middleware(RateLimitMiddleware, limiter=limiter, should_guard=_should_guard)
     app.add_middleware(IdempotencyMiddleware, cache=cache, should_guard=_should_guard)
+
+    @app.get("/metrics")
+    def metrics() -> Response:
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    @app.middleware("http")
+    async def _telemetry_middleware(request: Request, call_next):
+        start = time.perf_counter()
+        path = request.url.path
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration = (time.perf_counter() - start) * 1000.0
+            if path.startswith("/api/ui"):
+                observe_ui_latency(path, duration, status_code=500, error=True)
+            raise
+        duration = (time.perf_counter() - start) * 1000.0
+        if path.startswith("/api/ui"):
+            observe_ui_latency(path, duration, status_code=response.status_code)
+        return response
     app.include_router(health.router)
     app.include_router(live.router)
     app.include_router(risk.router)
     app.include_router(ui.router)
     app.include_router(ui_secrets.router)
+    app.include_router(ui_config.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_universe.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_ops_report.router, prefix="/api/ui", tags=["ui"])
     app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
@@ -87,6 +111,7 @@ def create_app() -> FastAPI:
     setup_autopilot_guard(app)
     setup_orchestrator_alerts(app)
     setup_exchange_watchdog(app)
+    setup_slo_monitor(app)
     return app
 
 

@@ -31,6 +31,9 @@ typecheck:
 test:
         $(PYTEST) -q --maxfail=1
 
+smoke:
+        scripts/smoke.sh
+
 run:
         $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
 

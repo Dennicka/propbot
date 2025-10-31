@@ -164,6 +164,12 @@ def alert_ops(
     return emit_alert(kind=kind, text=text, extra=extra or None)
 
 
+
+
+def alert_slo_breach(text: str, *, extra: Mapping[str, object] | None = None) -> Dict[str, object]:
+    """Emit a dedicated SLO breach alert."""
+
+    return emit_alert("slo_breach", text, extra=extra or None)
 def _enqueue_telegram(record: Mapping[str, object]) -> None:
     config = TelegramConfig.from_env()
     if not config.is_ready:

@@ -71,10 +71,20 @@
 ⚠️ Без ручного двухшагового RESUME хеджер остаётся в SAFE_MODE/HOLD и не начнёт
 реально торговать, даже если контейнер уже запущен.
 
+## Config schema
+
+- Pydantic-описание конфигурации вынесено в `app/config/schema.py` и переиспользуется загрузчиком в `app/config/loader.py`.
+- Новая ручка `GET /api/ui/config/validate` валидирует активный YAML и возвращает `{"ok": bool, "errors": [...]}` без бросания исключений.
+- Шаблон `.env.example` дополнен фиче-флагом `FEATURE_SLO` и порогами `SLO_LATENCY_P95_TARGET_MS`/`SLO_ERROR_RATE_TARGET` для консистентного описания окружений.
+
 ## Наблюдаемость и SLO
 
 Экспонируемый endpoint `/metrics` публикует основные SLO- и runtime-метрики в формате Prometheus:
 
+* `propbot_ui_latency_ms{endpoint}` — latency-гистограмма API `/api/ui/*`, строится автоматически через middleware.
+* `propbot_core_operation_latency_ms{operation}` — длительность внутренних сканеров (`scan`) и цикла хеджа (`hedge`).
+* `propbot_error_total{context}` — счётчик ошибок HTTP/ядра (`ui`, `scan`, `hedge`).
+* `propbot_scanner_ok`, `propbot_hedge_daemon_ok` — бинарные индикаторы здоровья фоновых циклов.
 * `propbot_order_cycle_ms` — гистограмма полного цикла исполнения (ручной и автопилот).
 * `propbot_ws_gap_ms` — задержка между обновлениями стримов; при отсутствии потока публикуется безопасное значение `0`.
 * `propbot_skipped_by_reason_total{reason}` — счётчик пропущенных выполнений с метками `risk_gate`, `daily_loss_cap`, `universe`, `watchdog`, `hold`.
@@ -86,9 +96,21 @@
 * `propbot_watchdog_state{exchange,state}` — текущий статус вотчдога по биржам (`OK`/`DEGRADED`/`AUTO_HOLD`).
 * `propbot_daily_loss_breach` — актуальный признак breach дневного лимита (1/0), совпадает с badge `daily_loss`.
 
+### SLO & Alerts
+
+- Фоновой монитор `app/telemetry/slo.py` активируется фиче-флагом `FEATURE_SLO=1` и каждые `SLO_EVALUATION_INTERVAL_SEC` секунд проверяет p95 (`SLO_LATENCY_P95_TARGET_MS`) и error-rate (`SLO_ERROR_RATE_TARGET`).
+- При нарушении порогов формируется сообщение в `opsbot.notifier.alert_slo_breach(...)` и дублируется в Telegram (`app.telebot.alert_slo_breach`).
+- Включение/отключение мониторинга и пороги документированы в `.env.example` для paper/testnet/live сред.
+
 Метрики доступны без изменения бизнес-логики и помогают собрать дашборды/алерты для операторов.
 
 Endpoint `/live-readiness` возвращает `{"ok": true|false, "reasons": [...]}` для простых health-check'ов. `ok=false`, если вотчдог переведён в `AUTO_HOLD` или дневной лимит в статусе `BREACH`; `reasons` содержит машинно-читаемые причины (`watchdog:auto_hold`, `daily_loss:breach`).
+
+## Smoke
+
+- Мини-скрипт `scripts/smoke.sh` проверяет `/healthz`, `/api/ui/status`, `/api/ui/positions`, `/api/ui/state` и `/metrics` и печатает `✅/❌` по каждому URL.
+- Цель `make smoke` запускает скрипт с текущими переменными окружения (`SMOKE_HOST`, `SMOKE_TIMEOUT`).
+- Дымовой тест из `tests/acceptance/test_smoke.py` поднимает uvicorn и гарантирует, что скрипт успешно проходит против локального API.
 
 ## Coverage vs spec_archive
 

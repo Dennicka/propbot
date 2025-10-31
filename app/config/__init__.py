@@ -1,8 +1,6 @@
-from __future__ import annotations
+"""Unified configuration schema and loader utilities."""
 
-"""Backward compatibility layer for the legacy configuration import path."""
-
-from ..config import (
+from .schema import (
     AppConfig,
     ArbitrageConfig,
     ArbitrageLeg,
@@ -17,16 +15,14 @@ from ..config import (
     FundingConfig,
     GuardsConfig,
     KillCapsConfig,
-    LoadedConfig,
     MaintenanceWindow,
     NotionalCapsConfig,
     RateLimitConfig,
     RiskConfig,
     RunawayBreakerConfig,
     StatusThresholds,
-    load_app_config,
-    load_yaml,
 )
+from .loader import LoadedConfig, load_app_config, load_yaml
 
 __all__ = [
     "AppConfig",
@@ -43,13 +39,13 @@ __all__ = [
     "FundingConfig",
     "GuardsConfig",
     "KillCapsConfig",
-    "LoadedConfig",
     "MaintenanceWindow",
     "NotionalCapsConfig",
     "RateLimitConfig",
     "RiskConfig",
     "RunawayBreakerConfig",
     "StatusThresholds",
+    "LoadedConfig",
     "load_app_config",
     "load_yaml",
 ]

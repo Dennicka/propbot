@@ -27,6 +27,7 @@ from .services.runtime import (
     set_last_opportunity_state,
     update_auto_hedge_state,
 )
+from .telemetry import observe_core_latency, set_hedge_daemon_ok
 
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ class AutoHedgeDaemon:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._failure_events: list[float] = []
+        self._last_cycle_error = False
 
     def _is_enabled(self) -> bool:
         if self._enabled_override is not None:
@@ -225,6 +227,8 @@ class AutoHedgeDaemon:
         trade_result: Mapping[str, Any] | None = None,
         timestamp: str | None = None,
     ) -> None:
+        self._last_cycle_error = True
+        set_hedge_daemon_ok(False)
         now = time.time()
         self._failure_events.append(now)
         self._refresh_fail_window(now)
@@ -257,159 +261,169 @@ class AutoHedgeDaemon:
         _emit_ops_alert("auto_hedge_failure", f"Auto hedge failure: {reason}", alert_payload)
 
     async def run_cycle(self) -> None:
-        enabled = self._is_enabled()
-        update_auto_hedge_state(enabled=enabled)
-        if not enabled:
+        start = time.perf_counter()
+        self._last_cycle_error = False
+        try:
+            enabled = self._is_enabled()
+            update_auto_hedge_state(enabled=enabled)
+            if not enabled:
+                self._failure_events.clear()
+                update_auto_hedge_state(last_execution_result="disabled", consecutive_failures=0)
+                return
+
+            self._max_failures = _env_int("MAX_AUTO_FAILS_PER_MIN", self._max_failures)
+            self._refresh_fail_window()
+            ok, reason = self._check_system_state()
+            if not ok:
+                update_auto_hedge_state(
+                    last_execution_result=f"rejected: {reason}",
+                    consecutive_failures=len(self._failure_events),
+                )
+                logger.info("auto hedge skipped: %s", reason)
+                return
+
+            try:
+                scan_payload = await self._scanner.scan_once()
+            except Exception as exc:
+                logger.exception("auto hedge scan failed: %s", exc)
+                self._register_failure(reason="scanner_error", candidate=None)
+                return
+
+            candidate = None
+            status = ""
+            if isinstance(scan_payload, Mapping):
+                candidate = scan_payload.get("candidate")
+                status = str(scan_payload.get("status") or "")
+
+            ts_checked = _ts()
+            update_auto_hedge_state(last_checked_ts=ts_checked)
+
+            if not isinstance(candidate, Mapping):
+                update_auto_hedge_state(
+                    last_execution_result=f"rejected: {status or 'no_candidate'}",
+                    consecutive_failures=len(self._failure_events),
+                )
+                return
+
+            candidate = dict(candidate)
+            if status and status != "allowed":
+                update_auto_hedge_state(
+                    last_execution_result=f"rejected: {status}",
+                    consecutive_failures=len(self._failure_events),
+                )
+                return
+
+            spread_value = _coerce_float(candidate.get("spread"))
+            min_spread = _coerce_float(candidate.get("min_spread", candidate.get("spread")))
+            if spread_value <= 0 or spread_value < min_spread:
+                self._register_failure(reason="spread_below_threshold", candidate=candidate, timestamp=_ts())
+                set_last_opportunity_state(candidate, "blocked_by_risk")
+                return
+
+            notional = _coerce_float(candidate.get("notional_suggestion"))
+            leverage = _coerce_float(candidate.get("leverage_suggestion"))
+            allowed, reason = can_open_new_position(
+                notional,
+                leverage,
+                strategy=STRATEGY_NAME,
+                requested_positions=1,
+            )
+            if not allowed:
+                self._register_failure(reason=f"risk:{reason}", candidate=candidate, timestamp=_ts())
+                set_last_opportunity_state(candidate, "blocked_by_risk")
+                return
+
+            symbol = str(candidate.get("symbol") or "")
+
+            try:
+                trade_result = execute_hedged_trade(symbol, notional, leverage, min_spread)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("auto hedge execution raised: %s", exc)
+                self._register_failure(reason="execution_error", candidate=candidate)
+                return
+
+            if not trade_result.get("success"):
+                failure_reason = str(trade_result.get("reason") or "execution_failed")
+                self._register_failure(reason=failure_reason, candidate=candidate, trade_result=trade_result)
+                set_last_opportunity_state(candidate, "blocked_by_risk")
+                return
+
+            simulated = bool(trade_result.get("simulated"))
+            long_order = trade_result.get("long_order") or {}
+            short_order = trade_result.get("short_order") or {}
+            long_price = _maybe_float(
+                long_order.get("price")
+                or long_order.get("avg_price")
+                or trade_result.get("details", {}).get("cheap_mark")
+            )
+            short_price = _maybe_float(
+                short_order.get("price")
+                or short_order.get("avg_price")
+                or trade_result.get("details", {}).get("expensive_mark")
+            )
+            position = create_position(
+                symbol=symbol,
+                long_venue=str(trade_result.get("cheap_exchange") or candidate.get("long_venue") or ""),
+                short_venue=str(trade_result.get("expensive_exchange") or candidate.get("short_venue") or ""),
+                notional_usdt=notional,
+                entry_spread_bps=_coerce_float(trade_result.get("spread_bps", candidate.get("spread_bps"))),
+                leverage=leverage,
+                entry_long_price=long_price,
+                entry_short_price=short_price,
+                status="simulated" if simulated else "open",
+                simulated=simulated,
+                legs=trade_result.get("legs"),
+                strategy=STRATEGY_NAME,
+            )
+            trade_result["position"] = position
+            ts = _ts()
+            update_auto_hedge_state(
+                last_execution_result="ok",
+                last_execution_ts=ts,
+                last_success_ts=ts,
+                consecutive_failures=0,
+            )
             self._failure_events.clear()
-            update_auto_hedge_state(last_execution_result="disabled", consecutive_failures=0)
-            return
-
-        self._max_failures = _env_int("MAX_AUTO_FAILS_PER_MIN", self._max_failures)
-        self._refresh_fail_window()
-        ok, reason = self._check_system_state()
-        if not ok:
-            update_auto_hedge_state(
-                last_execution_result=f"rejected: {reason}",
-                consecutive_failures=len(self._failure_events),
+            append_entry(
+                self._build_log_entry(
+                    candidate=candidate, result="accepted", timestamp=ts, trade_result=trade_result
+                )
             )
-            logger.info("auto hedge skipped: %s", reason)
-            return
-
-        try:
-            scan_payload = await self._scanner.scan_once()
-        except Exception as exc:
-            logger.exception("auto hedge scan failed: %s", exc)
-            self._register_failure(reason="scanner_error", candidate=None)
-            return
-
-        candidate = None
-        status = ""
-        if isinstance(scan_payload, Mapping):
-            candidate = scan_payload.get("candidate")
-            status = str(scan_payload.get("status") or "")
-
-        ts_checked = _ts()
-        update_auto_hedge_state(last_checked_ts=ts_checked)
-
-        if not isinstance(candidate, Mapping):
-            update_auto_hedge_state(
-                last_execution_result=f"rejected: {status or 'no_candidate'}",
-                consecutive_failures=len(self._failure_events),
+            set_last_opportunity_state(None, "blocked_by_risk")
+            logger.info(
+                "auto hedge %s %s/%s notional=%s spread_bps=%s",
+                "simulated" if simulated else "executed",
+                trade_result.get("cheap_exchange"),
+                trade_result.get("expensive_exchange"),
+                notional,
+                trade_result.get("spread_bps"),
             )
-            return
-
-        candidate = dict(candidate)
-        if status and status != "allowed":
-            update_auto_hedge_state(
-                last_execution_result=f"rejected: {status}",
-                consecutive_failures=len(self._failure_events),
+            alert_payload = {
+                "symbol": symbol,
+                "notional_usdt": notional,
+                "spread_bps": trade_result.get("spread_bps"),
+                "simulated": simulated,
+                "dry_run_mode": bool(trade_result.get("dry_run_mode")),
+            }
+            if leverage is not None:
+                alert_payload["leverage"] = leverage
+            alert_text = (
+                f"Auto hedge simulated for {symbol} (DRY_RUN_MODE)"
+                if simulated or is_dry_run_mode()
+                else f"Auto hedge executed for {symbol}"
             )
-            return
-
-        spread_value = _coerce_float(candidate.get("spread"))
-        min_spread = _coerce_float(candidate.get("min_spread", candidate.get("spread")))
-        if spread_value <= 0 or spread_value < min_spread:
-            self._register_failure(reason="spread_below_threshold", candidate=candidate, timestamp=_ts())
-            set_last_opportunity_state(candidate, "blocked_by_risk")
-            return
-
-        notional = _coerce_float(candidate.get("notional_suggestion"))
-        leverage = _coerce_float(candidate.get("leverage_suggestion"))
-        allowed, reason = can_open_new_position(
-            notional,
-            leverage,
-            strategy=STRATEGY_NAME,
-            requested_positions=1,
-        )
-        if not allowed:
-            self._register_failure(reason=f"risk:{reason}", candidate=candidate, timestamp=_ts())
-            set_last_opportunity_state(candidate, "blocked_by_risk")
-            return
-
-        symbol = str(candidate.get("symbol") or "")
-
-        try:
-            trade_result = execute_hedged_trade(symbol, notional, leverage, min_spread)
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("auto hedge execution raised: %s", exc)
-            self._register_failure(reason="execution_error", candidate=candidate)
-            return
-
-        if not trade_result.get("success"):
-            failure_reason = str(trade_result.get("reason") or "execution_failed")
-            self._register_failure(reason=failure_reason, candidate=candidate, trade_result=trade_result)
-            set_last_opportunity_state(candidate, "blocked_by_risk")
-            return
-
-        simulated = bool(trade_result.get("simulated"))
-        long_order = trade_result.get("long_order") or {}
-        short_order = trade_result.get("short_order") or {}
-        long_price = _maybe_float(
-            long_order.get("price")
-            or long_order.get("avg_price")
-            or trade_result.get("details", {}).get("cheap_mark")
-        )
-        short_price = _maybe_float(
-            short_order.get("price")
-            or short_order.get("avg_price")
-            or trade_result.get("details", {}).get("expensive_mark")
-        )
-        position = create_position(
-            symbol=symbol,
-            long_venue=str(trade_result.get("cheap_exchange") or candidate.get("long_venue") or ""),
-            short_venue=str(trade_result.get("expensive_exchange") or candidate.get("short_venue") or ""),
-            notional_usdt=notional,
-            entry_spread_bps=_coerce_float(trade_result.get("spread_bps", candidate.get("spread_bps"))),
-            leverage=leverage,
-            entry_long_price=long_price,
-            entry_short_price=short_price,
-            status="simulated" if simulated else "open",
-            simulated=simulated,
-            legs=trade_result.get("legs"),
-            strategy=STRATEGY_NAME,
-        )
-        trade_result["position"] = position
-        ts = _ts()
-        update_auto_hedge_state(
-            last_execution_result="ok",
-            last_execution_ts=ts,
-            last_success_ts=ts,
-            consecutive_failures=0,
-        )
-        self._failure_events.clear()
-        append_entry(
-            self._build_log_entry(
-                candidate=candidate, result="accepted", timestamp=ts, trade_result=trade_result
-            )
-        )
-        set_last_opportunity_state(None, "blocked_by_risk")
-        logger.info(
-            "auto hedge %s %s/%s notional=%s spread_bps=%s",
-            "simulated" if simulated else "executed",
-            trade_result.get("cheap_exchange"),
-            trade_result.get("expensive_exchange"),
-            notional,
-            trade_result.get("spread_bps"),
-        )
-        alert_payload = {
-            "symbol": symbol,
-            "notional_usdt": notional,
-            "spread_bps": trade_result.get("spread_bps"),
-            "simulated": simulated,
-            "dry_run_mode": bool(trade_result.get("dry_run_mode")),
-        }
-        if leverage is not None:
-            alert_payload["leverage"] = leverage
-        alert_text = (
-            f"Auto hedge simulated for {symbol} (DRY_RUN_MODE)"
-            if simulated or is_dry_run_mode()
-            else f"Auto hedge executed for {symbol}"
-        )
-        _emit_ops_alert("auto_hedge_executed", alert_text, alert_payload)
-        try:
-            await record_snapshot(reason="auto_hedge_cycle")
-        except Exception:  # pragma: no cover - snapshot failures should not break cycle
-            logger.debug("failed to record pnl history snapshot", exc_info=True)
+            _emit_ops_alert("auto_hedge_executed", alert_text, alert_payload)
+            try:
+                await record_snapshot(reason="auto_hedge_cycle")
+            except Exception:  # pragma: no cover - snapshot failures should not break cycle
+                logger.debug("failed to record pnl history snapshot", exc_info=True)
+        except Exception:
+            self._last_cycle_error = True
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            observe_core_latency("hedge", duration_ms, error=self._last_cycle_error)
+            set_hedge_daemon_ok(not self._last_cycle_error)
 
 
 _daemon = AutoHedgeDaemon()
