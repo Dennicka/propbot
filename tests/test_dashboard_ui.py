@@ -7,7 +7,7 @@ from positions import create_position
 
 from app.risk import accounting as risk_accounting, core as risk_core
 from app.risk import auto_hold
-from app.services import approvals_store, risk_guard, runtime
+from app.services import approvals_store, live_readiness, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
 from app.version import APP_VERSION
@@ -79,6 +79,41 @@ def test_dashboard_strategy_orchestrator_plan(monkeypatch, tmp_path, client) -> 
     assert "decision-cooldown\">cooldown" in html
     assert "recent_fail" in html
     assert "strategy-orchestrator-readonly\">READ ONLY" in html
+
+
+def test_dashboard_leader_and_readiness_labels(monkeypatch, tmp_path, client) -> None:
+    secrets_payload = {
+        "operator_tokens": {"viewer": {"token": "VVV", "role": "viewer"}},
+        "approve_token": "ZZZ",
+    }
+    secrets_path = tmp_path / "secrets.json"
+    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
+
+    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    monkeypatch.setattr(
+        live_readiness,
+        "compute_readiness",
+        lambda app: {
+            "ready": True,
+            "reasons": [],
+            "leader": True,
+            "health_ok": True,
+            "journal_ok": True,
+            "config_ok": True,
+        },
+    )
+
+    response = client.get(
+        "/ui/dashboard",
+        headers={"Authorization": "Bearer VVV"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "LEADER:" in html
+    assert "LIVE READY:" in html
 
 
 def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:

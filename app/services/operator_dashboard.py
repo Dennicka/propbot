@@ -511,7 +511,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
                     f"Auto-HOLD by Daily Loss Cap — {auto_hold_daily_loss['message']}"
                 )
 
-    live_readiness = compute_readiness()
+    live_readiness = compute_readiness(request.app)
 
     tca_preview_payload: Dict[str, object] | None = None
     tca_preview_error: str | None = None
@@ -914,9 +914,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     is_operator = operator_role == "operator"
     is_auditor = operator_role == "auditor"
     live_readiness = context.get("live_readiness", {}) or {}
-    live_ready = bool(live_readiness.get("ok"))
-    readiness_label = "READY" if live_ready else "NOT READY"
-    readiness_class = "live-ready" if live_ready else "live-not-ready"
+    live_ready = bool(live_readiness.get("ready"))
+    leader_flag = bool(live_readiness.get("leader", True))
+    leader_label = "YES" if leader_flag else "NO"
+    leader_class = "status-ok" if leader_flag else "status-bad"
+    readiness_label = "YES" if live_ready else "NO"
+    readiness_class = "status-ok" if live_ready else "status-bad"
     readiness_reasons = [
         str(reason).strip()
         for reason in live_readiness.get("reasons", [])
@@ -957,10 +960,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".footer-warning{color:#9a3412;font-weight:600;}"
         ".operator-meta{background:#fff;padding:1rem 1.5rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;gap:2rem;align-items:center;flex-wrap:wrap;}"
         ".operator-meta .label{color:#4b5563;font-weight:600;margin-right:0.5rem;}"
-        ".live-readiness{margin-left:auto;display:flex;align-items:center;gap:0.5rem;}"
-        ".live-readiness .pill{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;}"
-        ".live-readiness .live-ready{background:#dcfce7;color:#166534;}"
-        ".live-readiness .live-not-ready{background:#fee2e2;color:#991b1b;}"
+        ".status-pills{margin-left:auto;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;}"
+        ".status-pill{display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0.8rem;border-radius:999px;font-weight:700;letter-spacing:0.05em;background:#f3f4f6;color:#1f2937;}"
+        ".status-pill .label{font-weight:600;color:#475569;}"
+        ".status-pill.status-ok{background:#dcfce7;color:#166534;}"
+        ".status-pill.status-bad{background:#fee2e2;color:#991b1b;}"
         ".role-badge{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;text-transform:uppercase;}"
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
@@ -1074,7 +1078,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "<div class=\"operator-meta\">"
         f"<div><span class=\"label\">Operator:</span> <strong>{_fmt(operator_name)}</strong></div>"
         f"<div><span class=\"label\">Role:</span> <span class=\"role-badge role-{operator_role}\">{_fmt(operator_role_label)}</span></div>"
-        f"<div class=\"live-readiness\"><span class=\"label\">Live:</span> <span class=\"pill {readiness_class}\"{readiness_title_attr}>{_fmt(readiness_label)}</span></div>"
+        f"<div class=\"status-pills\">"
+        f"<span class=\"status-pill {leader_class}\"><span class=\"label\">LEADER:</span> {_fmt(leader_label)}</span>"
+        f"<span class=\"status-pill {readiness_class}\"{readiness_title_attr}><span class=\"label\">LIVE READY:</span> {_fmt(readiness_label)}</span>"
+        "</div>"
         "</div>"
     )
 
