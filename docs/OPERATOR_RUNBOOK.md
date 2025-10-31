@@ -953,6 +953,17 @@ approvals не зависли без внимания.
   `short_notional`, `net_usdt`). Если марк-прайсы временно недоступны (например,
   в тестовом контуре без связи с биржей), сервис возвращает `mark_price`,
   равный цене входа, и PnL будет 0 — это ожидаемая заглушка.
+- Чтобы выгрузить открытые трейды в таблицу, запросите CSV:
+
+  ```bash
+  curl -sfS -H "Authorization: Bearer $API_TOKEN" \
+    https://<host>/api/ui/open-trades.csv > open-trades.csv
+  ```
+
+  Файл содержит одну строку на каждую открытую ногу: `trade_id`, `pair`, `side`,
+  `size`, `entry_price`, `unrealized_pnl`, `opened_ts`. CSV генерируется из того
+  же снэпшота, что и JSON-эндпоинт `/api/ui/open-trades`, поэтому цифры совпадают
+  с веб-дашбордом и могут использоваться для сверки экспозиции в Excel или BI.
 
 ### PnL / Exposure trend
 

@@ -857,6 +857,11 @@ profiles and keep `.env` outside version control.
   mark prices are unavailable (for example, in offline tests) the endpoint falls
   back to entry prices so unrealised PnL is reported as `0` rather than raising
   an error.
+- Operators who need a spreadsheet-ready export can call
+  `GET /api/ui/open-trades.csv`. The CSV is generated from the same snapshot as
+  the JSON API and includes one row per open leg with `trade_id`, `pair`,
+  `side`, `size`, `entry_price`, `unrealized_pnl`, and `opened_ts` columns so the
+  desk can reconcile exposures quickly.
 
 ## Safety reminder for Binance live
 
