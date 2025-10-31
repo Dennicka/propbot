@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..metrics import slo
 from ..services import arbitrage
 from ..risk.core import risk_gate
+from ..universe.gate import check_pair_allowed, is_universe_enforced
 from ..services.runtime import (
     HoldActiveError,
     get_last_opportunity_state,
@@ -19,6 +20,7 @@ from ..services.runtime import (
     set_last_execution,
     set_last_opportunity_state,
     set_last_plan,
+    record_universe_unknown_pair,
 )
 from positions import create_position
 from services.cross_exchange_arb import check_spread, execute_hedged_trade
@@ -44,6 +46,22 @@ def _build_manual_intent(
 
 
 def _maybe_skip_for_risk(intent: Mapping[str, object]) -> dict | None:
+    if is_universe_enforced():
+        symbol = str(intent.get("symbol") or intent.get("pair") or "").strip()
+        allowed, reason = check_pair_allowed(symbol)
+        if not allowed:
+            reason_code = reason or "universe"
+            slo.inc_skipped("universe")
+            record_universe_unknown_pair(symbol)
+            response: dict[str, object] = {
+                "status": "skipped",
+                "allowed": False,
+                "reason": reason_code,
+                "intent": dict(intent),
+                "state": "SKIPPED_BY_RISK",
+                "details": {"reason": "universe"},
+            }
+            return response
     gate_result = risk_gate(intent)
     if gate_result.get("allowed", False):
         return None

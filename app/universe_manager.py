@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Mapping, MutableMapping
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 from .services.runtime import get_state
 
@@ -78,6 +78,43 @@ class UniverseManager:
             return False
         supported = self._normalise_supported(runtime.config.symbols)
         return symbol.upper() in supported
+
+    @staticmethod
+    def _iter_config_symbols(symbols: object) -> Iterable[str]:
+        if isinstance(symbols, Mapping):
+            for value in symbols.values():
+                text = str(value or "").strip()
+                if text:
+                    yield text.upper()
+            return
+        if isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes)):
+            for entry in symbols:
+                text = str(entry or "").strip()
+                if text:
+                    yield text.upper()
+            return
+        if symbols:
+            text = str(symbols).strip()
+            if text:
+                yield text.upper()
+
+    def allowed_pairs(self) -> set[str]:
+        """Return the set of currently tradeable pairs across venues."""
+
+        allowed: set[str] = set()
+        if not self._derivatives:
+            return allowed
+        venues = getattr(self._derivatives, "venues", {})
+        if not isinstance(venues, Mapping):
+            return allowed
+        for venue_id, runtime in venues.items():
+            config = getattr(runtime, "config", None)
+            symbols = getattr(config, "symbols", []) if config else []
+            for symbol in self._iter_config_symbols(symbols):
+                venue_symbol = self._symbol_for_venue(venue_id, symbol)
+                if self._is_symbol_supported(venue_id, venue_symbol):
+                    allowed.add(symbol.upper())
+        return allowed
 
     def collect_metrics(self, venue: str) -> Dict[str, Dict[str, Any]]:
         """Collect lightweight metrics for each candidate symbol at a venue."""

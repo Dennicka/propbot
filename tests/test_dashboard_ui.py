@@ -320,6 +320,8 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
     assert "Update strategy toggle" not in html
     assert "Strategy Performance" in html
     assert "Realised PnL (today)" in html
+    assert "Universe</th><td" in html
+    assert ">OPEN</span>" in html
 
 
 def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> None:

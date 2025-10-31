@@ -10,6 +10,7 @@ from ..core.config import ArbitragePairConfig
 from ..metrics import slo
 from ..risk.core import risk_gate
 from ..risk.telemetry import record_risk_skip
+from ..universe.gate import check_pair_allowed, is_universe_enforced
 from ..risk.accounting import (
     get_risk_snapshot as get_risk_accounting_snapshot,
     record_fill as accounting_record_fill,
@@ -24,6 +25,7 @@ from .runtime import (
     get_state,
     get_market_data,
     record_incident,
+    record_universe_unknown_pair,
     register_order_attempt,
     set_preflight_result,
     update_guard,
@@ -403,7 +405,43 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
         router = ExecutionRouter()
         simulated = dry_run or safe_mode
         strategy_name = "cross_exchange_arb"
-    
+
+        if is_universe_enforced():
+            allowed, reason = check_pair_allowed(plan.symbol)
+            if not allowed:
+                reason_code = reason or "universe"
+                record_risk_skip(strategy_name, reason_code)
+                slo.inc_skipped("universe")
+                record_universe_unknown_pair(plan.symbol)
+                logger.info(
+                    "universe gate blocked execution",
+                    extra={"strategy": strategy_name, "symbol": plan.symbol},
+                )
+                gate_result: Dict[str, object] = {
+                    "allowed": False,
+                    "state": "SKIPPED_BY_RISK",
+                    "reason": reason_code,
+                    "strategy": strategy_name,
+                    "details": {"reason": "universe"},
+                }
+                snapshot = get_risk_accounting_snapshot()
+                return ExecutionReport(
+                    symbol=plan.symbol,
+                    simulated=simulated,
+                    pnl_usdt=0.0,
+                    pnl_bps=0.0,
+                    legs=plan.legs,
+                    plan_viable=False,
+                    safe_mode=safe_mode,
+                    dry_run=dry_run,
+                    orders=[],
+                    exposures=[],
+                    pnl_summary={},
+                    state="SKIPPED_BY_RISK",
+                    risk_gate=gate_result,
+                    risk_snapshot=snapshot,
+                )
+
         intent_payload = {
             "strategy": strategy_name,
             "intent_notional": plan.notional,

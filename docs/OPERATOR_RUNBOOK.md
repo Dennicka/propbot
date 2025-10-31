@@ -265,6 +265,20 @@
   что `ENFORCE_DAILY_LOSS_CAP` не выключен. До полуночи UTC новые сделки не
   будут приниматься.
 
+## Universe enforcement gate
+
+- Флаг `ENFORCE_UNIVERSE=1` включает предторговую проверку списка инструментов.
+  Торговать можно только парами, которые присутствуют в текущей вселенной
+  (`UniverseManager` читает конфиг деривативов и список разрешённых символов).
+- Заблокированные intents получают `state=SKIPPED_BY_RISK`, `reason=universe`;
+  метрика `propbot_skipped_by_reason_total{reason="universe"}` увеличивается, а
+  символ записывается в список `unknown_pairs`.
+- Ops report (`GET /api/ui/ops_report` и CSV-экспорт) публикует поля
+  `universe_enforced` и `unknown_pairs`, чтобы быстро увидеть режим и перечень
+  отклонённых запросов за период снапшота.
+- На `/ui/dashboard` в блоке Runtime & Safety появляется бейдж «Universe:
+  ENFORCED/OPEN», позволяющий оператору сразу видеть активный режим.
+
 ## Autopilot resume safety
 
 - Автопилот больше не снимает HOLD автоматически, если StrategyRiskManager
