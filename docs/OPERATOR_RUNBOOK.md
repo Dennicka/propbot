@@ -69,10 +69,10 @@ python -m app.tools.replay_runner --file data/replay/sample.jsonl
 
 ## TCA Preview и подбор маршрута
 
-- Флаг `FEATURE_TCA_ROUTER=1` включает расширенную модель стоимости (`app/tca/cost_model.py`) для выбора площадок: maker/taker комиссии (с VIP-ребейтами) и funding-потоки агрегируются в `effective_cost()` и используются в `app/routing/funding_router.choose_best_pair`.
-- Для оперативной проверки используйте `GET /api/ui/tca/preview?pair=BTCUSDT&qty=1&horizon_min=60`. В ответе — список направлений (`long venue → short venue`) с bps/USDT, выбранный режим исполнения (maker/taker) и разложение на комиссии/фандинг.
-- На `/ui/dashboard` появляется блок «TCA Preview» (при активном флаге). Таблица показывает два направления, выделяет лучшее и напоминает параметры расчёта (qty и горизонт в минутах).
-- Параметр `horizon_min` задаёт горизонт, на который оценивается funding. Для сделок вокруг ближайшего окна используйте `30–60`, для удержания позиций — увеличивайте значение, чтобы увидеть накопленные издержки. Если funding в моменте отсутствует, в колонке funding будет `0 bps`.
+- Флаг `FEATURE_TCA_ROUTER=1` включает расширенную модель стоимости (`app/tca/cost_model.py`) для выбора площадок: maker/taker комиссии (с VIP-ребейтами), выбранный `TierTable.pick_tier()` и линейно-квадратичный `ImpactModel` агрегируются в `effective_cost()` и используются в `app/routing/funding_router.choose_best_pair`.
+- Секция `tca` в `configs/*.yaml` задаёт дефолтный горизонт (`horizon_min`), коэффициент модели impact (`impact.k`) и таблицу `tiers[venue]` (массива `{tier, maker_bps, taker_bps, rebate_bps, notional_from}`). Передавайте накопленный оборот за 30 дней через `rolling30d=` в API/дэшборд, чтобы выбрать нужный VIP-уровень. Если параметр не задан — используется базовый tier (обычно VIP0).
+- Для оперативной проверки используйте `GET /api/ui/tca/preview?pair=BTCUSDT&qty=1&rolling30d=500000&book_liq=1200000`. В ответе — список направлений (`long venue → short venue`) с bps/USDT, выбранный режим исполнения, рассчитанный tier, impact и разложение на комиссии/funding/impact.
+- На `/ui/dashboard` появляется блок «TCA Preview» (при активном флаге). Таблица показывает оба направления, выделяет лучшее и выводит tier/impact по каждой ноге. `impact_bps`/`impact_usdt` отражают слиппедж на выбранном объёме относительно доступной ликвидности (`book_liq`). Горизонт по умолчанию берётся из `tca.horizon_min`, но может быть переопределён запросом — увеличивайте его для сценариев удержания позиций через несколько funding-окон.
 
 ## Close-all: семантика и идемпотентность
 

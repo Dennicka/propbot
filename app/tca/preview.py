@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, Iterable, List, Mapping, Tuple
 
 from ..routing.funding_router import VenueQuote, extract_funding_inputs
 from ..services.runtime import get_market_data, get_state
-from ..tca.cost_model import FeeInfo, FeeTable, effective_cost
+from ..tca.cost_model import FeeInfo, FeeTable, ImpactModel, TierTable, effective_cost
 from ..utils.symbols import normalise_symbol, resolve_venue_symbol
 
 LOGGER = logging.getLogger(__name__)
@@ -47,6 +47,64 @@ def _manual_fee_table(config) -> FeeTable:
     return FeeTable.from_mapping(mapping)
 
 
+def _tier_table_from_config(config) -> TierTable | None:
+    tca_cfg = getattr(config, "tca", None)
+    tiers_cfg = getattr(tca_cfg, "tiers", None) if tca_cfg else None
+    if not tiers_cfg:
+        return None
+    mapping: Dict[str, List[Mapping[str, object]]] = {}
+    if isinstance(tiers_cfg, Mapping):
+        items = tiers_cfg.items()
+    else:
+        try:
+            items = tiers_cfg.model_dump().items()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - defensive
+            items = []
+    for venue, payload in items:
+        tier_entries: List[Mapping[str, object]] = []
+        if isinstance(payload, Iterable):
+            for entry in payload:
+                if isinstance(entry, Mapping):
+                    tier_entries.append(entry)
+                else:
+                    try:
+                        tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
+                    except Exception:  # pragma: no cover - defensive
+                        continue
+        if tier_entries:
+            mapping[str(venue)] = tier_entries
+    if not mapping:
+        return None
+    return TierTable.from_mapping(mapping)
+
+
+def _impact_model_from_config(config) -> ImpactModel | None:
+    tca_cfg = getattr(config, "tca", None)
+    impact_cfg = getattr(tca_cfg, "impact", None) if tca_cfg else None
+    if impact_cfg is None:
+        return None
+    k_value = getattr(impact_cfg, "k", 0.0)
+    try:
+        k_float = float(k_value)
+    except (TypeError, ValueError):
+        k_float = 0.0
+    return ImpactModel(k=k_float)
+
+
+def _default_horizon_minutes(config) -> float:
+    tca_cfg = getattr(config, "tca", None)
+    if tca_cfg is None:
+        return 60.0
+    horizon_value = getattr(tca_cfg, "horizon_min", None)
+    try:
+        horizon_float = float(horizon_value)
+    except (TypeError, ValueError):
+        horizon_float = 60.0
+    if horizon_float < 0:
+        horizon_float = 0.0
+    return horizon_float
+
+
 def _prefer_maker(config) -> bool:
     derivatives_cfg = getattr(config, "derivatives", None)
     arbitrage_cfg = getattr(derivatives_cfg, "arbitrage", None) if derivatives_cfg else None
@@ -72,8 +130,10 @@ def compute_tca_preview(
     *,
     qty: float | None = None,
     notional: float | None = None,
-    horizon_min: float = 60.0,
+    horizon_min: float | None = None,
     include_next_window: bool = True,
+    rolling_30d_notional: float | Mapping[str, float] | None = None,
+    book_liquidity_usdt: float | Mapping[str, float] | None = None,
 ) -> Dict[str, object]:
     if not feature_enabled():
         raise RuntimeError("FEATURE_TCA_ROUTER disabled")
@@ -135,7 +195,10 @@ def compute_tca_preview(
     )
 
     manual_fees = _manual_fee_table(config)
+    tier_table = _tier_table_from_config(config)
+    impact_model = _impact_model_from_config(config)
     prefer_maker = _prefer_maker(config)
+    default_horizon = _default_horizon_minutes(config)
 
     aggregator = get_market_data()
     symbol_norm = normalise_symbol(pair)
@@ -158,8 +221,28 @@ def compute_tca_preview(
             qty_value = reference_notional / reference_price
         if qty_value <= 0:
             qty_value = 1.0
-    horizon_minutes = max(float(horizon_min), 0.0)
+    if horizon_min is None:
+        horizon_minutes = default_horizon
+    else:
+        try:
+            horizon_minutes = max(float(horizon_min), 0.0)
+        except (TypeError, ValueError):
+            horizon_minutes = default_horizon
     now_ts = time.time()
+
+    def _rolling_for(venue: str) -> float | None:
+        source = rolling_30d_notional
+        value: object | None
+        if isinstance(source, Mapping):
+            value = source.get(venue)
+        else:
+            value = source
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     evaluated_routes: List[Dict[str, object]] = []
     for route in routes:
@@ -216,6 +299,10 @@ def compute_tca_preview(
                 },
                 "funding_bps_per_hour": long_funding,
             },
+            tier_table=tier_table,
+            rolling_30d_notional=_rolling_for(long_venue),
+            impact_model=impact_model,
+            book_liquidity_usdt=book_liquidity_usdt,
         )
         short_cost = effective_cost(
             "short",
@@ -232,6 +319,10 @@ def compute_tca_preview(
                 },
                 "funding_bps_per_hour": short_funding,
             },
+            tier_table=tier_table,
+            rolling_30d_notional=_rolling_for(short_venue),
+            impact_model=impact_model,
+            book_liquidity_usdt=book_liquidity_usdt,
         )
 
         long_cost["breakdown"].setdefault("funding", {})["next_event_minutes"] = long_next_minutes

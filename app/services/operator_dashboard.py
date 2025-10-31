@@ -549,7 +549,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
                     default_symbol,
                     qty=None,
                     notional=getattr(state.control, "order_notional_usdt", None),
-                    horizon_min=60.0,
+                    horizon_min=None,
                 )
             else:
                 tca_preview_error = "no arbitrage pair symbol available"
@@ -1302,6 +1302,19 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                         f"execution {_fmt(exec_bps)} bps",
                         f"funding {_fmt(funding_bps)} bps",
                     ]
+                    tier_value = breakdown.get("tier") if isinstance(breakdown, Mapping) else ""
+                    if not tier_value and isinstance(execution, Mapping):
+                        tier_value = execution.get("tier") or ""
+                    if tier_value:
+                        details.append(f"tier {_fmt(tier_value)}")
+                    impact_bps = breakdown.get("impact_bps")
+                    impact_usdt = breakdown.get("impact_usdt")
+                    if impact_bps or impact_usdt:
+                        details.append(
+                            "impact {bps} bps / {usdt} USDT".format(
+                                bps=_fmt(impact_bps), usdt=_fmt(impact_usdt)
+                            )
+                        )
                     if next_minutes:
                         details.append(f"next funding in {_fmt(next_minutes)} min")
                     return (
