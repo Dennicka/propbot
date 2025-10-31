@@ -35,6 +35,7 @@ def test_runtime_badges_endpoint_reflects_live_state(client, monkeypatch):
         "risk_checks": "ON",
         "daily_loss": "OK",
         "watchdog": "OK",
+        "partial_hedges": "OK",
     }
 
     # Dry-run mode should force auto trade badge to OFF even if toggled on.
@@ -76,6 +77,7 @@ def test_runtime_badges_endpoint_failure_modes(client, monkeypatch):
     assert payload["risk_checks"] == "OFF"
     assert payload["daily_loss"] == "BREACH"
     assert payload["watchdog"] == "DEGRADED"
+    assert payload["partial_hedges"] == "OK"
 
     watchdog.mark_auto_hold("binance", reason="auto-hold")
     follow_up = client.get("/api/ui/runtime_badges")

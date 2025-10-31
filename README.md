@@ -106,6 +106,12 @@
 
 Endpoint `/live-readiness` возвращает `{"ok": true|false, "reasons": [...]}` для простых health-check'ов. `ok=false`, если вотчдог переведён в `AUTO_HOLD` или дневной лимит в статусе `BREACH`; `reasons` содержит машинно-читаемые причины (`watchdog:auto_hold`, `daily_loss:breach`).
 
+## Funding-router & Partial-rebalancer
+
+- Планировщик кросс-биржевого арбитража теперь умеет учитывать выплату/получение funding при выборе стороны сделки. Флаг `FEATURE_FUNDING_ROUTER=1` включает расчёт эффективной комиссии `taker_fee ± funding*horizon` на основе данных `get_funding_info`/`get_fees` из деривативных клиентов. При активном флаге запись в логи (`DEBUG`) содержит подробности по выбранному направлению и скорректированным bps.
+- Для арбитража с частичными хеджами добавлен демон `app/hedge/rebalancer.PartialHedgeRebalancer`. При `FEATURE_REBALANCER=1` он дозаявляет хвосты через биржевые клиенты батчами `REBALANCER_BATCH_NOTIONAL_USD`, учитывает `REBALANCER_RETRY_DELAY_SEC`/`REBALANCER_MAX_RETRY` и фиксирует попытки в `positions_store`/`ledger`. UI `/api/ui/status` и `/ui/dashboard` показывают метку `PARTIAL/REBALANCING`, счётчик попыток и последнее сообщение об ошибке.
+- Рантайм badges пополнены индикатором `partial_hedges`: `OK`, `PARTIAL` или `REBALANCING` в зависимости от текущего статуса дозаявок. Это позволяет быстро оценить состояние хвостов из `/ui/dashboard` и `/api/ui/status/overview`.
+
 ## Smoke
 
 - Мини-скрипт `scripts/smoke.sh` проверяет `/healthz`, `/api/ui/status`, `/api/ui/positions`, `/api/ui/state` и `/metrics` и печатает `✅/❌` по каждому URL.

@@ -5,7 +5,8 @@ import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from html import escape
-from typing import Any, Dict, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any, Dict
 
 from fastapi import Request
 
@@ -27,6 +28,7 @@ from .runtime import (
     get_state,
 )
 from .runtime_badges import get_runtime_badges
+from .status import get_partial_rebalance_summary
 from .positions_view import build_positions_snapshot
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
@@ -402,6 +404,15 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             )
     elif not watchdog_status.get("overall_ok", True):
         summary_highlights.append("Exchange watchdog reports degraded venues")
+    partial_summary = get_partial_rebalance_summary()
+    if partial_summary.get("count", 0):
+        label = partial_summary.get("label", "PARTIAL")
+        attempts = partial_summary.get("attempts", 0)
+        highlight = f"Partial hedges: {label} (attempts={attempts})"
+        last_error = partial_summary.get("last_error")
+        if last_error:
+            highlight += f" last_error={last_error}"
+        summary_highlights.append(highlight)
     limits_for_advisor = {
         "MAX_TOTAL_NOTIONAL_USDT": risk_limits_env.get("MAX_TOTAL_NOTIONAL_USDT"),
         "MAX_OPEN_POSITIONS": risk_limits_env.get("MAX_OPEN_POSITIONS"),
@@ -552,6 +563,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "strategy_budgets": strategy_budgets,
         "strategy_budget_snapshot": strategy_budget_snapshot,
         "daily_strategy_budgets": daily_strategy_budgets,
+        "partial_rebalance": partial_summary,
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
         "auto_hold_daily_loss": auto_hold_daily_loss,
@@ -772,6 +784,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_decision_reason = autopilot.get("last_decision_reason") or ""
     autopilot_decision_ts = autopilot.get("last_decision_ts") or ""
     universe_enforced = bool(context.get("universe_enforced"))
+    partial_rebalance = context.get("partial_rebalance", {}) or {}
 
     pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
     pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
@@ -1875,6 +1888,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append(
         f"<tr><th>Universe</th><td>{_universe_badge(universe_enforced)}</td></tr>"
     )
+    partial_label = _fmt(partial_rebalance.get("label")) or "OK"
+    partial_count = _fmt(partial_rebalance.get("count"))
+    partial_attempts = _fmt(partial_rebalance.get("attempts"))
+    partial_error = _fmt(partial_rebalance.get("last_error"))
+    partial_text = f"{partial_label} (count={partial_count}, attempts={partial_attempts})"
+    if partial_error:
+        partial_text += f" &mdash; last_error: {partial_error}"
+    parts.append(f"<tr><th>Partial hedges</th><td>{partial_text}</td></tr>")
     if hold_active:
         detail = "YES"
         reason_text = hold_reason_display or hold_reason_raw

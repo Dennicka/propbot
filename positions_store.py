@@ -259,6 +259,81 @@ def append_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
     return dict(record)
 
 
+def update_record(
+    position_id: str,
+    updates: Mapping[str, Any],
+    *,
+    legs_override: Iterable[Mapping[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Update an existing hedge position and persist the change."""
+
+    path = _store_path()
+    updates_dict = {str(key): value for key, value in updates.items()}
+    legs_payload = legs_override if legs_override is not None else updates_dict.pop("legs", None)
+    with _LOCK:
+        entries = _load_entries(path)
+        target = _locate_entry(entries, position_id)
+        if target is None:
+            raise KeyError(f"position {position_id} not found")
+        for key, value in updates_dict.items():
+            if key == "rebalancer" and isinstance(value, Mapping):
+                existing = target.get("rebalancer")
+                merged = dict(existing) if isinstance(existing, Mapping) else {}
+                merged.update({str(k): v for k, v in value.items()})
+                target["rebalancer"] = merged
+            else:
+                target[key] = value
+        if isinstance(legs_payload, Iterable):
+            overrides: Dict[str, Mapping[str, Any]] = {}
+            for entry in legs_payload:
+                if isinstance(entry, Mapping):
+                    side_key = str(entry.get("side") or "").lower()
+                    if side_key in {"long", "short"}:
+                        overrides[side_key] = entry
+            legs_list = target.get("legs")
+            if isinstance(legs_list, list):
+                for idx, leg in enumerate(legs_list):
+                    if not isinstance(leg, Mapping):
+                        continue
+                    override = overrides.get(str(leg.get("side") or "").lower())
+                    if not override:
+                        continue
+                    venue_override = override.get("venue") or override.get("exchange") or leg.get("venue")
+                    notional_override = override.get("notional_usdt")
+                    leverage_override = override.get("leverage")
+                    timestamp_override = override.get("timestamp")
+                    simulated_override = override.get("simulated")
+                    status_override = override.get("status")
+                    price_override = (
+                        override.get("entry_price")
+                        if override.get("entry_price") not in (None, "")
+                        else override.get("price")
+                        if override.get("price") not in (None, "")
+                        else override.get("avg_price")
+                    )
+                    new_leg = _normalise_leg(
+                        venue=str(venue_override or leg.get("venue")),
+                        symbol=str(override.get("symbol") or leg.get("symbol")),
+                        side=str(leg.get("side") or "long"),
+                        notional_usdt=float(notional_override) if notional_override not in (None, "") else float(leg.get("notional_usdt", 0.0)),
+                        entry_price=price_override if price_override not in (None, "") else leg.get("entry_price"),
+                        leverage=float(leverage_override) if leverage_override not in (None, "") else leg.get("leverage"),
+                        timestamp=str(timestamp_override) if timestamp_override not in (None, "") else str(leg.get("timestamp")),
+                        status=str(status_override) if status_override not in (None, "") else str(leg.get("status")),
+                        simulated=bool(simulated_override) if simulated_override is not None else leg.get("simulated"),
+                        filled_qty=override.get("filled_qty"),
+                        base_size=override.get("base_size"),
+                    )
+                    raw_payload = override.get("raw")
+                    if isinstance(raw_payload, Mapping):
+                        new_leg["raw"] = {str(k): v for k, v in raw_payload.items()}
+                    elif raw_payload is not None:
+                        new_leg["raw"] = raw_payload
+                    legs_list[idx] = new_leg
+        _write_entries(path, entries)
+        return {str(key): value for key, value in target.items()}
+
+
 def _locate_entry(entries: List[MutableMapping[str, Any]], position_id: str) -> MutableMapping[str, Any] | None:
     for entry in entries:
         if str(entry.get("id")) == str(position_id):
@@ -334,6 +409,7 @@ __all__ = [
     "get_store_path",
     "list_records",
     "mark_closed",
+    "update_record",
     "reset_store",
 ]
 
