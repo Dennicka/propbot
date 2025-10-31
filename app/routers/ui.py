@@ -58,6 +58,7 @@ from ..risk.accounting import (
     reset_strategy_budget_usage,
 )
 from ..strategy_budget import get_strategy_budget_manager
+from ..strategy.pnl_tracker import get_strategy_pnl_tracker
 from ..strategy_risk import get_strategy_risk_manager
 from ..services.strategy_status import build_strategy_status
 from ..orchestrator import orchestrator
@@ -142,6 +143,33 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     snapshot = build_strategy_status()
     rows = [dict(entry) for entry in snapshot.values()]
     return {"strategies": rows, "snapshot": snapshot}
+
+
+@router.get("/strategy_pnl")
+def strategy_pnl_overview(request: Request) -> dict[str, Any]:
+    """Expose rolling realised PnL aggregates per strategy."""
+
+    require_token(request)
+    tracker = get_strategy_pnl_tracker()
+    snapshot = tracker.snapshot()
+    strategies: list[dict[str, object]] = []
+    for name, entry in snapshot.items():
+        realized_today = float(entry.get("realized_today", 0.0))
+        realized_7d = float(entry.get("realized_7d", 0.0))
+        max_drawdown_7d = float(entry.get("max_drawdown_7d", 0.0))
+        strategies.append(
+            {
+                "name": name,
+                "realized_today": realized_today,
+                "realized_7d": realized_7d,
+                "max_drawdown_7d": max_drawdown_7d,
+            }
+        )
+    strategies.sort(key=lambda item: item["realized_today"])
+    return {
+        "strategies": strategies,
+        "simulated_excluded": tracker.exclude_simulated_entries(),
+    }
 
 
 @router.get("/risk_snapshot")

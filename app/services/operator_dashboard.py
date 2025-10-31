@@ -43,6 +43,7 @@ from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 from ..risk.auto_hold import AUTO_HOLD_AUDIT_REASON, AUTO_HOLD_REASON
 from ..risk.telemetry import get_risk_skip_counts
 from ..strategy_budget import get_strategy_budget_manager
+from ..strategy.pnl_tracker import get_strategy_pnl_tracker
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
 from ..universe.gate import is_universe_enforced
@@ -277,6 +278,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     strategy_risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
+    tracker = get_strategy_pnl_tracker()
+    tracker_snapshot = tracker.snapshot()
+    tracker_simulated_excluded = tracker.exclude_simulated_entries()
     strategy_status_snapshot = build_strategy_status()
     safety_payload = _safety_snapshot(state)
     persisted_safety = (
@@ -539,6 +543,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "strategy_plan": strategy_plan,
         "strategy_risk_snapshot": strategy_risk_snapshot,
         "strategy_pnl_snapshot": strategy_pnl_snapshot,
+        "strategy_pnl_tracker_snapshot": tracker_snapshot,
+        "strategy_pnl_tracker_simulated_excluded": tracker_simulated_excluded,
         "strategy_status_snapshot": strategy_status_snapshot,
         "strategy_budgets": strategy_budgets,
         "strategy_budget_snapshot": strategy_budget_snapshot,
@@ -939,6 +945,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-performance{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".strategy-performance h2{margin-top:0;}"
         ".strategy-performance table{margin-top:1rem;}"
+        ".strategy-pnl{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".strategy-pnl h2{margin-top:0;}"
+        ".strategy-pnl table{margin-top:1rem;width:100%;border-collapse:collapse;}"
+        ".strategy-pnl th,.strategy-pnl td{padding:0.5rem 0.75rem;text-align:left;}"
+        ".strategy-pnl tbody tr:nth-child(even){background:#f9fafb;}"
         ".strategy-performance tr.alert{background:#fee2e2;}"
         ".strategy-performance .flag-true{color:#b91c1c;font-weight:700;}"
         ".strategy-performance .flag-false{color:#166534;font-weight:700;}"
@@ -1058,6 +1069,56 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
     parts.append("".join(autopilot_html) + "</div>")
 
+
+    strategy_pnl_tracker_snapshot = context.get("strategy_pnl_tracker_snapshot", {}) or {}
+    if not isinstance(strategy_pnl_tracker_snapshot, Mapping):
+        strategy_pnl_tracker_snapshot = {}
+    strategy_pnl_rows: list[dict[str, Any]] = []
+    for name in sorted(strategy_pnl_tracker_snapshot):
+        entry = strategy_pnl_tracker_snapshot.get(name) or {}
+        if not isinstance(entry, Mapping):
+            entry = {}
+        strategy_pnl_rows.append(
+            {
+                "name": name,
+                "realized_today": _coerce_float(entry.get("realized_today")),
+                "realized_7d": _coerce_float(entry.get("realized_7d")),
+                "max_drawdown_7d": _coerce_float(entry.get("max_drawdown_7d")),
+            }
+        )
+    strategy_pnl_rows.sort(key=lambda row: row["realized_today"])
+
+    strategy_pnl_html = ["<div class=\"strategy-pnl\"><h2>Strategy PnL</h2>"]
+    if not strategy_pnl_rows:
+        strategy_pnl_html.append("<p class=\"note\">No realised fills recorded.</p>")
+    else:
+        simulated_excluded = bool(
+            context.get("strategy_pnl_tracker_simulated_excluded", True)
+        )
+        if simulated_excluded:
+            strategy_pnl_html.append(
+                "<p class=\"note\">Simulated (DRY_RUN) fills excluded.</p>"
+            )
+        else:
+            strategy_pnl_html.append(
+                "<p class=\"note\">Simulated (DRY_RUN) fills included in totals.</p>"
+            )
+        strategy_pnl_html.append(
+            "<table><thead><tr><th>Strategy</th><th>Today</th><th>7d</th><th>MaxDD (7d)</th>"
+            "</tr></thead><tbody>"
+        )
+        for row in strategy_pnl_rows:
+            strategy_pnl_html.append(
+                "<tr><td>{name}</td><td>{today}</td><td>{rolling}</td><td>{drawdown}</td></tr>".format(
+                    name=_fmt(row["name"]),
+                    today=_fmt(row["realized_today"]),
+                    rolling=_fmt(row["realized_7d"]),
+                    drawdown=_fmt(row["max_drawdown_7d"]),
+                )
+            )
+        strategy_pnl_html.append("</tbody></table>")
+    strategy_pnl_html.append("</div>")
+    parts.append("".join(strategy_pnl_html))
 
     strategy_status_snapshot = context.get("strategy_status_snapshot", {}) or {}
     if not isinstance(strategy_status_snapshot, Mapping):

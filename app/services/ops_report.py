@@ -13,6 +13,7 @@ from positions import list_positions
 from ..audit_log import list_recent_operator_actions
 from ..pnl_report import build_pnl_snapshot
 from ..strategy_budget import get_strategy_budget_manager
+from ..strategy.pnl_tracker import get_strategy_pnl_tracker
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
 from ..watchdog.exchange_watchdog import get_exchange_watchdog
@@ -121,6 +122,22 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
     strategy_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
+    pnl_tracker = get_strategy_pnl_tracker()
+    tracker_snapshot = pnl_tracker.snapshot()
+    tracker_rows = [
+        {
+            "name": name,
+            "realized_today": float(entry.get("realized_today", 0.0)),
+            "realized_7d": float(entry.get("realized_7d", 0.0)),
+            "max_drawdown_7d": float(entry.get("max_drawdown_7d", 0.0)),
+        }
+        for name, entry in tracker_snapshot.items()
+    ]
+    tracker_rows.sort(key=lambda row: row["realized_today"])
+    strategy_pnl_tracker_payload = {
+        "strategies": tracker_rows,
+        "simulated_excluded": pnl_tracker.exclude_simulated_entries(),
+    }
     strategy_status_snapshot = build_strategy_status()
     watchdog_instance = get_exchange_watchdog()
     watchdog_snapshot = watchdog_instance.get_state()
@@ -183,6 +200,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
             strategy_pnl_snapshot,
         ),
         "strategy_status": strategy_status_snapshot,
+        "strategy_pnl": strategy_pnl_tracker_payload,
         "strategy_budgets": strategy_budget_snapshot,
         "watchdog": watchdog_report,
         "audit": {
@@ -284,6 +302,32 @@ def _iter_strategy_pnl_rows(payload: Mapping[str, Any]) -> Iterable[dict[str, st
                     "key": key,
                     "value": _stringify(entry.get(key)),
                 }
+
+
+def _iter_strategy_pnl_tracker_rows(payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
+    simulated_flag = payload.get("simulated_excluded")
+    if simulated_flag is not None:
+        yield {
+            "section": "strategy_pnl",
+            "key": "simulated_excluded",
+            "value": _stringify(simulated_flag),
+        }
+    strategies = payload.get("strategies")
+    if isinstance(strategies, Sequence):
+        for entry in strategies:
+            if not isinstance(entry, Mapping):
+                continue
+            name = str(entry.get("name") or "")
+            if not name:
+                continue
+            section = f"strategy_pnl:{name}"
+            for key in ("realized_today", "realized_7d", "max_drawdown_7d"):
+                if key in entry:
+                    yield {
+                        "section": section,
+                        "key": key,
+                        "value": _stringify(entry.get(key)),
+                    }
 
 
 def _iter_pnl_rows(pnl_payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
@@ -423,6 +467,9 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
         writer.writerow(row)
     per_strategy_pnl_payload = _coerce_mapping(report.get("per_strategy_pnl"))
     for row in _iter_strategy_pnl_rows(per_strategy_pnl_payload):
+        writer.writerow(row)
+    tracker_pnl_payload = _coerce_mapping(report.get("strategy_pnl"))
+    for row in _iter_strategy_pnl_tracker_rows(tracker_pnl_payload):
         writer.writerow(row)
     pnl_payload = _coerce_mapping(report.get("pnl"))
     for row in _iter_pnl_rows(pnl_payload):

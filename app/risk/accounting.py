@@ -34,6 +34,7 @@ from typing import Dict, Iterable, Mapping, Tuple
 
 from ..budget.strategy_budget import StrategyBudgetManager
 from ..metrics import slo
+from ..strategy.pnl_tracker import get_strategy_pnl_tracker
 from ..services.runtime import get_state
 from .auto_hold import auto_hold_on_daily_loss_breach
 from .core import FeatureFlags, RiskGovernor, get_risk_governor
@@ -188,6 +189,14 @@ def _budget_blocked(budget_info: Mapping[str, object]) -> bool:
         return False
     used = float(budget_info.get("used_today_usdt") or 0.0)
     return used >= (limit_value - _tolerance())
+
+
+def _record_strategy_pnl(strategy: str, pnl_value: float, *, simulated: bool) -> None:
+    try:
+        tracker = get_strategy_pnl_tracker()
+        tracker.record_fill(strategy, pnl_value, simulated=simulated)
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def _epoch_day_to_iso(epoch_day: object) -> str | None:
@@ -505,6 +514,7 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
             _TOTALS.simulated_open_notional = max(_TOTALS.simulated_open_notional - notional_value, 0.0)
             _TOTALS.simulated_open_positions = max(_TOTALS.simulated_open_positions - 1, 0)
             _TOTALS.simulated_realised_pnl_today += pnl_value
+            _record_strategy_pnl(strategy, pnl_value, simulated=True)
             return _snapshot_unlocked()
 
         entry.open_notional = max(entry.open_notional - notional_value, 0.0)
@@ -514,6 +524,7 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
         _TOTALS.open_positions = max(_TOTALS.open_positions - 1, 0)
         _TOTALS.realised_pnl_today += pnl_value
         _DAILY_LOSS_CAP.record_realized(pnl_value)
+        _record_strategy_pnl(strategy, pnl_value, simulated=False)
 
         if pnl_value < 0:
             loss = abs(pnl_value)
