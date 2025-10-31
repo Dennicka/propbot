@@ -26,6 +26,7 @@ from app.services.runtime import reset_for_tests
 from positions import reset_positions
 from pnl_history_store import reset_store as reset_pnl_history_store
 from app.capital_manager import CapitalManager, reset_capital_manager
+from app.strategy.pnl_tracker import reset_strategy_pnl_tracker_for_tests
 
 
 @pytest.fixture
@@ -126,3 +127,10 @@ def override_capital_state(monkeypatch, tmp_path: Path):
     reset_capital_manager(CapitalManager(state_path=path))
     yield
     reset_capital_manager()
+
+
+@pytest.fixture(autouse=True)
+def reset_strategy_pnl_tracker():
+    reset_strategy_pnl_tracker_for_tests()
+    yield
+    reset_strategy_pnl_tracker_for_tests()

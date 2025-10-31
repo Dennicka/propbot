@@ -147,18 +147,19 @@ notional'а, например:
 
 ### Per-Strategy PnL & Drawdown
 
-- Runtime теперь ведёт отдельный журнал реализованного PnL по каждой стратегии.
-  Для каждого имени сохраняются `realized_pnl_today`, `realized_pnl_total`,
-  семидневное скользящее окно и `max_drawdown_observed` в абсолютном выражении.
-- `/ui/dashboard` показывает блок «Strategy Performance» с этими метриками
-  рядом со статусами `frozen`, `budget_blocked` и счётчиком
-  `consecutive_failures`. Стратегии с активным freeze или блокировкой бюджета
-  подсвечиваются красным.
-- `/api/ui/ops_report` и CSV-экспорт содержат секцию `per_strategy_pnl` —
-  данные можно забирать в внешние мониторинги без парсинга HTML.
-- Freeze по дневному убытку теперь опирается на эти реальные данные из
-  персистентного PnL-трекера. Как и раньше, ручной UNFREEZE возможен
-  оператором, но действие фиксируется в audit log.
+- Runtime ведёт in-memory трекер реализованного PnL с UTC-таймстампами.
+  Для каждой стратегии считаются `Today`, скользящее `7d` окно и `MaxDD(7d)`
+  (максимальная просадка внутри последней недели).
+- `GET /api/ui/strategy_pnl` отдаёт JSON `{"strategies": [...], "simulated_excluded": bool}`.
+  Стратегии сортируются по `Today` (от самых убыточных), каждая запись содержит
+  `name`, `realized_today`, `realized_7d`, `max_drawdown_7d`.
+- `/ui/dashboard` расширен таблицей «Strategy PnL» с колонками Strategy / Today / 7d /
+  MaxDD(7d). Значения форматируются как и остальные финансовые метрики.
+- `/api/ui/ops_report` и CSV-экспорт теперь включают секцию `strategy_pnl` с теми же
+  полями — их можно подключать к внешним отчётам без парсинга HTML.
+- Симуляционные записи (DRY_RUN) исключаются из агрегаций по умолчанию
+  (`EXCLUDE_DRY_RUN_FROM_PNL=true`). Установите переменную окружения в `false`,
+  чтобы увидеть комбинированный PnL c тестовыми сделками.
 
 ### Strategy status API & Dashboard
 

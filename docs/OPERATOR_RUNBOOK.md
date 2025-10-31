@@ -204,22 +204,26 @@
 
 ## Per-Strategy PnL & Drawdown
 
-- Для прозрачности, какая стратегия «сливает», в runtime добавлен отдельный
-  персистентный модуль `strategy_pnl_state.json`. Он хранит
-  `realized_pnl_today`, `realized_pnl_total`, скользящее окно за последние семь
-  запусков и `max_drawdown_observed` для каждой стратегии.
-- `/ui/dashboard` расширен блоком «Strategy Performance» — в нём отображаются
-  дневной и общий реализованный PnL, признак `frozen`, `budget_blocked` и
-  счётчик `consecutive_failures`. Строки с активными блокировками подсвечены
-  красным.
-- `/api/ui/ops_report` (и CSV) теперь содержит секцию `per_strategy_pnl`, так что
-  те же данные можно отправлять в внешние отчёты без парсинга HTML.
-- Freeze по дневному убытку использует эти значения из персистентного PnL,
-  а ручной UNFREEZE по-прежнему возможен — действие логируется в audit log и
-  отображается в блоках Recent Ops / Audit.
-- `GET /api/ui/strategy_status` возвращает объединённый снимок риска, бюджета и
-  PnL. На `/ui/dashboard` этот же snapshot лежит в блоке «Strategy Performance /
-  Risk» и считается основным источником правды по стратегиям.
+- Runtime поддерживает in-memory трекер реализованного PnL по каждой стратегии.
+  Для операторов доступны агрегаты `Today`, `7d` и `MaxDD(7d)` (просадка внутри
+  последней недели). Исторические данные остаются в персистентном `strategy_pnl`
+  модуле для совместимости с freeze-логикой.
+- `GET /api/ui/strategy_pnl` возвращает
+  `{"strategies": [...], "simulated_excluded": bool}`. Записи сортируются по
+  `Today` (самые убыточные сверху) и включают `name`, `realized_today`,
+  `realized_7d`, `max_drawdown_7d`.
+- На `/ui/dashboard` появился отдельный блок «Strategy PnL» с колонками Strategy /
+  Today / 7d / MaxDD(7d). Таблица помогает быстро понять, какая стратегия тянет
+  команду вниз за текущие сутки и неделю.
+- Ops report (`/api/ui/ops_report`, JSON + CSV) дополнен секцией `strategy_pnl`
+  с теми же полями для внешних отчётов. В CSV добавлена строка
+  `strategy_pnl,simulated_excluded`.
+- Симуляционные DRY_RUN-сделки исключаются по умолчанию
+  (`EXCLUDE_DRY_RUN_FROM_PNL=true`). Сбросьте флаг в `false`, если нужно сравнивать
+  реальное исполнение с симуляцией.
+- Блок «Strategy Performance / Risk» продолжает показывать объединённый snapshot
+  из `GET /api/ui/strategy_status` (frozen/budget/постоянные лимиты) и остаётся
+  основным источником правды по стратегическим ограничениям.
 
 ## Execution risk accounting snapshot
 
