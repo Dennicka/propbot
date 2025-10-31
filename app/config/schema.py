@@ -166,6 +166,12 @@ class StatusThresholds(BaseModel):
     status: Dict[str, float] = Field(default_factory=dict)
 
 
+class ChaosConfig(BaseModel):
+    ws_drop_probability: float = Field(0.0, ge=0.0, le=1.0)
+    rest_timeout_probability: float = Field(0.0, ge=0.0, le=1.0)
+    order_delay_ms: int = Field(0, ge=0)
+
+
 class AppConfig(BaseModel):
     profile: str
     lang: str | None = None
@@ -176,6 +182,7 @@ class AppConfig(BaseModel):
     derivatives: DerivativesConfig | None = None
     obs: Dict[str, object] | None = None
     status_thresholds_file: str | None = None
+    chaos: ChaosConfig | None = None
 
 
 @dataclass
@@ -205,6 +212,7 @@ __all__ = [
     "ControlConfig",
     "DerivativesConfig",
     "StatusThresholds",
+    "ChaosConfig",
     "AppConfig",
     "LoadedConfig",
 ]

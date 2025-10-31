@@ -51,6 +51,7 @@ from ..services.runtime import (
 )
 from ..services.runtime_badges import get_runtime_badges
 from ..services import approvals_store, portfolio, risk, risk_guard
+from ..services.backtest_reports import load_latest_summary as load_latest_backtest_summary
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
@@ -216,6 +217,24 @@ def strategy_pnl_overview(request: Request) -> dict[str, Any]:
     return {
         "strategies": strategies,
         "simulated_excluded": tracker.exclude_simulated_entries(),
+    }
+
+
+@router.get("/backtest/last")
+def backtest_last_summary(request: Request) -> dict[str, Any]:
+    """Return the most recent offline backtest summary if available."""
+
+    require_token(request)
+    report = load_latest_backtest_summary()
+    if not report:
+        return {"available": False}
+    summary = report.summary if isinstance(report.summary, Mapping) else {}
+    return {
+        "available": True,
+        "generated_at": report.generated_at,
+        "json_path": report.json_path,
+        "csv_path": report.csv_path,
+        "summary": summary,
     }
 
 

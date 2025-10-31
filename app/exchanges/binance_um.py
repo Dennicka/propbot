@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
     requests = _RequestsShim()
 
 from . import InMemoryDerivClient, build_in_memory_client
+from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from ..core.config import DerivVenueConfig
@@ -78,12 +79,14 @@ class BinanceUMClient:
         params.setdefault("timestamp", self._timestamp())
         headers = {"X-MBX-APIKEY": self._api_key or ""}
         signed = self._sign(params.copy())
+        maybe_raise_rest_timeout(context="binance_um.signed_request")
         response = client.request(method, path, params=signed, headers=headers)
         response.raise_for_status()
         return response.json()
 
     def _public_get(self, path: str, params: Dict[str, Any] | None = None) -> Dict[str, Any] | list[Any]:
         client = self._ensure_http()
+        maybe_raise_rest_timeout(context="binance_um.public_get")
         response = client.get(path, params=params or {})
         response.raise_for_status()
         return response.json()
@@ -198,6 +201,7 @@ class BinanceUMClient:
     # Trading
 
     def place_order(self, **kwargs: Any) -> Dict[str, Any]:
+        apply_order_delay()
         if self.safe_mode:
             return self._fallback.place_order(**kwargs)
         params: Dict[str, Any] = {
@@ -226,6 +230,7 @@ class BinanceUMClient:
         return self._signed_request("POST", "/fapi/v1/order", params)
 
     def cancel_order(self, **kwargs: Any) -> Dict[str, Any]:
+        apply_order_delay()
         if self.safe_mode:
             return self._fallback.cancel_order(**kwargs)
         params: Dict[str, Any] = {"symbol": kwargs["symbol"]}

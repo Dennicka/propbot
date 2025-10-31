@@ -1,0 +1,3 @@
+{"ts": "2024-01-01T00:00:00Z", "symbol": "BTCUSDT", "side": "buy", "status": "filled", "qty": 0.01, "quote_price": 20000.0, "fill_price": 20001.0, "fees_usd": 0.05}
+{"ts": "2024-01-01T00:01:00Z", "symbol": "BTCUSDT", "side": "sell", "status": "filled", "qty": 0.01, "quote_price": 20010.0, "fill_price": 20009.0, "fees_usd": 0.05}
+{"ts": "2024-01-01T00:02:00Z", "symbol": "BTCUSDT", "side": "buy", "status": "rejected", "qty": 0.01, "quote_price": 20005.0}

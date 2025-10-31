@@ -19,6 +19,11 @@ from ..runtime_state_store import (
 from . import approvals_store
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
 from .marketdata import MarketDataAggregator
+from ..utils.chaos import (
+    ChaosSettings,
+    configure as configure_chaos,
+    resolve_settings as resolve_chaos_settings,
+)
 
 
 DEFAULT_CONFIG_PATHS = {
@@ -550,6 +555,7 @@ class RuntimeState:
     autopilot: AutopilotState = field(default_factory=AutopilotState)
     safety: SafetyState = field(default_factory=SafetyState)
     universe: UniverseState = field(default_factory=UniverseState)
+    chaos: ChaosSettings = field(default_factory=ChaosSettings)
 
 
 def _sync_loop_from_control(state: RuntimeState) -> None:
@@ -597,6 +603,9 @@ def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
 def _bootstrap_runtime() -> RuntimeState:
     config_path = _resolve_config_path()
     loaded = load_app_config(config_path)
+    chaos_settings = resolve_chaos_settings(getattr(loaded.data, "chaos", None))
+    configure_chaos(chaos_settings)
+
     control_cfg = loaded.data.control
     safe_mode = _env_flag("SAFE_MODE", control_cfg.safe_mode if control_cfg else True)
     dry_run_only = _env_flag("DRY_RUN_ONLY", control_cfg.dry_run if control_cfg else False)
@@ -711,6 +720,7 @@ def _bootstrap_runtime() -> RuntimeState:
         auto_hedge=AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False)),
         autopilot=autopilot_state,
         safety=SafetyState(limits=safety_limits),
+        chaos=chaos_settings,
     )
     _sync_loop_from_control(state)
     return state
@@ -741,6 +751,11 @@ def get_loop_state() -> LoopState:
 def get_safety_status() -> Dict[str, object]:
     with _STATE_LOCK:
         return dict(_STATE.safety.status_payload())
+
+
+def get_chaos_state() -> ChaosSettings:
+    with _STATE_LOCK:
+        return _STATE.chaos
 
 
 def record_universe_unknown_pair(pair_id: str | None) -> None:

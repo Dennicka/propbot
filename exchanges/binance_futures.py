@@ -11,6 +11,8 @@ from typing import Any, Dict
 
 import requests
 
+from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
+
 from app.secrets_store import get_secrets_store
 
 from .base import FuturesExchangeClient
@@ -103,6 +105,7 @@ class BinanceFuturesClient(FuturesExchangeClient):
             headers["X-MBX-APIKEY"] = str(self.api_key)
 
         try:
+            maybe_raise_rest_timeout(context="binance_futures.request")
             if method.upper() in {"POST", "PUT"}:
                 response = self._session.request(
                     method.upper(),
@@ -190,6 +193,7 @@ class BinanceFuturesClient(FuturesExchangeClient):
         }
 
     def place_order(self, symbol: str, side: str, notional_usdt: float, leverage: float) -> Dict[str, Any]:
+        apply_order_delay()
         normalized = self._normalise_symbol(symbol)
         side_lower = str(side).lower()
         if side_lower not in {"long", "short", "buy", "sell"}:
@@ -241,6 +245,7 @@ class BinanceFuturesClient(FuturesExchangeClient):
 
     def cancel_all(self, symbol: str) -> Dict[str, Any]:
         normalized = self._normalise_symbol(symbol)
+        apply_order_delay()
         payload = self._request(
             "DELETE",
             "/fapi/v1/allOpenOrders",
