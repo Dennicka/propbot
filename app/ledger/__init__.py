@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -10,6 +11,13 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
+
+
+def _feature_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"", "0", "false", "off", "no", "disable", "disabled"}
 
 
 def _connect() -> sqlite3.Connection:
@@ -89,6 +97,18 @@ def init_db() -> None:
                 )
                 """
             )
+            if _feature_enabled("FEATURE_JOURNAL"):
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS order_journal (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        uuid TEXT NOT NULL UNIQUE,
+                        ts TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        payload TEXT NOT NULL
+                    )
+                    """
+                )
 
 
 def _now() -> str:
@@ -698,7 +718,10 @@ def reset() -> None:
     with _LEDGER_LOCK:
         conn = _connect()
         with conn:
-            for table in ("orders", "fills", "positions", "balances", "events"):
+            tables = ["orders", "fills", "positions", "balances", "events"]
+            if _feature_enabled("FEATURE_JOURNAL"):
+                tables.append("order_journal")
+            for table in tables:
                 conn.execute(f"DELETE FROM {table}")
 
 

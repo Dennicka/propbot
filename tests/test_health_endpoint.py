@@ -24,7 +24,8 @@ def test_healthz(client, monkeypatch):
         response = client.get("/healthz")
         attempts += 1
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    body = response.json()
+    assert body == {"ok": True, "journal_ok": True, "resume_ok": True}
 
 
 def test_healthz_detects_auto_hedge_failure(client, monkeypatch):
@@ -45,7 +46,10 @@ def test_healthz_detects_auto_hedge_failure(client, monkeypatch):
 
     response = client.get("/healthz")
     assert response.status_code == 503
-    assert response.json() == {"ok": False}
+    body = response.json()
+    assert body["ok"] is False
+    assert body["journal_ok"] is True
+    assert body["resume_ok"] is True
 
 
 def test_healthz_ok_when_auto_hedge_disabled(client, monkeypatch):
@@ -66,7 +70,8 @@ def test_healthz_ok_when_auto_hedge_disabled(client, monkeypatch):
 
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    body = response.json()
+    assert body == {"ok": True, "journal_ok": True, "resume_ok": True}
 
 
 def test_healthz_detects_scanner_error(client):
@@ -74,4 +79,7 @@ def test_healthz_detects_scanner_error(client):
 
     response = client.get("/healthz")
     assert response.status_code == 503
-    assert response.json() == {"ok": False}
+    body = response.json()
+    assert body["ok"] is False
+    assert body["journal_ok"] is True
+    assert body["resume_ok"] is True

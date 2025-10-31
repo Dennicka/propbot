@@ -1,6 +1,7 @@
 import pytest
 
 from app import ledger
+from app.journal import order_journal
 from app.services import loop
 from app.services.runtime import (
     approve_resume,
@@ -70,3 +71,39 @@ async def test_cancel_all_orders_clears_open_orders():
     order = ledger.get_order(order_id)
     assert order is not None
     assert order["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_orders_idempotent():
+    reset_for_tests()
+    record_resume_request("loop_cancel", requested_by="pytest")
+    approve_resume(actor="pytest")
+    ledger.reset()
+    state = get_state()
+    state.control.environment = "testnet"
+    correlation_id = "cancel-all-test"
+    ledger.record_order(
+        venue="binance-um",
+        symbol="ETHUSDT",
+        side="sell",
+        qty=0.2,
+        price=1_500.0,
+        status="submitted",
+        client_ts="2024-01-01T00:00:00Z",
+        exchange_ts=None,
+        idemp_key="order-2",
+    )
+    first = await loop.cancel_all_orders(correlation_id=correlation_id)
+    second = await loop.cancel_all_orders(correlation_id=correlation_id)
+    assert second == first
+    entry = order_journal.get(correlation_id)
+    assert entry is not None
+    payload = entry.get("payload", {})
+    assert payload.get("result") == first
+    duplicates = order_journal.get_since()
+    assert any(
+        item.get("type") == "cancel_all.duplicate"
+        and isinstance(item.get("payload"), dict)
+        and item["payload"].get("correlation_id") == correlation_id
+        for item in duplicates
+    )

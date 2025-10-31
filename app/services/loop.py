@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from .. import ledger, risk_governor
+from ..journal import is_enabled as journal_enabled
+from ..journal import order_journal
 from ..metrics import set_auto_trade_state
 from ..broker.router import ExecutionRouter
 from . import arbitrage
@@ -342,7 +344,33 @@ async def stop_loop() -> LoopState:
     return await _CONTROLLER.stop_after_cycle()
 
 
-async def cancel_all_orders(venue: str | None = None) -> Dict[str, int]:
+async def cancel_all_orders(
+    venue: str | None = None,
+    *,
+    correlation_id: str | None = None,
+) -> Dict[str, int]:
+    journal_active = journal_enabled()
+    if correlation_id and journal_active:
+        existing = order_journal.get(correlation_id)
+        if existing:
+            payload = existing.get("payload") if isinstance(existing, dict) else None
+            result_payload = payload.get("result") if isinstance(payload, dict) else None
+            duplicate_result = result_payload if isinstance(result_payload, dict) else {"cancelled": 0, "failed": 0}
+            order_journal.append(
+                {
+                    "type": "cancel_all.duplicate",
+                    "payload": {
+                        "correlation_id": correlation_id,
+                        "result": duplicate_result,
+                    },
+                }
+            )
+            ledger.record_event(
+                level="INFO",
+                code="cancel_all_duplicate",
+                payload={"correlation_id": correlation_id, "result": duplicate_result},
+            )
+            return duplicate_result
     venue_normalised = venue.lower() if venue else None
     orders = await asyncio.to_thread(ledger.fetch_open_orders)
     if venue_normalised:
@@ -356,6 +384,17 @@ async def cancel_all_orders(venue: str | None = None) -> Dict[str, int]:
         raise HoldActiveError(safety.get("hold_reason") or "hold_active")
     cancelled = 0
     failed = 0
+    orders_snapshot = [
+        {
+            "id": int(order.get("id", 0)),
+            "venue": order.get("venue"),
+            "symbol": order.get("symbol"),
+            "side": order.get("side"),
+            "qty": order.get("qty"),
+            "status": order.get("status"),
+        }
+        for order in orders
+    ]
     for order in orders:
         venue = str(order.get("venue") or "")
         order_id = int(order.get("id", 0))
@@ -375,7 +414,23 @@ async def cancel_all_orders(venue: str | None = None) -> Dict[str, int]:
             )
     remaining = await asyncio.to_thread(ledger.fetch_open_orders)
     set_open_orders(remaining)
-    return {"cancelled": cancelled, "failed": failed}
+    result = {"cancelled": cancelled, "failed": failed}
+    if journal_active:
+        payload = {
+            "correlation_id": correlation_id,
+            "result": result,
+            "orders": orders_snapshot,
+            "remaining_open_orders": [int(order.get("id", 0)) for order in remaining],
+            "status": "RESUMED" if correlation_id else "EXECUTED",
+        }
+        event = {
+            "type": "cancel_all.executed",
+            "payload": payload,
+        }
+        if correlation_id:
+            event["uuid"] = correlation_id
+        order_journal.append(event)
+    return result
 
 
 async def reset_loop() -> LoopState:
