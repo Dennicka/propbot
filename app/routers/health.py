@@ -9,10 +9,15 @@ except Exception:  # pragma: no cover - defensive import
     get_auto_hedge_state = None  # type: ignore[assignment]
     get_last_opportunity_state = None  # type: ignore[assignment]
 
+from ..journal import is_enabled as journal_enabled
+from ..journal import order_journal
+
 router = APIRouter()
 
 class HealthOut(BaseModel):
     ok: bool
+    journal_ok: bool
+    resume_ok: bool
 
 
 def _is_task_running(task) -> bool:
@@ -68,12 +73,17 @@ def _scanner_healthy(app) -> bool:
 @router.get("/healthz", response_model=HealthOut, include_in_schema=False)
 def health(request: Request):
     app = request.app
-    checks = [_auto_hedge_healthy(app), _scanner_healthy(app)]
+    resume_ok = bool(getattr(app.state, "resume_ok", True))
+    journal_ok = order_journal.healthcheck() if journal_enabled() else True
+    checks = [_auto_hedge_healthy(app), _scanner_healthy(app), resume_ok, journal_ok]
 
     ok = all(checks)
     if ok:
-        return HealthOut(ok=True)
-    return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content={"ok": False})
+        return HealthOut(ok=True, journal_ok=journal_ok, resume_ok=resume_ok)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"ok": False, "journal_ok": journal_ok, "resume_ok": resume_ok},
+    )
 
 
 @router.get("/health", response_model=HealthOut, include_in_schema=False)

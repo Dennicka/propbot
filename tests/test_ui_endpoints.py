@@ -317,8 +317,8 @@ def test_kill_switch_cancels_orders(client, monkeypatch, tmp_path):
     assert kill_request.status_code == 202
     request_id = kill_request.json()["request_id"]
 
-    async def _fake_cancel_all_orders(venue=None):
-        return {"orders_cancelled": True, "order_ids": [order_id]}
+    async def _fake_cancel_all_orders(venue=None, *, correlation_id=None):
+        return {"orders_cancelled": True, "order_ids": [order_id], "correlation_id": correlation_id}
 
     monkeypatch.setattr("app.routers.ui.cancel_all_orders", _fake_cancel_all_orders)
 

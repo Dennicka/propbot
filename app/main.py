@@ -24,6 +24,7 @@ from .telebot import setup_telegram_bot
 from .telemetry import observe_ui_latency, setup_slo_monitor
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
+from .startup_resume import perform_resume as perform_startup_resume
 from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
 from .services.autopilot import setup_autopilot
 from .services.orchestrator_alerts import setup_orchestrator_alerts
@@ -44,6 +45,7 @@ logger = logging.getLogger("propbot.startup")
 def create_app() -> FastAPI:
     ledger.init_db()
     validate_startup()
+    resume_ok, resume_payload = perform_startup_resume()
     build_version = os.getenv("BUILD_VERSION") or APP_VERSION
     logger.info(
         "PropBot starting with build_version=%s (app_version=%s)",
@@ -64,6 +66,8 @@ def create_app() -> FastAPI:
     app.state.rate_limiter = limiter
     app.state.idempotency_cache = cache
     app.state.default_rate_limits = (limiter.rate_per_min, limiter.burst)
+    app.state.resume_ok = resume_ok
+    app.state.resume_payload = resume_payload
     app.add_middleware(RateLimitMiddleware, limiter=limiter, should_guard=_should_guard)
     app.add_middleware(IdempotencyMiddleware, cache=cache, should_guard=_should_guard)
 

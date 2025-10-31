@@ -73,8 +73,8 @@ def test_operator_rbac_enforcement(monkeypatch, tmp_path, client):
     assert kill_request.status_code == 202
     kill_request_id = kill_request.json()["request_id"]
 
-    async def _fake_cancel_all_orders(venue=None):
-        return {"orders_cancelled": True}
+    async def _fake_cancel_all_orders(venue=None, *, correlation_id=None):
+        return {"orders_cancelled": True, "correlation_id": correlation_id}
 
     monkeypatch.setattr("app.routers.ui.cancel_all_orders", _fake_cancel_all_orders)
 

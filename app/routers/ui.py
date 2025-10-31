@@ -326,6 +326,10 @@ class CancelAllPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     venue: str | None = Field(default=None, description="Limit cancel-all to a specific venue")
+    correlation_id: str | None = Field(
+        default=None,
+        description="Idempotency key for cancel-all requests",
+    )
 
 
 class CloseExposurePayload(BaseModel):
@@ -1154,8 +1158,9 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     if environment != "testnet":
         raise HTTPException(status_code=403, detail="Cancel-all only available on testnet")
     venue = request.venue if request else None
+    correlation_id = request.correlation_id if request else None
     try:
-        result = await cancel_all_orders(venue=venue)
+        result = await cancel_all_orders(venue=venue, correlation_id=correlation_id)
     except HoldActiveError as exc:
         safety = get_safety_status()
         detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
@@ -1163,6 +1168,8 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     event_payload = dict(result)
     if venue:
         event_payload["venue"] = venue
+    if correlation_id:
+        event_payload["correlation_id"] = correlation_id
     ledger.record_event(level="INFO", code="cancel_all", payload=event_payload)
     _emit_ops_alert("cancel_all", "Cancel-all executed", event_payload)
     return {"result": result, "ts": _ts()}

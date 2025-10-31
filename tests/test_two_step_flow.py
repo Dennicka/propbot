@@ -27,8 +27,8 @@ def _setup_secrets(monkeypatch, tmp_path) -> None:
 def test_two_step_kill_flow(monkeypatch, tmp_path, client) -> None:
     _setup_secrets(monkeypatch, tmp_path)
 
-    async def _fake_cancel_all_orders(venue=None):
-        return {"orders_cancelled": True}
+    async def _fake_cancel_all_orders(venue=None, *, correlation_id=None):
+        return {"orders_cancelled": True, "correlation_id": correlation_id}
 
     monkeypatch.setattr("app.routers.ui.cancel_all_orders", _fake_cancel_all_orders)
 
