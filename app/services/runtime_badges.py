@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Dict, Mapping
+from collections.abc import Mapping
+from typing import Dict
 
 from ..risk.core import FeatureFlags
 from ..risk.daily_loss import get_daily_loss_cap_state
 from ..watchdog.exchange_watchdog import get_exchange_watchdog
 from .runtime import get_state
+from .status import get_partial_rebalance_summary
 
 
 BADGE_ON = "ON"
@@ -14,6 +16,8 @@ BADGE_OK = "OK"
 BADGE_BREACH = "BREACH"
 BADGE_DEGRADED = "DEGRADED"
 BADGE_AUTO_HOLD = "AUTO_HOLD"
+BADGE_PARTIAL = "PARTIAL"
+BADGE_REBALANCING = "REBALANCING"
 
 
 def _auto_trade_status() -> str:
@@ -58,6 +62,16 @@ def _watchdog_status() -> str:
     return BADGE_DEGRADED
 
 
+def _partial_status() -> str:
+    summary = get_partial_rebalance_summary()
+    if summary.get("count", 0) == 0:
+        return BADGE_OK
+    label = str(summary.get("label") or "PARTIAL").upper()
+    if label == BADGE_REBALANCING:
+        return BADGE_REBALANCING
+    return BADGE_PARTIAL
+
+
 def get_runtime_badges() -> Dict[str, str]:
     """Return the aggregated runtime status badges for operator views."""
 
@@ -66,6 +80,7 @@ def get_runtime_badges() -> Dict[str, str]:
         "risk_checks": _risk_checks_status(),
         "daily_loss": _daily_loss_status(),
         "watchdog": _watchdog_status(),
+        "partial_hedges": _partial_status(),
     }
 
 

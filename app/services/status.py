@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Mapping, Tuple
 
 from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
 from ..utils import redact_sensitive_data
 from ..version import APP_VERSION
+from positions import list_open_positions
 
 
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
@@ -40,6 +41,49 @@ def _component(
         "links": list(links or []),
     }
     return payload
+
+
+def _partial_rebalance_summary() -> Dict[str, object]:
+    summary: Dict[str, object] = {
+        "count": 0,
+        "label": "OK",
+        "attempts": 0,
+        "last_error": None,
+        "rebalancing": False,
+    }
+    partials: List[Mapping[str, object]] = []
+    for position in list_open_positions():
+        status = str(position.get("status") or "").lower()
+        if status != "partial":
+            continue
+        partials.append(position)
+    if not partials:
+        return summary
+    max_attempts = 0
+    last_error: str | None = None
+    rebalancing = False
+    for position in partials:
+        meta = position.get("rebalancer") if isinstance(position, Mapping) else None
+        meta_map = meta if isinstance(meta, Mapping) else {}
+        attempts = int(meta_map.get("attempts", 0) or 0)
+        if attempts > max_attempts:
+            max_attempts = attempts
+        meta_error = meta_map.get("last_error")
+        if meta_error and not last_error:
+            last_error = str(meta_error)
+        status_text = str(meta_map.get("status") or "").lower()
+        if status_text in {"rebalancing", "settled"}:
+            rebalancing = True
+    summary.update(
+        {
+            "count": len(partials),
+            "label": "REBALANCING" if rebalancing else "PARTIAL",
+            "attempts": max_attempts,
+            "last_error": last_error,
+            "rebalancing": rebalancing,
+        }
+    )
+    return summary
 
 
 def _guard_component(state: RuntimeState, guard_name: str, *, title: str) -> Dict[str, object]:
@@ -271,6 +315,19 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
             summary="active",
             metrics={"config_mtime": round(config_mtime, 2)},
             links=[{"title": "Config", "href": "/api/ui/config"}],
+        )
+    )
+    partial_summary = _partial_rebalance_summary()
+    summary_label = partial_summary.get("label", "OK")
+    components.append(
+        _component(
+            component_id="partial_rebalancer",
+            title="Partial Hedge Rebalancer",
+            group="P1",
+            status="OK" if summary_label == "OK" else "WARN",
+            summary=f"{summary_label} ({partial_summary.get('count', 0)})",
+            metrics=partial_summary,
+            links=[{"title": "Positions", "href": "/api/ui/positions"}],
         )
     )
     components.append(
@@ -596,6 +653,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
             "counters": dict(safety_snapshot.get("counters", {})),
         },
     }
+    snapshot["partial_rebalance"] = _partial_rebalance_summary()
     snapshot["autopilot"] = state.autopilot.as_dict()
     auto_payload = state.auto_hedge.as_dict()
     snapshot["auto_hedge"] = {
@@ -615,6 +673,10 @@ def get_status_overview() -> Dict[str, object]:
     return _build_snapshot(state)
 
 
+def get_partial_rebalance_summary() -> Dict[str, object]:
+    return dict(_partial_rebalance_summary())
+
+
 def get_status_components() -> Dict[str, object]:
     snapshot = get_status_overview()
     return {
@@ -631,6 +693,7 @@ def get_status_components() -> Dict[str, object]:
         "runaway_guard": snapshot.get("runaway_guard"),
         "autopilot": snapshot.get("autopilot"),
         "auto_hedge": snapshot.get("auto_hedge"),
+        "partial_rebalance": snapshot.get("partial_rebalance"),
     }
 
 
@@ -651,5 +714,6 @@ def get_status_slo() -> Dict[str, object]:
         "runaway_guard": snapshot.get("runaway_guard"),
         "autopilot": snapshot.get("autopilot"),
         "auto_hedge": snapshot.get("auto_hedge"),
+        "partial_rebalance": snapshot.get("partial_rebalance"),
     }
 

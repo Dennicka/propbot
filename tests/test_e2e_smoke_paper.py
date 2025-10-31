@@ -74,6 +74,7 @@ def test_e2e_smoke_paper(monkeypatch, tmp_path) -> None:
         "risk_checks": "ON",
         "daily_loss": "OK",
         "watchdog": "OK",
+        "partial_hedges": "OK",
     }
 
     risk_accounting.record_fill("paper", 0.0, 50.0, simulated=False)

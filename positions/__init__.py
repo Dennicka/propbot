@@ -9,7 +9,7 @@ import logging
 from app.services import runtime
 from app.strategy_budget import get_strategy_budget_manager
 from app.strategy_risk import get_strategy_risk_manager
-from positions_store import append_record, list_records, mark_closed, reset_store
+from positions_store import append_record, list_records, mark_closed, reset_store, update_record
 
 
 _REQUIRED_FIELDS = {
@@ -140,6 +140,20 @@ def close_position(
                 extra={"strategy": strategy_name, "pnl": pnl_value},
             )
     return updated
+
+
+def update_position(
+    position_id: str,
+    *,
+    updates: Mapping[str, Any] | None = None,
+    legs: Iterable[Mapping[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Persist updates to an existing position and refresh runtime state."""
+
+    payload = updates if isinstance(updates, Mapping) else {}
+    record = update_record(position_id, payload, legs_override=legs)
+    runtime.set_positions_state(list_records())
+    return record
 
 
 def reset_positions() -> None:

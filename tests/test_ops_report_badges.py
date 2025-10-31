@@ -39,4 +39,5 @@ async def test_ops_report_includes_badges(monkeypatch):
         "risk_checks": "OFF",
         "daily_loss": "BREACH",
         "watchdog": "DEGRADED",
+        "partial_hedges": "OK",
     }

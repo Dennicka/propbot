@@ -5,9 +5,13 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Literal, Tuple
 
+import os
+import time
+
 from ..broker.router import ExecutionRouter
 from ..core.config import ArbitragePairConfig
 from ..metrics import record_trade_execution, slo
+from ..routing import effective_fee_for_quote, extract_funding_inputs
 from ..risk.core import risk_gate
 from ..risk.telemetry import record_risk_skip
 from ..universe.gate import check_pair_allowed, is_universe_enforced
@@ -17,6 +21,7 @@ from ..risk.accounting import (
     record_intent as accounting_record_intent,
 )
 from ..strategy_risk import get_strategy_risk_manager
+from ..utils.symbols import resolve_runtime_venue_id
 from . import risk
 from .derivatives import DerivativesRuntime
 from .runtime import (
@@ -215,6 +220,13 @@ def _slippage_multiplier(slippage_bps: int, *, side: Literal["buy", "sell"]) -> 
     return max(0.0, 1 - adjustment)
 
 
+def _feature_enabled(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _compute_leg(
     *,
     buy_exchange: str,
@@ -223,12 +235,16 @@ def _compute_leg(
     sell_price: float,
     notional: float,
     fees: Dict[str, int],
+    buy_fee_bps: float | None = None,
+    sell_fee_bps: float | None = None,
 ) -> tuple[float, List[PlanLeg]]:
     if buy_price <= 0 or sell_price <= 0 or notional <= 0:
         return 0.0, []
     qty = notional / buy_price
-    buy_fee = buy_price * qty * fees[buy_exchange] / 10_000.0
-    sell_fee = sell_price * qty * fees[sell_exchange] / 10_000.0
+    buy_bps = float(buy_fee_bps) if buy_fee_bps is not None else float(fees[buy_exchange])
+    sell_bps = float(sell_fee_bps) if sell_fee_bps is not None else float(fees[sell_exchange])
+    buy_fee = buy_price * qty * buy_bps / 10_000.0
+    sell_fee = sell_price * qty * sell_bps / 10_000.0
     pnl = sell_price * qty - buy_price * qty - buy_fee - sell_fee
     legs = [
         PlanLeg(exchange=buy_exchange, side="buy", price=buy_price, qty=qty, fee_usdt=buy_fee),
@@ -274,6 +290,53 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         plan.reason = f"failed to fetch books: {exc}"
         return plan
 
+    funding_overrides: Dict[str, Dict[str, float]] = {}
+    if _feature_enabled("FEATURE_FUNDING_ROUTER"):
+        config_data = getattr(state.config, "data", None)
+        include_next_window = True
+        derivatives_cfg = getattr(config_data, "derivatives", None) if config_data else None
+        if derivatives_cfg and getattr(derivatives_cfg, "funding", None):
+            funding_cfg = derivatives_cfg.funding
+            include_next_window = bool(getattr(funding_cfg, "include_next_window", True))
+        venue_alias_map = {
+            "binance": resolve_runtime_venue_id(config_data, alias="binance"),
+            "okx": resolve_runtime_venue_id(config_data, alias="okx"),
+        }
+        funding_quotes = extract_funding_inputs(
+            runtime_state=state,
+            symbol=symbol_normalised,
+            venue_alias_map=venue_alias_map,
+            include_next_window=include_next_window,
+        )
+        if funding_quotes:
+            now_ts = time.time()
+            for venue_name, quote in funding_quotes.items():
+                funding_overrides[venue_name] = {
+                    "long": effective_fee_for_quote(
+                        quote,
+                        side="long",
+                        include_next_window=include_next_window,
+                        now=now_ts,
+                    ),
+                    "short": effective_fee_for_quote(
+                        quote,
+                        side="short",
+                        include_next_window=include_next_window,
+                        now=now_ts,
+                    ),
+                }
+            logger.debug(
+                "funding overrides applied",
+                extra={
+                    "symbol": symbol_normalised,
+                    "overrides": {
+                        venue: {k: round(v, 6) for k, v in mapping.items()}
+                        for venue, mapping in funding_overrides.items()
+                    },
+                    "include_next_window": include_next_window,
+                },
+            )
+
     # Две стороны арбитража с поправкой на слиппедж
     okx_buy       = okx_book["ask"]     * _slippage_multiplier(slippage_bps, side="buy")
     binance_sell  = binance_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
@@ -284,6 +347,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         sell_price=binance_sell,
         notional=notional_value,
         fees=fees,
+        buy_fee_bps=funding_overrides.get("okx", {}).get("long"),
+        sell_fee_bps=funding_overrides.get("binance", {}).get("short"),
     )
 
     binance_buy   = binance_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
@@ -295,6 +360,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         sell_price=okx_sell,
         notional=notional_value,
         fees=fees,
+        buy_fee_bps=funding_overrides.get("binance", {}).get("long"),
+        sell_fee_bps=funding_overrides.get("okx", {}).get("short"),
     )
 
     # Выбираем лучший из двух направлений и считаем BPS
