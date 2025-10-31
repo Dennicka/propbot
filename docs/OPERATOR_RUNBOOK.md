@@ -216,8 +216,34 @@
   Today / 7d / MaxDD(7d). Таблица помогает быстро понять, какая стратегия тянет
   команду вниз за текущие сутки и неделю.
 - Ops report (`/api/ui/ops_report`, JSON + CSV) дополнен секцией `strategy_pnl`
-  с теми же полями для внешних отчётов. В CSV добавлена строка
-  `strategy_pnl,simulated_excluded`.
+  с теми же полями для внешних отчётов. CSV-экспорт теперь плоский: каждая строка
+  описывает стратегию и содержит базовые колонки (`timestamp`,
+  `open_trades_count`, `max_open_trades_limit`, `daily_loss_status`,
+  `watchdog_status`, `auto_trade`, `strategy`, `budget_usdt`, `used_usdt`,
+  `remaining_usdt`).
+
+  Сокращённый пример JSON:
+
+  ```json
+  {
+    "open_trades_count": 1,
+    "max_open_trades_limit": 6,
+    "badges": {"watchdog": "OK", "daily_loss": "OK", "auto_trade": "OFF"},
+    "last_audit_actions": [
+      {"ts": "2024-01-01T00:00:00+00:00", "operator": "alice", "role": "operator", "action": "HOLD", "details": {"status": "ok"}}
+    ],
+    "budgets": [
+      {"strategy": "alpha", "budget_usdt": 900.0, "used_usdt": 300.0, "remaining_usdt": 600.0}
+    ]
+  }
+  ```
+
+  И соответствующая строка CSV:
+
+  ```csv
+  timestamp,open_trades_count,max_open_trades_limit,daily_loss_status,watchdog_status,auto_trade,strategy,budget_usdt,used_usdt,remaining_usdt
+  2024-01-01T00:00:00+00:00,1,6,OK,OK,OFF,alpha,900.0,300.0,600.0
+  ```
 - Симуляционные DRY_RUN-сделки исключаются по умолчанию
   (`EXCLUDE_DRY_RUN_FROM_PNL=true`). Сбросьте флаг в `false`, если нужно сравнивать
   реальное исполнение с симуляцией.

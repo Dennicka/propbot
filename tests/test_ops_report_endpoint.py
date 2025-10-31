@@ -68,6 +68,7 @@ def ops_report_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("POSITIONS_STORE_PATH", str(tmp_path / "positions.json"))
     monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "200")
     monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "5")
     runtime.clear_universe_unknown_pairs()
     runtime.record_universe_unknown_pair("DOGEUSDT")
 
@@ -183,6 +184,20 @@ def ops_report_environment(monkeypatch, tmp_path):
             }
         ],
     )
+    monkeypatch.setattr(
+        "app.services.ops_report.get_risk_accounting_snapshot",
+        lambda: {
+            "per_strategy": {
+                "alpha": {
+                    "budget": {
+                        "limit_usdt": 1_000.0,
+                        "used_today_usdt": 250.0,
+                        "remaining_usdt": 750.0,
+                    }
+                }
+            }
+        },
+    )
 
     try:
         yield {
@@ -214,12 +229,17 @@ def test_ops_report_json_accessible_for_roles(
     assert response.status_code == 200
     payload = response.json()
 
+    assert payload["open_trades_count"] == 1
+    assert payload["max_open_trades_limit"] == 5
     assert payload["runtime"]["mode"] == "HOLD"
     assert payload["runtime"]["safety"]["hold_reason"] == "maintenance"
     assert payload["autopilot"]["last_decision"] == "ready"
     assert payload["pnl"]["unrealized_pnl_usdt"] == 42.0
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
+    assert payload["last_audit_actions"][0]["action"] == "TRIGGER_HOLD"
+    assert payload["badges"]
+    assert payload["budgets"][0]["strategy"] == "alpha"
     assert payload["universe_enforced"] is False
     assert payload["unknown_pairs"] == ["DOGEUSDT"]
     watchdog_payload = payload.get("watchdog")
@@ -269,35 +289,17 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
 
     rows = list(csv.DictReader(io.StringIO(response.text)))
     assert rows
-    assert any(row["section"] == "runtime" and row["key"] == "mode" for row in rows)
-    assert any(
-        row["section"] == "strategy_status:alpha"
-        and row["key"] == "budget_blocked"
-        and row["value"] == "True"
-        for row in rows
-    )
-    assert any(
-        row["section"] == "daily_loss_cap" and row["key"] == "losses_usdt" and row["value"] == "80.0"
-        for row in rows
-    )
-    assert any(
-        row["section"] == "watchdog" and row["key"] == "watchdog_ok" and row["value"] == "False"
-        for row in rows
-    )
-    assert any(
-        row["section"] == "watchdog_degraded"
-        and row["key"] == "binance"
-        and row["value"] == "timeout"
-        for row in rows
-    )
-    assert any(
-        row["section"] == "universe"
-        and row["key"] == "enforced"
-        and row["value"] == "False"
-        for row in rows
-    )
-    assert any(
-        row["section"] == "universe_unknown"
-        and row["value"] == "DOGEUSDT"
-        for row in rows
-    )
+    header = rows[0].keys()
+    assert "timestamp" in header
+    assert "open_trades_count" in header
+    assert "strategy" in header
+    first_row = rows[0]
+    assert first_row["open_trades_count"] == "1"
+    assert first_row["max_open_trades_limit"] == "5"
+    assert first_row["strategy"] == "alpha"
+    assert float(first_row["budget_usdt"]) == pytest.approx(1_000.0)
+    assert float(first_row["used_usdt"]) == pytest.approx(250.0)
+    assert float(first_row["remaining_usdt"]) == pytest.approx(750.0)
+    assert first_row["daily_loss_status"]
+    assert first_row["watchdog_status"]
+    assert first_row["auto_trade"]
