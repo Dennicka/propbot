@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, conint, confloat
 
 from .. import ledger
+from ..metrics import set_auto_trade_state
 from ..audit_log import list_recent_operator_actions, log_operator_action
 from ..dashboard_helpers import render_dashboard_response
 from ..version import APP_VERSION
@@ -898,6 +899,7 @@ async def update_secret(payload: SecretUpdate) -> dict:
     state = get_state()
     if payload.auto_loop is not None:
         state.control.auto_loop = bool(payload.auto_loop)
+        set_auto_trade_state(state.control.auto_loop)
     if payload.pair is not None:
         state.control.loop_pair = payload.pair.upper() if payload.pair else None
     if payload.venues is not None:

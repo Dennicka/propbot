@@ -4,7 +4,7 @@
 
 ## Health / readiness
 - `GET /api/health` — статус сервиса.
-- `GET /live-readiness` — готовность к live (SAFE_MODE/approvals).
+- `GET /live-readiness` — готовность к live (watchdog!=AUTO_HOLD, daily loss!=BREACH).
 
 ## UI / Control
 - `GET /api/ui/status/overview|components|slo` — агрегаторы System Status.

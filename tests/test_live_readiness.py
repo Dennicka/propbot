@@ -1,87 +1,43 @@
 from __future__ import annotations
 
 from app.services import live_readiness
+from app.services.runtime_badges import BADGE_AUTO_HOLD, BADGE_BREACH, BADGE_OK
 
 
-class _StubWatchdog:
-    def __init__(self, ok: bool) -> None:
-        self._ok = ok
-
-    def overall_ok(self) -> bool:
-        return self._ok
-
-
-class _StubDailyLossCap:
-    def __init__(self, breached: bool) -> None:
-        self._breached = breached
-
-    def is_breached(self) -> bool:
-        return self._breached
-
-
-def test_live_readiness_ready(client, monkeypatch):
-    monkeypatch.setattr(live_readiness, "is_hold_active", lambda: False)
+def test_live_readiness_ok(client, monkeypatch):
     monkeypatch.setattr(
         live_readiness,
-        "get_exchange_watchdog",
-        lambda: _StubWatchdog(ok=True),
-    )
-    monkeypatch.setattr(
-        live_readiness,
-        "get_daily_loss_cap",
-        lambda: _StubDailyLossCap(breached=False),
-    )
-    monkeypatch.setattr(
-        live_readiness.FeatureFlags,
-        "enforce_daily_loss_cap",
-        classmethod(lambda cls: True),
-    )
-    monkeypatch.setattr(
-        live_readiness,
-        "_universe_has_tradeable_instruments",
-        lambda manager=None: True,
+        "get_runtime_badges",
+        lambda: {"watchdog": BADGE_OK, "daily_loss": BADGE_OK},
     )
 
     response = client.get("/live-readiness")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "ready": True,
-        "hold": False,
-        "watchdog_ok": True,
-        "daily_loss_breached": False,
-        "universe_loaded": True,
-        "reasons": [],
-    }
+    assert response.json() == {"ok": True, "reasons": []}
 
 
-def test_live_readiness_not_ready_due_to_hold(client, monkeypatch):
-    monkeypatch.setattr(live_readiness, "is_hold_active", lambda: True)
+def test_live_readiness_not_ok_due_to_watchdog(client, monkeypatch):
     monkeypatch.setattr(
         live_readiness,
-        "get_exchange_watchdog",
-        lambda: _StubWatchdog(ok=True),
-    )
-    monkeypatch.setattr(
-        live_readiness,
-        "get_daily_loss_cap",
-        lambda: _StubDailyLossCap(breached=False),
-    )
-    monkeypatch.setattr(
-        live_readiness.FeatureFlags,
-        "enforce_daily_loss_cap",
-        classmethod(lambda cls: True),
-    )
-    monkeypatch.setattr(
-        live_readiness,
-        "_universe_has_tradeable_instruments",
-        lambda manager=None: True,
+        "get_runtime_badges",
+        lambda: {"watchdog": BADGE_AUTO_HOLD, "daily_loss": BADGE_OK},
     )
 
     response = client.get("/live-readiness")
 
-    payload = response.json()
     assert response.status_code == 503
-    assert payload["ready"] is False
-    assert payload["hold"] is True
-    assert "Global HOLD is active" in payload["reasons"]
+    assert response.json() == {"ok": False, "reasons": ["watchdog:auto_hold"]}
+
+
+def test_live_readiness_not_ok_due_to_daily_loss(client, monkeypatch):
+    monkeypatch.setattr(
+        live_readiness,
+        "get_runtime_badges",
+        lambda: {"watchdog": BADGE_OK, "daily_loss": BADGE_BREACH},
+    )
+
+    response = client.get("/live-readiness")
+
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "reasons": ["daily_loss:breach"]}

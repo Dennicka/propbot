@@ -859,7 +859,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     is_operator = operator_role == "operator"
     is_auditor = operator_role == "auditor"
     live_readiness = context.get("live_readiness", {}) or {}
-    live_ready = bool(live_readiness.get("ready"))
+    live_ready = bool(live_readiness.get("ok"))
     readiness_label = "READY" if live_ready else "NOT READY"
     readiness_class = "live-ready" if live_ready else "live-not-ready"
     readiness_reasons = [

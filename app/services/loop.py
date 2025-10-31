@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from .. import ledger, risk_governor
+from ..metrics import set_auto_trade_state
 from ..broker.router import ExecutionRouter
 from . import arbitrage
 from .dryrun import compute_metrics, select_cycle_symbol
@@ -232,6 +233,7 @@ class LoopController:
             loop_state.running = True
             state = get_state()
             state.control.auto_loop = True
+            set_auto_trade_state(True)
             loop_state.pair = state.control.loop_pair or loop_state.pair
             loop_state.venues = list(state.control.loop_venues)
             loop_state.notional_usdt = state.control.order_notional_usdt
@@ -249,6 +251,7 @@ class LoopController:
             loop_state.running = False
             state = get_state()
             state.control.auto_loop = False
+            set_auto_trade_state(False)
             return loop_state
 
     async def reset(self) -> LoopState:
@@ -257,6 +260,7 @@ class LoopController:
             state = get_state()
             state.loop = LoopState()
             state.control.auto_loop = False
+            set_auto_trade_state(False)
             return state.loop
 
     async def stop_after_cycle(self) -> LoopState:
@@ -266,6 +270,7 @@ class LoopController:
                 loop_state.status = "STOPPING"
             state = get_state()
             state.control.auto_loop = False
+            set_auto_trade_state(False)
             return loop_state
 
     async def _cancel_locked(self) -> None:
@@ -288,9 +293,11 @@ class LoopController:
                 if loop_state.status == "STOPPING":
                     loop_state.status = "HOLD"
                     state.control.auto_loop = False
+                    set_auto_trade_state(False)
                     break
                 if loop_state.status != "RUN":
                     state.control.auto_loop = False
+                    set_auto_trade_state(False)
                     break
                 interval = max(1, int(state.control.poll_interval_sec))
                 try:
@@ -313,6 +320,7 @@ class LoopController:
                 loop_state.status = "HOLD"
             state = get_state()
             state.control.auto_loop = loop_state.status == "RUN"
+            set_auto_trade_state(state.control.auto_loop)
 
 
 _CONTROLLER = LoopController()
@@ -385,6 +393,7 @@ async def loop_forever(
     loop_state.running = True
     state = get_state()
     state.control.auto_loop = True
+    set_auto_trade_state(True)
     try:
         while True:
             state = get_state()
@@ -418,6 +427,7 @@ async def loop_forever(
         loop_state.running = False
         if cycles is not None and cycles > 0:
             loop_state.status = "HOLD"
+        set_auto_trade_state(False)
 
 
 def loop_snapshot() -> Dict[str, Any]:

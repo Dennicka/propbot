@@ -12,5 +12,5 @@ router = APIRouter()
 @router.get("/live-readiness")
 def live_readiness() -> JSONResponse:
     payload = compute_readiness()
-    http_status = status.HTTP_200_OK if payload.get("ready") else status.HTTP_503_SERVICE_UNAVAILABLE
+    http_status = status.HTTP_200_OK if payload.get("ok") else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(content=payload, status_code=http_status)
