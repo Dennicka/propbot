@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
     requests = _RequestsShim()
 
 from . import InMemoryDerivClient, build_in_memory_client
+from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.config import DerivVenueConfig
@@ -88,6 +89,7 @@ class OKXPerpClient:
             "OK-ACCESS-PASSPHRASE": self._passphrase or "",
             "Content-Type": "application/json",
         }
+        maybe_raise_rest_timeout(context="okx_perp.request")
         response = client.request(
             method,
             path,
@@ -107,6 +109,7 @@ class OKXPerpClient:
         if self.safe_mode:
             raise RuntimeError("public requests not expected in SAFE_MODE")
         client = self._ensure_http()
+        maybe_raise_rest_timeout(context="okx_perp.public_get")
         response = client.get(path, params=params or {})
         response.raise_for_status()
         payload = response.json()
@@ -235,6 +238,7 @@ class OKXPerpClient:
     # Trading
 
     def place_order(self, **kwargs: Any) -> Dict[str, Any]:
+        apply_order_delay()
         if self.safe_mode:
             return self._fallback.place_order(**kwargs)
         side = kwargs.get("side", "buy").lower()
@@ -263,6 +267,7 @@ class OKXPerpClient:
         return self._request("POST", "/api/v5/trade/order", body=body)
 
     def cancel_order(self, **kwargs: Any) -> Dict[str, Any]:
+        apply_order_delay()
         if self.safe_mode:
             return self._fallback.cancel_order(**kwargs)
         body = {"instId": kwargs["symbol"]}

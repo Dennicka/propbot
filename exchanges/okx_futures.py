@@ -13,6 +13,8 @@ from typing import Any, Dict
 
 import requests
 
+from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
+
 from app.secrets_store import get_secrets_store
 
 from .base import FuturesExchangeClient
@@ -118,6 +120,7 @@ class OKXFuturesClient(FuturesExchangeClient):
         body_payload = json.dumps(body or {}) if body is not None else ""
         headers = self._headers(method, path + query, body_payload, signed)
         try:
+            maybe_raise_rest_timeout(context="okx_futures.request")
             response = self._session.request(
                 method.upper(),
                 url,
@@ -189,6 +192,7 @@ class OKXFuturesClient(FuturesExchangeClient):
         }
 
     def place_order(self, symbol: str, side: str, notional_usdt: float, leverage: float) -> Dict[str, Any]:
+        apply_order_delay()
         inst_id = self._instrument_id(symbol)
         side_lower = str(side).lower()
         if side_lower not in {"long", "short", "buy", "sell"}:
@@ -244,6 +248,7 @@ class OKXFuturesClient(FuturesExchangeClient):
         }
 
     def cancel_all(self, symbol: str) -> Dict[str, Any]:
+        apply_order_delay()
         inst_id = self._instrument_id(symbol)
         payload = self._request(
             "POST",

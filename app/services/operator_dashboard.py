@@ -22,6 +22,7 @@ from ..watchdog.exchange_watchdog import get_exchange_watchdog
 from .approvals_store import list_requests as list_pending_requests
 from .audit_log import list_recent_events
 from . import risk_alerts, risk_guard
+from .backtest_reports import load_latest_summary as load_latest_backtest_summary
 from .runtime import (
     get_auto_hedge_state,
     get_last_opportunity_state,
@@ -378,6 +379,19 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     except Exception:
         daily_report = None
 
+    try:
+        last_backtest_report = load_latest_backtest_summary()
+    except Exception:
+        last_backtest_report = None
+    backtest_payload: dict[str, object] | None = None
+    if last_backtest_report:
+        backtest_payload = {
+            "json_path": last_backtest_report.json_path,
+            "csv_path": last_backtest_report.csv_path,
+            "generated_at": last_backtest_report.generated_at,
+            "summary": dict(last_backtest_report.summary),
+        }
+
     guard_allowed, guard_reason = edge_guard_allowed()
     guard_context = edge_guard_current_context()
     liquidity_status = get_liquidity_status()
@@ -589,6 +603,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "risk_advice": risk_advice,
         "execution_quality": execution_quality,
         "daily_report": daily_report or {},
+        "last_backtest": backtest_payload,
         "risk_snapshot": risk_snapshot,
         "risk_accounting_snapshot": risk_accounting_snapshot,
         "risk_skip_counts": risk_skip_counts,
@@ -762,6 +777,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     safety = context.get("safety", {}) or {}
     auto = context.get("auto_hedge", {}) or {}
     daily_report = context.get("daily_report", {}) or {}
+    last_backtest_payload = context.get("last_backtest") or {}
+    if not isinstance(last_backtest_payload, Mapping):
+        last_backtest_payload = {}
+    last_backtest_summary = last_backtest_payload.get("summary")
+    if isinstance(last_backtest_summary, Mapping):
+        last_backtest_summary = dict(last_backtest_summary)
+    else:
+        last_backtest_summary = {}
+    last_backtest_generated = (
+        last_backtest_payload.get("generated_at")
+        or last_backtest_summary.get("generated_at")
+        or ""
+    )
+    last_backtest_json = last_backtest_payload.get("json_path")
+    last_backtest_csv = last_backtest_payload.get("csv_path")
     risk_limits_env = context.get("risk_limits_env", {}) or {}
     risk_state = context.get("risk_limits_state", {}) or {}
     exposures = context.get("exposure", {}) or {}
@@ -1053,6 +1083,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".tca-preview th,.tca-preview td{padding:0.5rem;border-bottom:1px solid #e5e7eb;text-align:left;font-size:0.9rem;}"
         ".tca-preview tr.best{background:#ecfdf5;}"
         ".tca-preview .note{font-size:0.85rem;color:#4b5563;margin-top:0.5rem;}"
+        ".backtest-summary{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".backtest-summary h2{margin-top:0;}"
+        ".backtest-summary table{width:100%;border-collapse:collapse;margin-top:1rem;}"
+        ".backtest-summary th,.backtest-summary td{padding:0.5rem 0.75rem;text-align:left;border-bottom:1px solid #e5e7eb;}"
+        ".backtest-summary .meta{color:#4b5563;font-size:0.9rem;margin-top:0.5rem;}"
         ".risk-snapshot{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".risk-snapshot h2{margin-top:0;}"
         ".risk-snapshot table{margin-top:1rem;}"
@@ -1196,6 +1231,45 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
     parts.append("".join(autopilot_html) + "</div>")
+
+    backtest_block = ["<div class=\"backtest-summary\"><h2>Last Backtest Summary</h2>"]
+    if last_backtest_summary:
+        if last_backtest_generated:
+            backtest_block.append(
+                f"<p class=\"meta\">Generated: {_fmt(last_backtest_generated)}</p>"
+            )
+        metrics = [
+            ("Attempts", "attempts"),
+            ("Fills", "fills"),
+            ("Hit ratio", "hit_ratio"),
+            ("Gross PnL (USDT)", "gross_pnl"),
+            ("Fees (USDT)", "fees_total"),
+            ("Net PnL (USDT)", "net_pnl"),
+            ("Total notional (USDT)", "total_notional"),
+            ("Avg slippage (bps)", "avg_slippage_bps"),
+        ]
+        backtest_block.append("<table><tbody>")
+        for label, key in metrics:
+            value = last_backtest_summary.get(key)
+            backtest_block.append(
+                "<tr><th>{}</th><td>{}</td></tr>".format(
+                    _fmt(label), _fmt(value)
+                )
+            )
+        backtest_block.append("</tbody></table>")
+        link_pieces = []
+        if last_backtest_json:
+            link_pieces.append(f"JSON: {_fmt(last_backtest_json)}")
+        if last_backtest_csv:
+            link_pieces.append(f"CSV: {_fmt(last_backtest_csv)}")
+        if link_pieces:
+            backtest_block.append("<p class=\"meta\">" + " | ".join(link_pieces) + "</p>")
+    else:
+        backtest_block.append(
+            "<p class=\"meta\">No backtest report has been generated yet.</p>"
+        )
+    backtest_block.append("</div>")
+    parts.append("".join(backtest_block))
 
     if tca_preview_error or tca_preview_payload:
         preview_blocks: list[str] = ["<div class=\"tca-preview\"><h2>TCA Preview</h2>"]

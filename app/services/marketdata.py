@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, MutableMapping, Tuple
 
+from app.utils.chaos import should_drop_ws_update
+
 
 BookFetcher = Callable[[str], Dict[str, float]]
 
@@ -45,6 +47,8 @@ class MarketDataAggregator:
         ask: float,
         ts: float | None = None,
     ) -> None:
+        if should_drop_ws_update():
+            return
         ts_value = float(ts) if ts is not None else time.time()
         key = (venue.lower(), symbol.upper())
         entry = _BookEntry(bid=float(bid), ask=float(ask), ts=ts_value, source="ws")
