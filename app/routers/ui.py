@@ -51,7 +51,7 @@ from ..services import approvals_store, portfolio, risk, risk_guard
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
-from positions import list_positions
+from positions import list_open_positions, list_positions
 from ..risk_snapshot import build_risk_snapshot
 from ..risk.daily_loss import get_daily_loss_cap_state
 from ..risk.accounting import (
@@ -467,6 +467,85 @@ async def hedge_positions(request: Request) -> dict:
     if not positions:
         return {"positions": [], "exposure": {}, "totals": {"unrealized_pnl_usdt": 0.0}}
     return await build_positions_snapshot(state, positions)
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def _load_open_trades() -> list[dict[str, Any]]:
+    state = get_state()
+    open_positions = list_open_positions()
+    if not open_positions:
+        return []
+    snapshot = await build_positions_snapshot(state, open_positions)
+    trades: list[dict[str, Any]] = []
+    positions_payload = snapshot.get("positions")
+    if not isinstance(positions_payload, list):
+        return trades
+    for position in positions_payload:
+        if not isinstance(position, Mapping):
+            continue
+        trade_id = str(position.get("id") or "")
+        pair = str(position.get("symbol") or "").upper()
+        opened_ts = str(position.get("timestamp") or "")
+        legs = position.get("legs") if isinstance(position.get("legs"), list) else []
+        for leg in legs:
+            if not isinstance(leg, Mapping):
+                continue
+            leg_status = str(leg.get("status") or position.get("status") or "").lower()
+            if leg_status not in {"open", "partial"}:
+                continue
+            if bool(leg.get("simulated")):
+                continue
+            trades.append(
+                {
+                    "trade_id": trade_id,
+                    "pair": pair,
+                    "side": str(leg.get("side") or "").lower(),
+                    "size": _coerce_float(leg.get("base_size")),
+                    "entry_price": _coerce_float(leg.get("entry_price")),
+                    "unrealized_pnl": _coerce_float(leg.get("unrealized_pnl_usdt")),
+                    "opened_ts": str(leg.get("timestamp") or opened_ts),
+                }
+            )
+    trades.sort(key=lambda item: (item["pair"], item["side"], item["trade_id"], item["opened_ts"]))
+    return trades
+
+
+@router.get("/open-trades.csv")
+async def open_trades_csv(request: Request) -> Response:
+    require_token(request)
+    trades = await _load_open_trades()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "trade_id",
+        "pair",
+        "side",
+        "size",
+        "entry_price",
+        "unrealized_pnl",
+        "opened_ts",
+    ])
+    for trade in trades:
+        writer.writerow(
+            [
+                trade["trade_id"],
+                trade["pair"],
+                trade["side"],
+                _format_decimal(trade["size"]),
+                _format_decimal(trade["entry_price"]),
+                _format_decimal(trade["unrealized_pnl"]),
+                trade["opened_ts"],
+            ]
+        )
+    response = Response(content=output.getvalue(), media_type="text/csv")
+    response.headers["Content-Disposition"] = 'attachment; filename="open-trades.csv"'
+    return response
 
 
 @router.get("/orchestrator_plan")
