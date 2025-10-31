@@ -1,3 +1,54 @@
+## Быстрый старт (paper)
+
+1. Клонируйте репозиторий и перейдите в каталог проекта:
+   ```bash
+   git clone https://github.com/Dennicka/propbot.git
+   cd propbot
+   ```
+2. Создайте виртуальное окружение Python 3.10+ рядом с исходниками:
+   ```bash
+   python3 -m venv .venv
+   ```
+3. Активируйте окружение:
+   ```bash
+   source .venv/bin/activate
+   ```
+4. Обновите базовые инструменты сборки внутри окружения:
+   ```bash
+   pip install -U pip wheel
+   ```
+5. Установите зависимости PropBot:
+   ```bash
+   pip install -r requirements.txt
+   ```
+6. Скопируйте шаблон переменных окружения и подготовьте безопасные значения:
+   ```bash
+   cp .env.example .env
+   ```
+7. Откройте `.env` и убедитесь, что для локального paper-старта заданы
+   `SAFE_MODE=true`, `DRY_RUN_MODE=true`, `AUTH_ENABLED=false` и тестовый
+   `API_TOKEN=devtoken123` (или любой другой случайный токен).
+8. Выполните дымовой тест: запустите минимальную выборку pytest, чтобы
+   убедиться, что окружение собрано корректно:
+   ```bash
+   pytest tests/test_e2e_smoke_paper.py -q
+   ```
+9. Стартуйте API в режиме paper (флаги выставляются инлайн, без изменения
+   глобальной среды):
+   ```bash
+   APP_ENV=local \
+   DEFAULT_PROFILE=paper \
+   DRY_RUN_MODE=true \
+   SAFE_MODE=true \
+   AUTH_ENABLED=false \
+   API_TOKEN=devtoken123 \
+   uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+   ```
+   Сервер пишет лог `PropBot starting...` и остаётся в HOLD/SAFE_MODE.
+10. Откройте `http://127.0.0.1:8000/ui/dashboard` в браузере: дэшборд покажет
+    бейджи `safe_mode`, `hold_active`, `dry_run_mode` и фиктивные данные из
+    paper-профиля. Остановить сервер можно `Ctrl+C` в терминале.
+
 ## Production Quickstart
 
 1. Скопируйте `.env.prod.example` в `.env.prod`, задайте все обязательные секреты,
