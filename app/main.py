@@ -25,6 +25,7 @@ from services.opportunity_scanner import setup_scanner as setup_opportunity_scan
 from .services.autopilot import setup_autopilot
 from .services.orchestrator_alerts import setup_orchestrator_alerts
 from .services.exchange_watchdog_runner import setup_exchange_watchdog
+from .services.autopilot_guard import setup_autopilot_guard
 
 
 def _should_guard(request: Request) -> bool:
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
     setup_opportunity_scanner(app)
     setup_auto_hedge_daemon(app)
     setup_autopilot(app)
+    setup_autopilot_guard(app)
     setup_orchestrator_alerts(app)
     setup_exchange_watchdog(app)
     return app
