@@ -26,6 +26,7 @@ from .runtime import (
     get_reconciliation_status,
     get_state,
 )
+from .runtime_badges import get_runtime_badges
 from .positions_view import build_positions_snapshot
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
@@ -265,6 +266,7 @@ def _safety_snapshot(state) -> Dict[str, Any]:
 
 async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     state = get_state()
+    runtime_badges = get_runtime_badges()
     persisted = load_runtime_payload()
     auto_state = get_auto_hedge_state()
     positions_snapshot_source = list_positions()
@@ -505,6 +507,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             "two_man_rule": getattr(state.control, "two_man_rule", True),
             "flags": control_flags,
         },
+        "runtime_badges": runtime_badges,
         "safety": safety_payload,
         "auto_hedge": auto_state.as_dict(),
         "risk_limits_env": risk_limits_env,
@@ -876,6 +879,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     auto_hold_daily_loss = context.get("auto_hold_daily_loss") or {}
     if not isinstance(auto_hold_daily_loss, Mapping):
         auto_hold_daily_loss = {}
+    runtime_badges_payload = context.get("runtime_badges") or {}
+    if not isinstance(runtime_badges_payload, Mapping):
+        runtime_badges_payload = {}
 
     parts: list[str] = []
     parts.append(
@@ -905,6 +911,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
         ".role-auditor{background:#e0f2fe;color:#1d4ed8;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        ".runtime-badges{background:#fff;padding:1rem 1.25rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;flex-direction:column;gap:0.75rem;}"
+        ".runtime-badges h2{margin:0;font-size:1.1rem;}"
+        ".runtime-badges-list{display:flex;flex-wrap:wrap;gap:0.5rem;}"
+        ".runtime-badge{display:inline-flex;align-items:center;gap:0.5rem;padding:0.35rem 0.85rem;border-radius:999px;font-weight:600;background:#f3f4f6;color:#1f2937;}"
+        ".runtime-badge-label{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#4b5563;}"
+        ".runtime-badge-value{font-weight:700;letter-spacing:0.05em;}"
+        ".runtime-badge-on,.runtime-badge-ok{background:#dcfce7;color:#166534;}"
+        ".runtime-badge-off{background:#f3f4f6;color:#1f2937;border:1px solid #e5e7eb;}"
+        ".runtime-badge-breach,.runtime-badge-auto_hold{background:#fee2e2;color:#991b1b;}"
+        ".runtime-badge-degraded{background:#fef3c7;color:#92400e;}"
         ".strategy-risk{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".strategy-risk h2{margin-top:0;}"
         ".strategy-risk .breach-ok{color:#166534;font-weight:700;}"
@@ -1018,6 +1034,50 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             f"{_fmt(highlight)}"
             "</div>"
         )
+
+    if runtime_badges_payload:
+        badge_labels = {
+            "auto_trade": "Auto trade",
+            "risk_checks": "Risk checks",
+            "daily_loss": "Daily loss",
+            "watchdog": "Watchdog",
+        }
+        status_classes = {
+            "ON": "runtime-badge-on",
+            "OFF": "runtime-badge-off",
+            "OK": "runtime-badge-ok",
+            "BREACH": "runtime-badge-breach",
+            "DEGRADED": "runtime-badge-degraded",
+            "AUTO_HOLD": "runtime-badge-auto_hold",
+        }
+        badge_order = ("auto_trade", "risk_checks", "daily_loss", "watchdog")
+        badge_nodes: list[str] = []
+        for key in badge_order:
+            if key not in runtime_badges_payload:
+                continue
+            value_raw = runtime_badges_payload.get(key)
+            value_text = str(value_raw or "").strip().upper() or "UNKNOWN"
+            css_class = status_classes.get(value_text, "")
+            label = badge_labels.get(key, key.replace("_", " ").title())
+            badge_nodes.append(
+                "<div class=\"runtime-badge {cls}\">"
+                "<span class=\"runtime-badge-label\">{label}</span>"
+                "<span class=\"runtime-badge-value\">{value}</span>"
+                "</div>".format(
+                    cls=css_class,
+                    label=_fmt(label),
+                    value=_fmt(value_text),
+                )
+            )
+        if badge_nodes:
+            parts.append(
+                "<div class=\"runtime-badges\">"
+                "<div class=\"runtime-badges-header\"><h2>Runtime badges</h2></div>"
+                "<div class=\"runtime-badges-list\">"
+                + "".join(badge_nodes)
+                + "</div>"
+                "</div>"
+            )
 
     if auto_hold_daily_loss:
         label = _fmt(auto_hold_daily_loss.get("label") or "AUTO-HOLD: DAILY LOSS CAP")
