@@ -142,6 +142,24 @@ class FundingConfig(BaseModel):
     avoid_window_minutes: int = Field(5, ge=0)
 
 
+class TcaTierEntry(BaseModel):
+    tier: str
+    maker_bps: float
+    taker_bps: float
+    rebate_bps: float = 0.0
+    notional_from: float = Field(0.0, ge=0.0)
+
+
+class TcaImpactConfig(BaseModel):
+    k: float = Field(0.0, ge=0.0)
+
+
+class TcaConfig(BaseModel):
+    tiers: Dict[str, List[TcaTierEntry]] = Field(default_factory=dict)
+    impact: TcaImpactConfig = Field(default_factory=TcaImpactConfig)
+    horizon_min: float = Field(60.0, ge=0.0)
+
+
 class ControlConfig(BaseModel):
     safe_mode: bool = True
     dry_run: bool = True
@@ -180,6 +198,7 @@ class AppConfig(BaseModel):
     guards: GuardsConfig | None = None
     control: ControlConfig | None = None
     derivatives: DerivativesConfig | None = None
+    tca: TcaConfig | None = None
     obs: Dict[str, object] | None = None
     status_thresholds_file: str | None = None
     chaos: ChaosConfig | None = None
@@ -209,6 +228,9 @@ __all__ = [
     "FeesManualConfig",
     "FeesConfig",
     "FundingConfig",
+    "TcaConfig",
+    "TcaImpactConfig",
+    "TcaTierEntry",
     "ControlConfig",
     "DerivativesConfig",
     "StatusThresholds",

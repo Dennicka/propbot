@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Mapping, MutableMapping
+from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
 
 
 @dataclass
@@ -67,6 +67,95 @@ class FeeTable:
         return {venue: info.as_dict() for venue, info in self.per_venue.items()}
 
 
+@dataclass(frozen=True)
+class TierInfo:
+    """Tier metadata loaded from configuration."""
+
+    tier: str
+    maker_bps: float
+    taker_bps: float
+    rebate_bps: float
+    notional_from: float = 0.0
+
+
+@dataclass
+class TierTable:
+    """Container for per-venue tier configuration."""
+
+    per_venue: MutableMapping[str, Sequence[TierInfo]] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(
+        cls, mapping: Mapping[str, Iterable[Mapping[str, float | str]] | Iterable[TierInfo]]
+    ) -> "TierTable":
+        table = cls()
+        for venue, tiers in mapping.items():
+            tier_entries: list[TierInfo] = []
+            for payload in tiers or []:
+                if isinstance(payload, TierInfo):
+                    tier_entries.append(payload)
+                    continue
+                if not isinstance(payload, Mapping):
+                    continue
+                try:
+                    tier_entries.append(
+                        TierInfo(
+                            tier=str(payload.get("tier", "")).strip() or "default",
+                            maker_bps=float(payload.get("maker_bps", 0.0)),
+                            taker_bps=float(payload.get("taker_bps", 0.0)),
+                            rebate_bps=float(
+                                payload.get("rebate_bps", payload.get("vip_rebate_bps", 0.0))
+                            ),
+                            notional_from=float(payload.get("notional_from", 0.0)),
+                        )
+                    )
+                except (TypeError, ValueError):  # pragma: no cover - defensive
+                    continue
+            tier_entries.sort(key=lambda item: item.notional_from)
+            if tier_entries:
+                table.per_venue[str(venue)] = tier_entries
+        return table
+
+    def pick_tier(
+        self, venue: str, rolling_30d_notional: float | None
+    ) -> TierInfo | None:
+        tiers = self.per_venue.get(str(venue))
+        if not tiers or rolling_30d_notional is None:
+            return None
+        notional_value = max(float(rolling_30d_notional), 0.0)
+        candidate = tiers[0]
+        for tier in tiers:
+            if notional_value >= tier.notional_from:
+                candidate = tier
+            else:
+                break
+        return candidate
+
+
+@dataclass
+class ImpactModel:
+    """Linear-quadratic impact estimator in basis points."""
+
+    k: float = 0.0
+    min_liquidity_usdt: float = 1e-9
+
+    def impact_bps(
+        self, qty: float, book_liquidity_usdt: float | None, k: float | None = None
+    ) -> float:
+        liquidity = float(book_liquidity_usdt or 0.0)
+        if liquidity <= self.min_liquidity_usdt:
+            return 0.0
+        notional = max(float(qty), 0.0)
+        if notional <= 0.0:
+            return 0.0
+        scale = max(float(k if k is not None else self.k), 0.0)
+        if scale <= 0.0:
+            return 0.0
+        ratio = min(notional / liquidity, 10.0)
+        impact = scale * (ratio + ratio * ratio)
+        return max(float(impact), 0.0)
+
+
 FUNDING_INTERVAL_HOURS = 8.0
 
 
@@ -104,6 +193,11 @@ def effective_cost(
     horizon_min: float,
     is_maker_possible: bool,
     venue_meta: Mapping[str, object] | None,
+    *,
+    tier_table: TierTable | None = None,
+    rolling_30d_notional: float | None = None,
+    impact_model: ImpactModel | None = None,
+    book_liquidity_usdt: float | Mapping[str, float] | None = None,
 ) -> Dict[str, object]:
     """Return total expected cost in bps/usdt for the given leg."""
 
@@ -115,7 +209,27 @@ def effective_cost(
     horizon_minutes = max(float(horizon_min), 0.0)
     horizon_hours = horizon_minutes / 60.0
 
-    fee_info = _extract_fee_info(venue_meta or {})
+    venue_meta_payload = venue_meta or {}
+    venue_name = str(venue_meta_payload.get("venue") or venue_meta_payload.get("id") or "")
+    fee_info = _extract_fee_info(venue_meta_payload)
+    tier_info = None
+    book_liquidity_value: float | None = None
+    if isinstance(book_liquidity_usdt, Mapping):
+        try:
+            book_liquidity_value = float(book_liquidity_usdt.get(venue_name))
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            book_liquidity_value = None
+    elif book_liquidity_usdt is not None:
+        book_liquidity_value = float(book_liquidity_usdt)
+    if tier_table is not None and venue_name:
+        tier_info = tier_table.pick_tier(venue_name, rolling_30d_notional)
+        if tier_info is not None:
+            fee_info = FeeInfo(
+                maker_bps=float(tier_info.maker_bps),
+                taker_bps=float(tier_info.taker_bps),
+                vip_rebate_bps=float(tier_info.rebate_bps),
+            )
+
     maker_bps = float(fee_info.maker_bps)
     taker_bps = float(fee_info.taker_bps)
     vip_rebate_bps = float(fee_info.vip_rebate_bps)
@@ -136,8 +250,14 @@ def effective_cost(
         funding_bps = -funding_bps
     funding_usdt = notional * funding_bps / 10_000.0
 
-    total_bps = execution_bps + funding_bps
-    total_usdt = execution_usdt + funding_usdt
+    impact_model_obj = impact_model if isinstance(impact_model, ImpactModel) else None
+    impact_bps = 0.0
+    if impact_model_obj is not None:
+        impact_bps = impact_model_obj.impact_bps(notional, book_liquidity_value)
+    impact_usdt = notional * impact_bps / 10_000.0
+
+    total_bps = execution_bps + funding_bps + impact_bps
+    total_usdt = execution_usdt + funding_usdt + impact_usdt
 
     breakdown = {
         "execution": {
@@ -148,12 +268,19 @@ def effective_cost(
             "taker_bps": taker_bps,
             "vip_rebate_bps": vip_rebate_bps if execution_mode == "maker" else 0.0,
             "maker_candidate_bps": maker_candidate,
+            "tier": tier_info.tier if tier_info else "",
         },
         "funding": {
             "bps": funding_bps,
             "usdt": funding_usdt,
             "per_hour_bps": funding_rate_per_hour,
             "hours": horizon_hours,
+        },
+        "impact": {
+            "bps": impact_bps,
+            "usdt": impact_usdt,
+            "book_liquidity_usdt": book_liquidity_value,
+            "k": impact_model_obj.k if impact_model_obj else 0.0,
         },
         "inputs": {
             "side": side_normalised,
@@ -163,9 +290,20 @@ def effective_cost(
             "horizon_min": horizon_minutes,
             "is_maker_possible": bool(is_maker_possible),
         },
+        "tier": tier_info.tier if tier_info else "",
+        "impact_bps": impact_bps,
+        "impact_usdt": impact_usdt,
     }
 
     return {"bps": total_bps, "usdt": total_usdt, "breakdown": breakdown}
 
 
-__all__ = ["FeeInfo", "FeeTable", "effective_cost", "funding_bps_per_hour"]
+__all__ = [
+    "FeeInfo",
+    "FeeTable",
+    "TierInfo",
+    "TierTable",
+    "ImpactModel",
+    "effective_cost",
+    "funding_bps_per_hour",
+]

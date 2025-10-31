@@ -114,7 +114,17 @@ def tca_preview_endpoint(
     notional: float | None = Query(
         None, description="Optional notional override if qty is not provided"
     ),
-    horizon_min: float = Query(60.0, ge=0.0, description="Analysis horizon in minutes"),
+    horizon_min: float | None = Query(None, ge=0.0, description="Analysis horizon in minutes"),
+    rolling30d: float | None = Query(
+        None,
+        ge=0.0,
+        description="Rolling 30d notional in USDT used for tier selection",
+    ),
+    book_liq: float | None = Query(
+        None,
+        ge=0.0,
+        description="Estimated per-venue book liquidity in USDT for impact",
+    ),
 ) -> dict[str, Any]:
     require_token(request)
     if not tca_feature_enabled():
@@ -127,6 +137,8 @@ def tca_preview_endpoint(
             qty=qty,
             notional=notional,
             horizon_min=horizon_min,
+            rolling_30d_notional=rolling30d,
+            book_liquidity_usdt=book_liq,
         )
     except RuntimeError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="tca router disabled")

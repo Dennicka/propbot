@@ -60,3 +60,30 @@ derivatives:
   funding:
     include_next_window: true
     avoid_window_minutes: 5
+tca:
+  horizon_min: 60
+  impact:
+    k: 25.0
+  tiers:
+    binance_um:
+      - tier: VIP0
+        maker_bps: 1.8
+        taker_bps: 3.6
+        rebate_bps: 0.0
+        notional_from: 0
+      - tier: VIP5
+        maker_bps: 0.8
+        taker_bps: 3.0
+        rebate_bps: 0.1
+        notional_from: 1000000
+    okx_perp:
+      - tier: VIP0
+        maker_bps: 2.0
+        taker_bps: 5.0
+        rebate_bps: 0.0
+        notional_from: 0
+      - tier: VIP5
+        maker_bps: 1.0
+        taker_bps: 4.2
+        rebate_bps: 0.05
+        notional_from: 1000000
