@@ -112,6 +112,13 @@ Endpoint `/live-readiness` возвращает `{"ok": true|false, "reasons": [
 - Для арбитража с частичными хеджами добавлен демон `app/hedge/rebalancer.PartialHedgeRebalancer`. При `FEATURE_REBALANCER=1` он дозаявляет хвосты через биржевые клиенты батчами `REBALANCER_BATCH_NOTIONAL_USD`, учитывает `REBALANCER_RETRY_DELAY_SEC`/`REBALANCER_MAX_RETRY` и фиксирует попытки в `positions_store`/`ledger`. UI `/api/ui/status` и `/ui/dashboard` показывают метку `PARTIAL/REBALANCING`, счётчик попыток и последнее сообщение об ошибке.
 - Рантайм badges пополнены индикатором `partial_hedges`: `OK`, `PARTIAL` или `REBALANCING` в зависимости от текущего статуса дозаявок. Это позволяет быстро оценить состояние хвостов из `/ui/dashboard` и `/api/ui/status/overview`.
 
+### TCA Router & Cost Model
+
+- В модуле `app/tca/cost_model.py` реализована модель совокупных издержек для перпетуалов: `effective_cost()` суммирует выбранный режим комиссий (maker/taker с учётом VIP-ребейтов), ожидаемый funding на горизонте `horizon_min` и переводит результат в bps/USDT. Хелпер `funding_bps_per_hour()` конвертирует ставки биржи (обычно за 8h окно) в часовые bps, а `FeeTable` агрегирует параметры по площадкам.
+- Флаг `FEATURE_TCA_ROUTER=1` включает использование этой модели внутри `app/routing/funding_router.choose_best_pair`. При активном флаге в логи попадает дополнительный `execution_mode` (maker/taker) и расчётная структура `breakdown` для каждой стороны.
+- Предпросмотр TCA доступен из API: `GET /api/ui/tca/preview?pair=BTCUSDT&qty=0.5&horizon_min=90`. Ответ содержит лучшие направления, детальный разбор по ножкам и итоговую стоимость в bps/USDT. При включённом флаге на `/ui/dashboard` появляется блок «TCA Preview» с таблицей маршрутов и выделением оптимального направления.
+- Значение `horizon_min` задаёт, на какой горизонт (в минутах) закладывается funding. Для коротких сделок можно использовать 0–60 минут, для удержания через несколько funding-окон увеличивайте параметр — модель масштабирует бета-издержки автоматически.
+
 ## Smoke
 
 - Мини-скрипт `scripts/smoke.sh` проверяет `/healthz`, `/api/ui/status`, `/api/ui/positions`, `/api/ui/state` и `/metrics` и печатает `✅/❌` по каждому URL.

@@ -49,8 +49,8 @@ derivatives:
   fees:
     source: "manual"
     manual:
-      binance_um: { maker_bps: 1.8, taker_bps: 3.6 }
-      okx_perp: { maker_bps: 2.0, taker_bps: 5.0 }
+      binance_um: { maker_bps: 1.8, taker_bps: 3.6, vip_rebate_bps: 0.0 }
+      okx_perp: { maker_bps: 2.0, taker_bps: 5.0, vip_rebate_bps: 0.0 }
   funding:
     include_next_window: true
     avoid_window_minutes: 10
