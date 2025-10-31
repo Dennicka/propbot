@@ -122,6 +122,7 @@ class ArbitrageConfig(BaseModel):
 class FeesManualConfig(BaseModel):
     maker_bps: float
     taker_bps: float
+    vip_rebate_bps: float = 0.0
 
 
 class FeesConfig(BaseModel):

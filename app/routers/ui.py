@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+import logging
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from ..metrics import set_auto_trade_state
 from ..audit_log import list_recent_operator_actions, log_operator_action
 from ..dashboard_helpers import render_dashboard_response
 from ..version import APP_VERSION
+from ..tca.preview import compute_tca_preview, feature_enabled as tca_feature_enabled
 from ..capital_manager import get_capital_manager
 from ..pnl_report import DailyPnLReporter
 from ..rbac import Action, can_execute_action
@@ -74,6 +76,9 @@ from services.daily_reporter import load_latest_report
 from services.snapshotter import create_snapshot
 
 
+logger = logging.getLogger(__name__)
+
+
 def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
     try:
         from ..opsbot.notifier import emit_alert
@@ -98,6 +103,38 @@ def capital_snapshot(request: Request) -> dict[str, Any]:
     require_token(request)
     manager = get_capital_manager()
     return manager.snapshot()
+
+
+@router.get("/tca/preview")
+def tca_preview_endpoint(
+    request: Request,
+    pair: str = Query(..., description="Symbol pair, e.g. BTCUSDT"),
+    qty: float | None = Query(None, description="Order size in base units"),
+    notional: float | None = Query(
+        None, description="Optional notional override if qty is not provided"
+    ),
+    horizon_min: float = Query(60.0, ge=0.0, description="Analysis horizon in minutes"),
+) -> dict[str, Any]:
+    require_token(request)
+    if not tca_feature_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="tca router disabled")
+    if not pair:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="pair is required")
+    try:
+        payload = compute_tca_preview(
+            pair,
+            qty=qty,
+            notional=notional,
+            horizon_min=horizon_min,
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="tca router disabled")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("failed to compute tca preview", extra={"pair": pair})
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error") from exc
+    return payload
 
 
 @router.get("/runtime_badges")

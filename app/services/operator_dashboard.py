@@ -8,6 +8,8 @@ from html import escape
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict
 
+import logging
+
 from fastapi import Request
 
 from ..audit_log import list_recent_operator_actions
@@ -52,6 +54,10 @@ from ..strategy_risk import get_strategy_risk_manager
 from ..universe.gate import is_universe_enforced
 from .strategy_status import build_strategy_status
 from .live_readiness import compute_readiness
+from ..tca.preview import compute_tca_preview, feature_enabled as tca_feature_enabled
+
+
+logger = logging.getLogger(__name__)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -507,6 +513,38 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     live_readiness = compute_readiness()
 
+    tca_preview_payload: Dict[str, object] | None = None
+    tca_preview_error: str | None = None
+    if tca_feature_enabled():
+        try:
+            config_data = getattr(state.config, "data", None)
+            derivatives_cfg = getattr(config_data, "derivatives", None) if config_data else None
+            arbitrage_cfg = getattr(derivatives_cfg, "arbitrage", None) if derivatives_cfg else None
+            pairs_cfg = getattr(arbitrage_cfg, "pairs", None) if arbitrage_cfg else None
+            default_symbol: str | None = None
+            if pairs_cfg:
+                for entry in pairs_cfg:
+                    symbol_candidate = getattr(getattr(entry, "long", None), "symbol", None)
+                    if not symbol_candidate:
+                        symbol_candidate = getattr(getattr(entry, "short", None), "symbol", None)
+                    if symbol_candidate:
+                        default_symbol = str(symbol_candidate)
+                        break
+            if default_symbol:
+                tca_preview_payload = compute_tca_preview(
+                    default_symbol,
+                    qty=None,
+                    notional=getattr(state.control, "order_notional_usdt", None),
+                    horizon_min=60.0,
+                )
+            else:
+                tca_preview_error = "no arbitrage pair symbol available"
+        except RuntimeError:
+            tca_preview_error = "TCA router disabled"
+        except Exception as exc:  # pragma: no cover - defensive
+            tca_preview_error = str(exc)
+            logger.debug("tca preview unavailable", exc_info=exc)
+
     return {
         "request": request,
         "build_version": APP_VERSION,
@@ -569,6 +607,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "auto_hold_daily_loss": auto_hold_daily_loss,
         "live_readiness": live_readiness,
         "universe_enforced": is_universe_enforced(),
+        "tca_preview": tca_preview_payload,
+        "tca_preview_error": tca_preview_error,
     }
 
 
@@ -785,6 +825,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_decision_ts = autopilot.get("last_decision_ts") or ""
     universe_enforced = bool(context.get("universe_enforced"))
     partial_rebalance = context.get("partial_rebalance", {}) or {}
+    tca_preview_payload = context.get("tca_preview")
+    tca_preview_error = context.get("tca_preview_error")
 
     pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
     pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
@@ -1001,6 +1043,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".strategy-orchestrator .reason-critical{color:#991b1b;font-weight:700;}"
         ".strategy-orchestrator .reason-cooldown{color:#92400e;font-weight:600;}"
         ".strategy-orchestrator .meta{font-size:0.9rem;color:#4b5563;margin-top:0.5rem;}"
+        ".tca-preview{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".tca-preview h2{margin-top:0;}"
+        ".tca-preview table{width:100%;border-collapse:collapse;margin-top:1rem;}"
+        ".tca-preview th,.tca-preview td{padding:0.5rem;border-bottom:1px solid #e5e7eb;text-align:left;font-size:0.9rem;}"
+        ".tca-preview tr.best{background:#ecfdf5;}"
+        ".tca-preview .note{font-size:0.85rem;color:#4b5563;margin-top:0.5rem;}"
         ".risk-snapshot{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
         ".risk-snapshot h2{margin-top:0;}"
         ".risk-snapshot table{margin-top:1rem;}"
@@ -1141,6 +1189,74 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
     parts.append("".join(autopilot_html) + "</div>")
+
+    if tca_preview_error or tca_preview_payload:
+        preview_blocks: list[str] = ["<div class=\"tca-preview\"><h2>TCA Preview</h2>"]
+        if tca_preview_error:
+            preview_blocks.append(f"<p class=\"note\">{_fmt(tca_preview_error)}</p>")
+        elif isinstance(tca_preview_payload, Mapping):
+            qty_value = tca_preview_payload.get("qty")
+            horizon_value = tca_preview_payload.get("horizon_min")
+            preview_blocks.append(
+                "<p class=\"note\">Qty {qty} · Horizon {horizon} min</p>".format(
+                    qty=_fmt(qty_value), horizon=_fmt(horizon_value)
+                )
+            )
+            routes = tca_preview_payload.get("routes") or []
+            if routes:
+                best_route = tca_preview_payload.get("best") or {}
+                best_direction = best_route.get("direction")
+
+                def _leg_cell(payload: Mapping[str, object]) -> str:
+                    cost_payload = payload.get("cost") if isinstance(payload.get("cost"), Mapping) else {}
+                    breakdown = cost_payload.get("breakdown") if isinstance(cost_payload, Mapping) else {}
+                    execution = breakdown.get("execution") if isinstance(breakdown, Mapping) else {}
+                    funding = breakdown.get("funding") if isinstance(breakdown, Mapping) else {}
+                    mode = execution.get("mode")
+                    exec_bps = execution.get("bps")
+                    funding_bps = funding.get("bps")
+                    next_minutes = funding.get("next_event_minutes")
+                    details = [
+                        f"total {_fmt(cost_payload.get('bps'))} bps / {_fmt(cost_payload.get('usdt'))} USDT",
+                        f"execution {_fmt(exec_bps)} bps",
+                        f"funding {_fmt(funding_bps)} bps",
+                    ]
+                    if next_minutes:
+                        details.append(f"next funding in {_fmt(next_minutes)} min")
+                    return (
+                        "<div><strong>{venue}</strong> · {mode}</div>".format(
+                            venue=_fmt(payload.get("venue")),
+                            mode=_fmt(mode).upper() or "N/A",
+                        )
+                        + "<div class=\"note\">" + " | ".join(details) + "</div>"
+                    )
+
+                preview_blocks.append(
+                    "<table><thead><tr><th>Route</th><th>Total (bps)</th><th>Total (USDT)</th><th>Long leg</th><th>Short leg</th><th>Notional (USDT)</th></tr></thead><tbody>"
+                )
+                for route in routes:
+                    direction = route.get("direction")
+                    row_class = " class=\"best\"" if direction == best_direction else ""
+                    preview_blocks.append(
+                        "<tr{cls}><td>{direction}</td><td>{bps}</td><td>{usdt}</td><td>{long}</td><td>{short}</td><td>{notional}</td></tr>".format(
+                            cls=row_class,
+                            direction=_fmt(direction),
+                            bps=_fmt(route.get("total_bps")),
+                            usdt=_fmt(route.get("total_usdt")),
+                            long=_leg_cell(route.get("long", {})),
+                            short=_leg_cell(route.get("short", {})),
+                            notional=_fmt(route.get("notional_usdt")),
+                        )
+                    )
+                preview_blocks.append("</tbody></table>")
+                if best_direction:
+                    preview_blocks.append(
+                        f"<p class=\"note\">Best route highlighted: {_fmt(best_direction)}</p>"
+                    )
+            else:
+                preview_blocks.append("<p class=\"note\">No venue routes evaluated.</p>")
+        preview_blocks.append("</div>")
+        parts.append("".join(preview_blocks))
 
 
     strategy_pnl_tracker_snapshot = context.get("strategy_pnl_tracker_snapshot", {}) or {}
