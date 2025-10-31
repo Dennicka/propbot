@@ -1,0 +1,13 @@
+profiles:
+  none:
+    WS_DROP_P: 0.0
+    REST_TIMEOUT_P: 0.0
+    ORDER_DELAY_MS: 0
+  mild:
+    WS_DROP_P: 0.05
+    REST_TIMEOUT_P: 0.02
+    ORDER_DELAY_MS: 150
+  storm:
+    WS_DROP_P: 0.25
+    REST_TIMEOUT_P: 0.15
+    ORDER_DELAY_MS: 600

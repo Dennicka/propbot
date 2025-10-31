@@ -76,7 +76,7 @@
 - Pydantic-описание конфигурации вынесено в `app/config/schema.py` и переиспользуется загрузчиком в `app/config/loader.py`.
 - Новая ручка `GET /api/ui/config/validate` валидирует активный YAML и возвращает `{"ok": bool, "errors": [...]}` без бросания исключений.
 - Шаблон `.env.example` дополнен фиче-флагом `FEATURE_SLO` и порогами `SLO_LATENCY_P95_TARGET_MS`/`SLO_ERROR_RATE_TARGET` для консистентного описания окружений.
-- Для хаос-тестов добавлены флаги `FEATURE_CHAOS`, `CHAOS_WS_DROP_P`, `CHAOS_REST_TIMEOUT_P`, `CHAOS_ORDER_DELAY_MS`, позволяющие имитировать сбои WebSocket/REST и задержки ордеров без изменений кода.
+- Для хаос-тестов добавлены флаги `FEATURE_CHAOS`, `CHAOS_PROFILE`, `CHAOS_WS_DROP_P`, `CHAOS_REST_TIMEOUT_P`, `CHAOS_ORDER_DELAY_MS`, позволяющие имитировать сбои WebSocket/REST и задержки ордеров без изменений кода. Готовые профили заданы в `configs/fault_profiles.yaml`.
 
 ## Наблюдаемость и SLO
 
@@ -109,13 +109,17 @@ Endpoint `/live-readiness` возвращает `{"ok": true|false, "reasons": [
 
 ## Chaos-инжекторы
 
-Для отладки аварийных сценариев биржевые адаптеры можно «зашумлять» без правок кода. Установите `FEATURE_CHAOS=1` и задайте параметры:
+Для отладки аварийных сценариев биржевые адаптеры можно «зашумлять» без правок кода. Установите `FEATURE_CHAOS=1` и выберите профиль `CHAOS_PROFILE` из `configs/fault_profiles.yaml` (например, `mild`). При необходимости значения можно дополнительно переопределить вручную:
 
 - `CHAOS_WS_DROP_P` — вероятность (0..1) отбросить обновление в `MarketDataAggregator.update_from_ws`, имитируя провалы WebSocket.
 - `CHAOS_REST_TIMEOUT_P` — вероятность (0..1) сгенерировать `RuntimeError` до отправки REST-запроса (`binance_futures`, `okx_futures`, SAFE_MODE-клиенты).
 - `CHAOS_ORDER_DELAY_MS` — дополнительная задержка (мс) перед `place_order`/`cancel_all` для всех биржевых клиентов.
 
-Настройки можно задать в `.env` или через раздел `chaos` в `configs/*.yaml`. Пока `FEATURE_CHAOS=0`, все значения по умолчанию равны нулю, поэтому CI/pytest и рабочие окружения не страдают от случайных сбоев.
+Настройки можно задать в `.env`, через раздел `chaos` в `configs/*.yaml` или выбрав готовый профиль. Текущие параметры доступны по `GET /api/ui/chaos`, а на `/ui/dashboard` отображается строка «Chaos profile: ...». Пока `FEATURE_CHAOS=0`, все значения по умолчанию равны нулю, поэтому CI/pytest и рабочие окружения не страдают от случайных сбоев.
+
+## Acceptance suite
+
+Мини-набор проверок для оператора запускается командой `make acceptance` (эквивалент `pytest -m acceptance -q`). Сценарий убеждается, что без хаоса сервис отвечает `200` на `/healthz` и `/live-readiness`, а при включении профиля `mild` бот остаётся в HOLD/safe_mode и вотчдог не деградирует.
 
 ## Offline replay backtests
 

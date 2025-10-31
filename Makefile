@@ -31,6 +31,9 @@ typecheck:
 test:
         $(PYTEST) -q --maxfail=1
 
+acceptance:
+        $(PYTEST) -m acceptance -q
+
 smoke:
         scripts/smoke.sh
 
