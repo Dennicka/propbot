@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -12,6 +13,7 @@ from typing import Any, Dict
 from fastapi import FastAPI
 
 from app.services.runtime import get_state, set_last_opportunity_state
+from app.telemetry import observe_core_latency, set_scanner_ok
 from services.cross_exchange_arb import check_spread
 from services.risk_manager import can_open_new_position
 
@@ -73,41 +75,51 @@ class OpportunityScanner:
                 continue
 
     async def scan_once(self) -> Dict[str, Any]:
-        state = get_state()
-        control = state.control
-        loop_pair = getattr(control, "loop_pair", None) or getattr(state.loop_config, "pair", None)
-        symbol = (loop_pair or "BTCUSDT").upper()
-        spread_info = await asyncio.to_thread(check_spread, symbol)
-        cheap_exchange = str(spread_info.get("cheap"))
-        expensive_exchange = str(spread_info.get("expensive"))
-        spread_value = float(spread_info.get("spread", 0.0))
-        spread_bps = float(spread_info.get("spread_bps", 0.0))
-        candidate: Dict[str, Any] = {
-            "id": uuid.uuid4().hex,
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "symbol": symbol,
-            "long_venue": cheap_exchange,
-            "short_venue": expensive_exchange,
-            "spread": spread_value,
-            "spread_bps": spread_bps,
-            "notional_suggestion": float(control.order_notional_usdt),
-            "leverage_suggestion": _env_leverage(),
-            "min_spread": spread_value,
-        }
-        status = "allowed"
-        allowed, reason = can_open_new_position(
-            float(candidate["notional_suggestion"]),
-            float(candidate["leverage_suggestion"]),
-            strategy=STRATEGY_NAME,
-            requested_positions=1,
-        )
-        if not allowed:
-            candidate["blocked_reason"] = reason
-            status = "blocked_by_risk"
-        if spread_value <= 0:
-            status = "blocked_by_risk"
-        set_last_opportunity_state(candidate if spread_value > 0 else None, status)
-        return {"candidate": candidate, "status": status}
+        start = time.perf_counter()
+        failure = False
+        try:
+            state = get_state()
+            control = state.control
+            loop_pair = getattr(control, "loop_pair", None) or getattr(state.loop_config, "pair", None)
+            symbol = (loop_pair or "BTCUSDT").upper()
+            spread_info = await asyncio.to_thread(check_spread, symbol)
+            cheap_exchange = str(spread_info.get("cheap"))
+            expensive_exchange = str(spread_info.get("expensive"))
+            spread_value = float(spread_info.get("spread", 0.0))
+            spread_bps = float(spread_info.get("spread_bps", 0.0))
+            candidate: Dict[str, Any] = {
+                "id": uuid.uuid4().hex,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "symbol": symbol,
+                "long_venue": cheap_exchange,
+                "short_venue": expensive_exchange,
+                "spread": spread_value,
+                "spread_bps": spread_bps,
+                "notional_suggestion": float(control.order_notional_usdt),
+                "leverage_suggestion": _env_leverage(),
+                "min_spread": spread_value,
+            }
+            status = "allowed"
+            allowed, reason = can_open_new_position(
+                float(candidate["notional_suggestion"]),
+                float(candidate["leverage_suggestion"]),
+                strategy=STRATEGY_NAME,
+                requested_positions=1,
+            )
+            if not allowed:
+                candidate["blocked_reason"] = reason
+                status = "blocked_by_risk"
+            if spread_value <= 0:
+                status = "blocked_by_risk"
+            set_last_opportunity_state(candidate if spread_value > 0 else None, status)
+            return {"candidate": candidate, "status": status}
+        except Exception:
+            failure = True
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            observe_core_latency("scan", duration_ms, error=failure)
+            set_scanner_ok(not failure)
 
 
 _scanner = OpportunityScanner()

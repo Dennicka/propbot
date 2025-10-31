@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 from pathlib import Path
 import shutil
 import time
+from typing import Any
 import yaml
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..core.config import AppConfig
+from ..config.loader import load_yaml, validate_payload
+
 from ..services.runtime import get_state, reset_for_tests
 
 router = APIRouter()
@@ -25,20 +28,38 @@ def _backup_path() -> Path:
     return _active_path().with_suffix(_active_path().suffix + ".bak")
 
 
-@router.post("/config/validate")
-def validate_config(payload: ConfigPayload) -> dict:
+def _load_from_text(text: str) -> Any:
     try:
-        data = yaml.safe_load(payload.yaml_text)
-        if not isinstance(data, dict):
-            raise ValueError("root must be a mapping")
-        AppConfig.model_validate(data)
-        return {"ok": True, "msg": "valid"}
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid config: {exc}")
+        return yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:  # pragma: no cover - defensive against parser bugs
+        raise HTTPException(status_code=400, detail=f"invalid config: {exc}") from exc
+
+
+@router.get("/config/validate")
+def validate_active_config() -> dict[str, object]:
+    path = _active_path()
+    errors: list[str] = []
+    try:
+        payload = load_yaml(path)
+    except Exception as exc:  # pragma: no cover - IO failure surfaced to UI
+        errors.append(f"read error: {exc}")
+        payload = None
+    if payload is not None:
+        errors.extend(validate_payload(payload))
+    return {"ok": not errors, "errors": errors}
+
+
+@router.post("/config/validate")
+def validate_config(payload: ConfigPayload) -> dict[str, object]:
+    data = _load_from_text(payload.yaml_text)
+    errors = validate_payload(data)
+    if errors:
+        raise HTTPException(status_code=400, detail={"ok": False, "errors": errors})
+    return {"ok": True, "errors": []}
 
 
 @router.post("/config/apply")
-def apply_config(payload: ConfigPayload) -> dict:
+def apply_config(payload: ConfigPayload) -> dict[str, object]:
     active = _active_path()
     backup = _backup_path()
     shutil.copyfile(active, backup)
@@ -55,7 +76,7 @@ class RollbackIn(BaseModel):
 
 
 @router.post("/config/rollback")
-def rollback_config(body: RollbackIn) -> dict:
+def rollback_config(body: RollbackIn) -> dict[str, object]:
     active = _active_path()
     backup = _backup_path()
     if backup.exists():

@@ -35,6 +35,19 @@ from services import balances_monitor, reconciler
 LOGGER = logging.getLogger(__name__)
 
 
+_ACTIVE_BOT: "TelegramBot | None" = None
+
+
+async def alert_slo_breach(message: str) -> None:
+    """Send an async Telegram notification for SLO breaches."""
+
+    bot = _ACTIVE_BOT
+    if bot is None:
+        return
+    text = str(message or "SLO breach detected")
+    await bot.send_message(f"⚠️ {text}")
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -662,8 +675,10 @@ class TelegramBot:
 
 
 def setup_telegram_bot(app: FastAPI) -> None:
+    global _ACTIVE_BOT
     config = TelegramBotConfig.from_env()
     bot = TelegramBot(config)
+    _ACTIVE_BOT = bot
     app.state.telegram_bot = bot
 
     @app.on_event("startup")
@@ -672,4 +687,6 @@ def setup_telegram_bot(app: FastAPI) -> None:
 
     @app.on_event("shutdown")
     async def _stop_bot() -> None:  # pragma: no cover - exercised in integration environments
+        global _ACTIVE_BOT
         await bot.stop()
+        _ACTIVE_BOT = None
