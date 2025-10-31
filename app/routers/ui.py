@@ -46,6 +46,7 @@ from ..services.runtime import (
     set_mode,
     set_open_orders,
 )
+from ..services.runtime_badges import get_runtime_badges
 from ..services import approvals_store, portfolio, risk, risk_guard
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
@@ -96,6 +97,14 @@ def capital_snapshot(request: Request) -> dict[str, Any]:
     require_token(request)
     manager = get_capital_manager()
     return manager.snapshot()
+
+
+@router.get("/runtime_badges")
+def runtime_badges(request: Request) -> dict[str, str]:
+    """Expose compact runtime badge statuses for operator views."""
+
+    require_token(request)
+    return get_runtime_badges()
 
 
 @router.get("/strategy_budget")

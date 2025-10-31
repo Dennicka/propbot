@@ -19,6 +19,7 @@ from ..strategy_risk import get_strategy_risk_manager
 from ..watchdog.exchange_watchdog import get_exchange_watchdog
 from ..universe.gate import is_universe_enforced
 from . import runtime
+from .runtime_badges import get_runtime_badges
 from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
 from .strategy_status import build_strategy_status
@@ -185,6 +186,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
                 "resume_request": safety.get("resume_request"),
             },
         },
+        "badges": get_runtime_badges(),
         "autopilot": autopilot,
         "pnl": pnl_snapshot,
         "daily_loss_cap": daily_loss_cap_snapshot,
