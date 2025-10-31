@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -24,6 +25,7 @@ from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
 from .strategy_status import build_strategy_status
 from ..risk.daily_loss import get_daily_loss_cap_state
+from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 
 
 def _iso_now() -> str:
@@ -47,6 +49,127 @@ def _coerce_mapping(payload: object) -> Mapping[str, Any]:
     if isinstance(payload, Mapping):
         return payload
     return {}
+
+
+def _env_int(name: str, default: int = 0) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _count_open_trades(positions_snapshot: Mapping[str, Any]) -> int:
+    positions = positions_snapshot.get("positions")
+    if not isinstance(positions, Sequence):
+        return 0
+    count = 0
+    for entry in positions:
+        if not isinstance(entry, Mapping):
+            continue
+        status = str(entry.get("status") or "").strip().lower()
+        if status in {"", "open", "partial", "opening"}:
+            count += 1
+            continue
+        legs = entry.get("legs")
+        if isinstance(legs, Sequence):
+            if any(str(leg.get("status") or "").strip().lower() in {"open", "partial"} for leg in legs if isinstance(leg, Mapping)):
+                count += 1
+    return count
+
+
+def _normalise_audit_action(entry: Mapping[str, Any]) -> dict[str, Any]:
+    timestamp = str(entry.get("timestamp") or entry.get("ts") or "")
+    operator = str(entry.get("operator") or entry.get("operator_name") or "")
+    role = str(entry.get("role") or "")
+    action = str(entry.get("action") or "")
+    details = entry.get("details")
+    if isinstance(details, Mapping):
+        details_payload: Any = dict(details)
+    else:
+        details_payload = details
+    return {
+        "ts": timestamp,
+        "operator": operator,
+        "role": role,
+        "action": action,
+        "details": details_payload,
+    }
+
+
+def _extract_budget_rows(accounting_snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    budgets: list[dict[str, Any]] = []
+    per_strategy = accounting_snapshot.get("per_strategy")
+    if not isinstance(per_strategy, Mapping):
+        return budgets
+    for strategy in sorted(per_strategy):
+        entry = per_strategy.get(strategy)
+        entry_mapping = entry if isinstance(entry, Mapping) else {}
+        budget_info = entry_mapping.get("budget")
+        budget_mapping = budget_info if isinstance(budget_info, Mapping) else {}
+        limit_value = budget_mapping.get("limit_usdt")
+        used_value = budget_mapping.get("used_today_usdt")
+        remaining_value = budget_mapping.get("remaining_usdt")
+        try:
+            limit_float = float(limit_value) if limit_value is not None else None
+        except (TypeError, ValueError):
+            limit_float = None
+        try:
+            used_float = float(used_value) if used_value is not None else 0.0
+        except (TypeError, ValueError):
+            used_float = 0.0
+        try:
+            remaining_float = float(remaining_value) if remaining_value is not None else None
+        except (TypeError, ValueError):
+            remaining_float = None if limit_float is None else limit_float - used_float
+        budgets.append(
+            {
+                "strategy": str(strategy),
+                "budget_usdt": limit_float,
+                "used_usdt": used_float,
+                "remaining_usdt": remaining_float,
+            }
+        )
+    return budgets
+
+
+def _resolve_daily_loss_badge(report: Mapping[str, Any]) -> str:
+    badges = report.get("badges")
+    if isinstance(badges, Mapping):
+        badge = badges.get("daily_loss")
+        if badge is not None:
+            return str(badge)
+    return ""
+
+
+def _resolve_watchdog_badge(report: Mapping[str, Any]) -> str:
+    badges = report.get("badges")
+    if isinstance(badges, Mapping):
+        badge = badges.get("watchdog")
+        if badge is not None:
+            return str(badge)
+    return ""
+
+
+def _resolve_auto_trade_badge(report: Mapping[str, Any]) -> str:
+    badges = report.get("badges")
+    if isinstance(badges, Mapping):
+        badge = badges.get("auto_trade")
+        if badge is not None:
+            return str(badge)
+    return ""
+
+
+def _iter_budget_rows(report: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
+    budgets = report.get("budgets")
+    if isinstance(budgets, Sequence) and budgets:
+        for entry in budgets:
+            if isinstance(entry, Mapping):
+                yield entry
+        return
+    yield {}
 
 
 def _normalise_strategy_controls(raw_snapshot: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -164,11 +287,23 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
 
     operator_actions = list_recent_operator_actions(limit=max(actions_limit, 0))
     ops_events = list_recent_events(limit=max(events_limit, 0))
+    accounting_snapshot = get_risk_accounting_snapshot()
+    accounting_mapping = accounting_snapshot if isinstance(accounting_snapshot, Mapping) else {}
+    budgets_payload = _extract_budget_rows(accounting_mapping)
+    normalised_actions = [
+        _normalise_audit_action(entry)
+        for entry in operator_actions
+        if isinstance(entry, Mapping)
+    ]
     universe_enforced = is_universe_enforced()
     unknown_pairs = runtime.get_universe_unknown_pairs()
+    max_open_trades_limit = _env_int("MAX_OPEN_POSITIONS", 0)
+    open_trades_count = _count_open_trades(positions_snapshot)
 
     return {
         "generated_at": _iso_now(),
+        "open_trades_count": open_trades_count,
+        "max_open_trades_limit": max_open_trades_limit,
         "runtime": {
             "mode": control.mode,
             "safe_mode": control.safe_mode,
@@ -209,6 +344,8 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
             "operator_actions": operator_actions,
             "ops_events": ops_events,
         },
+        "last_audit_actions": normalised_actions[-10:],
+        "budgets": budgets_payload,
         "universe_enforced": universe_enforced,
         "unknown_pairs": list(unknown_pairs),
     }
@@ -450,71 +587,48 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
     """Render ``report`` as a stable CSV document."""
 
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=["section", "key", "value"])
+    fieldnames = [
+        "timestamp",
+        "open_trades_count",
+        "max_open_trades_limit",
+        "daily_loss_status",
+        "watchdog_status",
+        "auto_trade",
+        "strategy",
+        "budget_usdt",
+        "used_usdt",
+        "remaining_usdt",
+    ]
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
-    generated_at = report.get("generated_at")
-    if generated_at:
-        writer.writerow({"section": "metadata", "key": "generated_at", "value": _stringify(generated_at)})
-    runtime_payload = _coerce_mapping(report.get("runtime"))
-    for row in _iter_runtime_rows(runtime_payload):
-        writer.writerow(row)
-    strategy_payload = _coerce_mapping(report.get("strategy_controls"))
-    for row in _iter_strategy_rows(strategy_payload):
-        writer.writerow(row)
-    budget_payload = _coerce_mapping(report.get("strategy_budgets"))
-    for row in _iter_strategy_budget_rows(budget_payload):
-        writer.writerow(row)
-    status_payload = _coerce_mapping(report.get("strategy_status"))
-    for row in _iter_strategy_status_rows(status_payload):
-        writer.writerow(row)
-    per_strategy_pnl_payload = _coerce_mapping(report.get("per_strategy_pnl"))
-    for row in _iter_strategy_pnl_rows(per_strategy_pnl_payload):
-        writer.writerow(row)
-    tracker_pnl_payload = _coerce_mapping(report.get("strategy_pnl"))
-    for row in _iter_strategy_pnl_tracker_rows(tracker_pnl_payload):
-        writer.writerow(row)
-    pnl_payload = _coerce_mapping(report.get("pnl"))
-    for row in _iter_pnl_rows(pnl_payload):
-        writer.writerow(row)
-    daily_loss_payload = _coerce_mapping(report.get("daily_loss_cap"))
-    for row in _iter_daily_loss_rows(daily_loss_payload):
-        writer.writerow(row)
-    positions_payload = _coerce_mapping(report.get("positions_snapshot"))
-    for row in _iter_positions_rows(positions_payload):
-        writer.writerow(row)
-    watchdog_payload = _coerce_mapping(report.get("watchdog"))
-    for row in _iter_watchdog_rows(watchdog_payload):
-        writer.writerow(row)
-    audit_payload = _coerce_mapping(report.get("audit"))
-    for row in _iter_audit_rows(audit_payload):
-        writer.writerow(row)
-    universe_enforced = report.get("universe_enforced")
-    if universe_enforced is not None:
+
+    timestamp = str(report.get("generated_at") or "")
+    open_trades_count = report.get("open_trades_count")
+    max_open_trades_limit = report.get("max_open_trades_limit")
+    daily_loss_status = _resolve_daily_loss_badge(report)
+    watchdog_status = _resolve_watchdog_badge(report)
+    auto_trade_status = _resolve_auto_trade_badge(report)
+
+    for budget in _iter_budget_rows(report):
+        strategy = str(budget.get("strategy") or "") if budget else ""
+        budget_usdt = budget.get("budget_usdt") if isinstance(budget, Mapping) else None
+        used_usdt = budget.get("used_usdt") if isinstance(budget, Mapping) else None
+        remaining_usdt = budget.get("remaining_usdt") if isinstance(budget, Mapping) else None
         writer.writerow(
             {
-                "section": "universe",
-                "key": "enforced",
-                "value": _stringify(universe_enforced),
+                "timestamp": timestamp,
+                "open_trades_count": open_trades_count,
+                "max_open_trades_limit": max_open_trades_limit,
+                "daily_loss_status": daily_loss_status,
+                "watchdog_status": watchdog_status,
+                "auto_trade": auto_trade_status,
+                "strategy": strategy,
+                "budget_usdt": budget_usdt,
+                "used_usdt": used_usdt,
+                "remaining_usdt": remaining_usdt,
             }
         )
-    unknown_pairs = report.get("unknown_pairs")
-    if isinstance(unknown_pairs, Sequence):
-        for index, pair in enumerate(unknown_pairs, start=1):
-            writer.writerow(
-                {
-                    "section": "universe_unknown",
-                    "key": f"{index:02d}",
-                    "value": _stringify(pair),
-                }
-            )
-    elif unknown_pairs:
-        writer.writerow(
-            {
-                "section": "universe_unknown",
-                "key": "00",
-                "value": _stringify(unknown_pairs),
-            }
-        )
+
     return buffer.getvalue()
 
 
