@@ -216,6 +216,20 @@ notional'а, например:
   `bot_daily_loss_cap_usdt`, а счётчик `risk_skips_total{reason="daily_loss_cap"}`
   инкрементируется при каждом отказе.
 
+### Universe enforcement gate
+
+- Флаг `ENFORCE_UNIVERSE=1` включает предторговый контроль списка инструментов.
+  Торговля разрешена только для пар, которые присутствуют в текущей вселенной
+  (`UniverseManager` → конфиг деривативов и доступные символы).
+- При заблокированной паре intent помечается `SKIPPED_BY_RISK` с причиной
+  `universe`, метрика `propbot_skipped_by_reason_total{reason="universe"}`
+  инкрементируется, а запрос добавляется в список `unknown_pairs`.
+- Ops report публикует флаг `universe_enforced` и массив `unknown_pairs`
+  (JSON/CSV) с перечнем отклонённых символов за период снапшота.
+- `/ui/dashboard` в блоке Runtime & Safety показывает бейдж
+  «Universe: ENFORCED/OPEN» в зависимости от флага, чтобы операторы видели
+  текущий режим.
+
 ### Autopilot resume safety
 
 - Автопилот больше не снимает HOLD автоматически, если стратегия заморожена

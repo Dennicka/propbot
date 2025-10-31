@@ -16,6 +16,7 @@ from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
 from ..watchdog.exchange_watchdog import get_exchange_watchdog
+from ..universe.gate import is_universe_enforced
 from . import runtime
 from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
@@ -145,6 +146,8 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
 
     operator_actions = list_recent_operator_actions(limit=max(actions_limit, 0))
     ops_events = list_recent_events(limit=max(events_limit, 0))
+    universe_enforced = is_universe_enforced()
+    unknown_pairs = runtime.get_universe_unknown_pairs()
 
     return {
         "generated_at": _iso_now(),
@@ -186,6 +189,8 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
             "operator_actions": operator_actions,
             "ops_events": ops_events,
         },
+        "universe_enforced": universe_enforced,
+        "unknown_pairs": list(unknown_pairs),
     }
 
 
@@ -434,6 +439,33 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
     audit_payload = _coerce_mapping(report.get("audit"))
     for row in _iter_audit_rows(audit_payload):
         writer.writerow(row)
+    universe_enforced = report.get("universe_enforced")
+    if universe_enforced is not None:
+        writer.writerow(
+            {
+                "section": "universe",
+                "key": "enforced",
+                "value": _stringify(universe_enforced),
+            }
+        )
+    unknown_pairs = report.get("unknown_pairs")
+    if isinstance(unknown_pairs, Sequence):
+        for index, pair in enumerate(unknown_pairs, start=1):
+            writer.writerow(
+                {
+                    "section": "universe_unknown",
+                    "key": f"{index:02d}",
+                    "value": _stringify(pair),
+                }
+            )
+    elif unknown_pairs:
+        writer.writerow(
+            {
+                "section": "universe_unknown",
+                "key": "00",
+                "value": _stringify(unknown_pairs),
+            }
+        )
     return buffer.getvalue()
 
 

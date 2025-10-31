@@ -514,6 +514,23 @@ class SafetyState:
 
 
 @dataclass
+class UniverseState:
+    unknown_pairs: set[str] = field(default_factory=set)
+
+    def record_unknown(self, pair: str | None) -> None:
+        value = str(pair or "").strip().upper()
+        if not value:
+            return
+        self.unknown_pairs.add(value)
+
+    def list_unknown(self) -> list[str]:
+        return sorted(self.unknown_pairs)
+
+    def clear(self) -> None:
+        self.unknown_pairs.clear()
+
+
+@dataclass
 class RuntimeState:
     config: LoadedConfig
     guards: Dict[str, GuardState]
@@ -532,6 +549,7 @@ class RuntimeState:
     auto_hedge: AutoHedgeState = field(default_factory=AutoHedgeState)
     autopilot: AutopilotState = field(default_factory=AutopilotState)
     safety: SafetyState = field(default_factory=SafetyState)
+    universe: UniverseState = field(default_factory=UniverseState)
 
 
 def _sync_loop_from_control(state: RuntimeState) -> None:
@@ -723,6 +741,21 @@ def get_loop_state() -> LoopState:
 def get_safety_status() -> Dict[str, object]:
     with _STATE_LOCK:
         return dict(_STATE.safety.status_payload())
+
+
+def record_universe_unknown_pair(pair_id: str | None) -> None:
+    with _STATE_LOCK:
+        _STATE.universe.record_unknown(pair_id)
+
+
+def get_universe_unknown_pairs() -> list[str]:
+    with _STATE_LOCK:
+        return _STATE.universe.list_unknown()
+
+
+def clear_universe_unknown_pairs() -> None:
+    with _STATE_LOCK:
+        _STATE.universe.clear()
 
 
 def is_hold_active() -> bool:

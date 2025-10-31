@@ -12,6 +12,7 @@ from app.strategy_risk import get_strategy_risk_manager, reset_strategy_risk_man
 from app.strategy_pnl import reset_state_for_tests as reset_strategy_pnl_state
 from positions import create_position, reset_positions
 
+from app.services import runtime
 from app.watchdog.exchange_watchdog import (
     ExchangeWatchdog,
     get_exchange_watchdog,
@@ -67,6 +68,8 @@ def ops_report_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("POSITIONS_STORE_PATH", str(tmp_path / "positions.json"))
     monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "200")
     monkeypatch.setenv("ENFORCE_DAILY_LOSS_CAP", "1")
+    runtime.clear_universe_unknown_pairs()
+    runtime.record_universe_unknown_pair("DOGEUSDT")
 
     reset_strategy_pnl_state()
     reset_positions()
@@ -188,6 +191,7 @@ def ops_report_environment(monkeypatch, tmp_path):
             "auditor": {"Authorization": "Bearer CCC"},
         }
     finally:
+        runtime.clear_universe_unknown_pairs()
         reset_exchange_watchdog_for_tests()
         reset_strategy_budget_manager_for_tests()
         reset_strategy_risk_manager_for_tests()
@@ -216,6 +220,8 @@ def test_ops_report_json_accessible_for_roles(
     assert payload["pnl"]["unrealized_pnl_usdt"] == 42.0
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
+    assert payload["universe_enforced"] is False
+    assert payload["unknown_pairs"] == ["DOGEUSDT"]
     watchdog_payload = payload.get("watchdog")
     assert watchdog_payload["watchdog_ok"] is False
     assert watchdog_payload["overall_ok"] is False
@@ -250,6 +256,7 @@ def test_ops_report_json_accessible_for_roles(
     assert auditor_payload["runtime"]["mode"] == "HOLD"
     assert auditor_payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
     assert auditor_payload["daily_loss_cap"]["losses_usdt"] == pytest.approx(80.0)
+    assert auditor_payload["unknown_pairs"] == ["DOGEUSDT"]
 
 
 def test_ops_report_csv_export(client, ops_report_environment) -> None:
@@ -281,5 +288,16 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
         row["section"] == "watchdog_degraded"
         and row["key"] == "binance"
         and row["value"] == "timeout"
+        for row in rows
+    )
+    assert any(
+        row["section"] == "universe"
+        and row["key"] == "enforced"
+        and row["value"] == "False"
+        for row in rows
+    )
+    assert any(
+        row["section"] == "universe_unknown"
+        and row["value"] == "DOGEUSDT"
         for row in rows
     )

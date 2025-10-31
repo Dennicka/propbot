@@ -45,6 +45,7 @@ from ..risk.telemetry import get_risk_skip_counts
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy_risk import get_strategy_risk_manager
+from ..universe.gate import is_universe_enforced
 from .strategy_status import build_strategy_status
 from .live_readiness import compute_readiness
 
@@ -546,6 +547,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
         "auto_hold_daily_loss": auto_hold_daily_loss,
         "live_readiness": live_readiness,
+        "universe_enforced": is_universe_enforced(),
     }
 
 
@@ -578,6 +580,18 @@ def _status_span(ok: bool) -> str:
     if ok:
         return '<span style="color:#1b7f3b;font-weight:600;">OK</span>'
     return '<span style="color:#b00020;font-weight:700;">DEAD</span>'
+
+
+def _universe_badge(enforced: bool) -> str:
+    if enforced:
+        return (
+            '<span style="background:#dcfce7;color:#166534;padding:0.2rem 0.6rem;'
+            'border-radius:999px;font-weight:700;">ENFORCED</span>'
+        )
+    return (
+        '<span style="background:#f3f4f6;color:#1f2937;padding:0.2rem 0.6rem;'
+        'border-radius:999px;font-weight:600;">OPEN</span>'
+    )
 
 
 def _tag(text: str, *, color: str, weight: str = "700") -> str:
@@ -748,6 +762,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_decision = str(autopilot.get("last_decision") or "unknown")
     autopilot_decision_reason = autopilot.get("last_decision_reason") or ""
     autopilot_decision_ts = autopilot.get("last_decision_ts") or ""
+    universe_enforced = bool(context.get("universe_enforced"))
 
     pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
     pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
@@ -1736,6 +1751,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if risk_throttled:
         mode_value = f"RISK_THROTTLED ({mode_value})"
     parts.append(f"<tr><th>Mode</th><td>{mode_value}</td></tr>")
+    parts.append(
+        f"<tr><th>Universe</th><td>{_universe_badge(universe_enforced)}</td></tr>"
+    )
     if hold_active:
         detail = "YES"
         reason_text = hold_reason_display or hold_reason_raw
