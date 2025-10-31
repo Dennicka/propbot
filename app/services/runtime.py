@@ -12,6 +12,7 @@ from ..audit_log import log_operator_action
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
 from ..metrics import set_auto_trade_state, slo
+from ..runtime import leader_lock
 from ..runtime_state_store import (
     load_runtime_payload as _store_load_runtime_payload,
     write_runtime_payload as _store_write_runtime_payload,
@@ -1823,6 +1824,9 @@ def _persist_runtime_payload(updates: Mapping[str, Any]) -> None:
     payload = _load_runtime_payload()
     payload.update(updates)
     payload.update(_runtime_status_snapshot())
+    leader_status = leader_lock.get_status()
+    payload["leader_lock"] = leader_status
+    payload["leader_fencing_id"] = leader_status.get("fencing_id")
     _store_write_runtime_payload(payload)
 
 

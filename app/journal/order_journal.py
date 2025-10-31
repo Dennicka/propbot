@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Tuple
 
 from .. import ledger
+from ..runtime import leader_lock
 from . import is_enabled
 
 LOGGER = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ def append(event: Mapping[str, Any]) -> Dict[str, Any]:
     ts_value = str(event.get("ts") or _now())
     type_value = str(event.get("type") or "unknown")
     payload_value = event.get("payload", {})
+    payload_value = leader_lock.attach_fencing_meta(payload_value)
     payload_text = json.dumps(payload_value, separators=(",", ":"))
 
     with _LEDGER_LOCK:

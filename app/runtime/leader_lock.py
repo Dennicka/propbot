@@ -8,10 +8,11 @@ import sqlite3
 import threading
 import time
 import uuid
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
 
 
 @dataclass
@@ -20,6 +21,23 @@ class _LeaderState:
     expires_at: float = 0.0
     acquired: bool = False
     last_error: str | None = None
+    fencing_id: str | None = None
+    heartbeat_ts: float = 0.0
+
+
+@dataclass(frozen=True)
+class Heartbeat:
+    """Serialized leader heartbeat information."""
+
+    pid: int | None = None
+    fencing_id: str | None = None
+    timestamp: float | None = None
+
+    def age(self, *, now: float | None = None) -> float | None:
+        if self.timestamp is None:
+            return None
+        moment = now or time.time()
+        return max(moment - self.timestamp, 0.0)
 
 
 _STATE = _LeaderState()
@@ -57,9 +75,22 @@ def _db_path() -> Path:
     return Path("data/leader.lock")
 
 
+def _heartbeat_path() -> Path:
+    override = os.getenv("LEADER_HEARTBEAT_PATH")
+    if override:
+        return Path(override)
+    return Path("data/leader.hb")
+
+
 def _ttl_seconds() -> int:
     ttl = max(_env_int("LEADER_LOCK_TTL_SEC", 30), 5)
     return ttl
+
+
+def _stale_seconds() -> int:
+    ttl = _ttl_seconds()
+    default = max(int(ttl * 2), 60)
+    return max(_env_int("LEADER_LOCK_STALE_SEC", default), ttl)
 
 
 def renew_interval() -> float:
@@ -105,18 +136,35 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY CHECK (id = 1),
             owner TEXT NOT NULL,
             expires_at REAL NOT NULL,
+            fencing_id TEXT,
             updated_at REAL NOT NULL
         )
         """
     )
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info('leader_lock')").fetchall()
+    }
+    if "fencing_id" not in columns:
+        conn.execute("ALTER TABLE leader_lock ADD COLUMN fencing_id TEXT")
 
 
-def _record_local_state(*, owner: str | None, expires_at: float, acquired: bool, error: str | None = None) -> None:
+def _record_local_state(
+    *,
+    owner: str | None,
+    expires_at: float,
+    acquired: bool,
+    error: str | None = None,
+    fencing_id: str | None = None,
+    heartbeat_ts: float | None = None,
+) -> None:
     with _STATE_LOCK:
         _STATE.owner = owner
         _STATE.expires_at = expires_at
         _STATE.acquired = acquired
         _STATE.last_error = error
+        _STATE.fencing_id = fencing_id
+        _STATE.heartbeat_ts = heartbeat_ts or 0.0
 
 
 def _reset_db_on_error(exc: Exception) -> None:
@@ -125,7 +173,106 @@ def _reset_db_on_error(exc: Exception) -> None:
         path.unlink()
     except OSError:
         pass
-    _record_local_state(owner=None, expires_at=0.0, acquired=False, error=str(exc))
+    _record_local_state(owner=None, expires_at=0.0, acquired=False, error=str(exc), fencing_id=None)
+
+
+def _write_heartbeat(data: Heartbeat) -> None:
+    if data.fencing_id is None or data.timestamp is None:
+        return
+    path = _heartbeat_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    payload = {
+        "pid": data.pid,
+        "fencing_id": data.fencing_id,
+        "ts": data.timestamp,
+    }
+    try:
+        path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def beat(*, fencing_id: str | None = None, now: float | None = None) -> Heartbeat:
+    """Persist a leader heartbeat marker for fencing consumers."""
+
+    if not feature_enabled():
+        return Heartbeat()
+    moment = now or time.time()
+    pid = os.getpid()
+    with _STATE_LOCK:
+        if fencing_id is None:
+            fencing_id = _STATE.fencing_id
+        if not fencing_id:
+            _STATE.heartbeat_ts = 0.0
+            return Heartbeat()
+        _STATE.heartbeat_ts = moment
+    heartbeat = Heartbeat(pid=pid, fencing_id=fencing_id, timestamp=moment)
+    _write_heartbeat(heartbeat)
+    return heartbeat
+
+
+def last_heartbeat() -> Heartbeat:
+    """Return the last recorded heartbeat from disk."""
+
+    path = _heartbeat_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return Heartbeat()
+    if not raw.strip():
+        return Heartbeat()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return Heartbeat()
+    if not isinstance(payload, dict):
+        return Heartbeat()
+    pid_value = payload.get("pid")
+    fencing_value = payload.get("fencing_id")
+    ts_value = payload.get("ts")
+    try:
+        pid_int = int(pid_value) if pid_value is not None else None
+    except (TypeError, ValueError):
+        pid_int = None
+    try:
+        ts_float = float(ts_value) if ts_value is not None else None
+    except (TypeError, ValueError):
+        ts_float = None
+    fencing_text = str(fencing_value).strip() if fencing_value is not None else ""
+    return Heartbeat(
+        pid=pid_int,
+        fencing_id=fencing_text or None,
+        timestamp=ts_float,
+    )
+
+
+def _current_meta() -> dict[str, object] | None:
+    if not feature_enabled():
+        return None
+    with _STATE_LOCK:
+        if not _STATE.acquired or not _STATE.fencing_id:
+            return None
+        return {"fencing_id": _STATE.fencing_id}
+
+
+def attach_fencing_meta(payload: Mapping[str, object]) -> dict[str, object]:
+    """Embed the current fencing id into a payload under ``meta`` if available."""
+
+    if not isinstance(payload, dict):
+        payload = dict(payload)
+    else:
+        payload = dict(payload)
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else None
+    fencing_meta = _current_meta()
+    if not fencing_meta:
+        return payload
+    merged_meta = dict(meta or {})
+    merged_meta.setdefault("fencing_id", fencing_meta["fencing_id"])
+    payload["meta"] = merged_meta
+    return payload
 
 
 def acquire(*, now: float | None = None) -> bool:
@@ -137,35 +284,68 @@ def acquire(*, now: float | None = None) -> bool:
     owner = _resolve_instance_id()
     moment = now or time.time()
     ttl = _ttl_seconds()
+    stale = _stale_seconds()
+    fencing_id: str | None = None
     try:
         with _connect() as conn:
             _ensure_schema(conn)
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT owner, expires_at FROM leader_lock WHERE id = 1").fetchone()
+            row = conn.execute(
+                "SELECT owner, expires_at, fencing_id FROM leader_lock WHERE id = 1"
+            ).fetchone()
             if row:
                 row_owner = str(row["owner"] or "")
                 row_expiry = float(row["expires_at"] or 0.0)
+                row_fencing = str(row["fencing_id"] or "") or None
                 if row_owner and row_owner != owner and row_expiry > moment:
-                    conn.rollback()
-                    _record_local_state(owner=row_owner, expires_at=row_expiry, acquired=False)
-                    return False
+                    heartbeat = last_heartbeat()
+                    hb_age = heartbeat.age(now=moment)
+                    hb_fencing = heartbeat.fencing_id
+                    stale_allowed = False
+                    if hb_age is not None and hb_age >= stale:
+                        stale_allowed = True
+                    if row_fencing and hb_fencing and hb_fencing != row_fencing:
+                        stale_allowed = True
+                    if not stale_allowed:
+                        conn.rollback()
+                        _record_local_state(
+                            owner=row_owner,
+                            expires_at=row_expiry,
+                            acquired=False,
+                            fencing_id=row_fencing,
+                            heartbeat_ts=heartbeat.timestamp,
+                        )
+                        return False
+                if row_owner == owner and row_expiry > moment and row_fencing:
+                    fencing_id = row_fencing
             expiry = moment + ttl
+            if not fencing_id:
+                fencing_id = uuid.uuid4().hex
             conn.execute(
                 """
-                INSERT INTO leader_lock (id, owner, expires_at, updated_at)
-                VALUES (1, ?, ?, ?)
+                INSERT INTO leader_lock (id, owner, expires_at, fencing_id, updated_at)
+                VALUES (1, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     owner=excluded.owner,
                     expires_at=excluded.expires_at,
+                    fencing_id=excluded.fencing_id,
                     updated_at=excluded.updated_at
                 """,
-                (owner, expiry, moment),
+                (owner, expiry, fencing_id, moment),
             )
             conn.commit()
     except sqlite3.DatabaseError as exc:
         _reset_db_on_error(exc)
         return False
-    _record_local_state(owner=owner, expires_at=expiry, acquired=True, error=None)
+    _record_local_state(
+        owner=owner,
+        expires_at=expiry,
+        acquired=True,
+        error=None,
+        fencing_id=fencing_id,
+        heartbeat_ts=moment,
+    )
+    beat(fencing_id=fencing_id, now=moment)
     return True
 
 
@@ -180,19 +360,23 @@ def release() -> bool:
             row = conn.execute("SELECT owner FROM leader_lock WHERE id = 1").fetchone()
             if not row:
                 conn.rollback()
-                _record_local_state(owner=None, expires_at=0.0, acquired=False)
+                _record_local_state(owner=None, expires_at=0.0, acquired=False, fencing_id=None)
                 return False
             row_owner = str(row["owner"] or "")
             if row_owner != owner:
                 conn.rollback()
-                _record_local_state(owner=row_owner, expires_at=0.0, acquired=False)
+                _record_local_state(owner=row_owner, expires_at=0.0, acquired=False, fencing_id=None)
                 return False
             conn.execute("DELETE FROM leader_lock WHERE id = 1")
             conn.commit()
     except sqlite3.DatabaseError as exc:
         _reset_db_on_error(exc)
         return False
-    _record_local_state(owner=None, expires_at=0.0, acquired=False, error=None)
+    _record_local_state(owner=None, expires_at=0.0, acquired=False, error=None, fencing_id=None)
+    try:
+        _heartbeat_path().unlink()
+    except OSError:
+        pass
     return True
 
 
@@ -211,6 +395,8 @@ def is_leader(*, now: float | None = None) -> bool:
 
 def get_status(*, now: float | None = None) -> dict[str, object]:
     moment = now or time.time()
+    heartbeat = last_heartbeat()
+    heartbeat_age = heartbeat.age(now=moment)
     with _STATE_LOCK:
         remaining = max(_STATE.expires_at - moment, 0.0)
         return {
@@ -219,11 +405,15 @@ def get_status(*, now: float | None = None) -> dict[str, object]:
             "remaining": remaining,
             "leader": _STATE.acquired and remaining > 0,
             "last_error": _STATE.last_error,
+            "fencing_id": _STATE.fencing_id,
+            "heartbeat_ts": heartbeat.timestamp,
+            "heartbeat_pid": heartbeat.pid,
+            "heartbeat_age": heartbeat_age,
         }
 
 
 def reset_for_tests() -> None:
-    _record_local_state(owner=None, expires_at=0.0, acquired=False, error=None)
+    _record_local_state(owner=None, expires_at=0.0, acquired=False, error=None, fencing_id=None)
     global _INSTANCE_ID
     _INSTANCE_ID = None
     path = _db_path()
@@ -231,13 +421,21 @@ def reset_for_tests() -> None:
         path.unlink()
     except OSError:
         pass
+    hb_path = _heartbeat_path()
+    try:
+        hb_path.unlink()
+    except OSError:
+        pass
 
 
 __all__ = [
     "acquire",
+    "attach_fencing_meta",
+    "beat",
     "feature_enabled",
     "get_status",
     "is_leader",
+    "last_heartbeat",
     "release",
     "renew_interval",
     "reset_for_tests",

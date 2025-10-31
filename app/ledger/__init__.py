@@ -9,8 +9,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
+from ..runtime import leader_lock
+
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
+
+
+def _attach_fencing_meta(payload: Mapping[str, object]) -> Dict[str, object]:
+    try:
+        return leader_lock.attach_fencing_meta(payload)
+    except Exception:
+        return dict(payload)
 
 
 def _feature_enabled(name: str, default: bool = False) -> bool:
@@ -377,6 +386,7 @@ def record_fill(
 
 
 def _record_event_locked(conn: sqlite3.Connection, *, level: str, code: str, payload: Dict[str, object]) -> None:
+    payload = _attach_fencing_meta(payload)
     conn.execute(
         "INSERT INTO events (ts, level, code, payload) VALUES (?, ?, ?, ?)",
         (_now(), level, code, json.dumps(payload, separators=(",", ":"))),

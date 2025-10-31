@@ -142,6 +142,8 @@ def reset_strategy_pnl_tracker():
 def reset_leader_lock(monkeypatch, tmp_path: Path):
     path = tmp_path / "leader.lock"
     monkeypatch.setenv("LEADER_LOCK_PATH", str(path))
+    hb_path = tmp_path / "leader.hb"
+    monkeypatch.setenv("LEADER_HEARTBEAT_PATH", str(hb_path))
     monkeypatch.delenv("FEATURE_LEADER_LOCK", raising=False)
     monkeypatch.delenv("LEADER_LOCK_INSTANCE_ID", raising=False)
     leader_lock.reset_for_tests()
