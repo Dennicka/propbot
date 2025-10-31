@@ -65,12 +65,22 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
 - При переводе стратегий обязательно фиксируйте причину в таск-трекере/операционном журнале, чтобы сохранить трассировку решений.
 
 ## 9. Лидер-лок и фейловер
-- При `FEATURE_LEADER_LOCK=1` только инстанс с `leader=true` из `/healthz` и `/live-readiness` имеет право переводить систему в `RUN`. Второй инстанс автоматически остаётся в HOLD.
-- Симптом split-brain: `/live-readiness` → `ready=false`, причина `leader:not_acquired`, при этом на другом узле `ready=true`.
-- План действий:
-  1. Зафиксировать текущий лидер: `curl -s http://<host>/healthz | jq` → поле `leader`.
-  2. На «лишнем» инстансе оставить HOLD (`/api/ui/dashboard` не переводить в RUN). Убедиться, что `live readiness` отвечает `ready=false`.
-  3. Остановить сервис на лишнем узле (`systemctl stop propbot` или `docker stop <container>`).
-  4. На целевом узле удалить устаревший лок (`rm -f data/leader.lock` или путь из `LEADER_LOCK_PATH`), затем перезапустить сервис.
-  5. После рестарта убедиться, что `/healthz` и `/live-readiness` на активном узле отдают `leader=true` и `ready=true`, а остальные узлы продолжают держать HOLD.
-- После фейловера обязательно прогнать `/live-readiness`, `/healthz` и статус-дэшборд. Только после зелёных статусов собираем approvals и выводим из HOLD.
+- При `FEATURE_LEADER_LOCK=1` только инстанс с `leader=true` из `/healthz` и `/live-readiness` имеет право переводить систему в `RUN`. Второй инстанс автоматически держит HOLD и возвращает `ready=false`.
+- `/live-readiness` дополнительно показывает `fencing_id` и `hb_age_sec` (возраст heartbeat). Текущий heartbeat пишется в `data/leader.hb` (`pid`, `fencing_id`, `ts`). У активного лидера `hb_age_sec` держится в коридоре 0–2 сек. Если возраст растёт, лидер завис или остановлен.
+- Грациозная передача лидера:
+  1. На принимающем узле поднять сервис, но оставить его в HOLD. Проверить `/live-readiness` → `leader=false`, `hb_age_sec` растёт до тех пор, пока лок не будет освобождён.
+  2. На текущем лидере перевести бота в HOLD и явно освободить лок:
+     ```bash
+     python - <<'PY'
+     from app.runtime import leader_lock
+     leader_lock.release()
+     PY
+     ```
+     После выполнения `/live-readiness` на старом узле покажет `leader=false`, `fencing_id=null`, `hb_age_sec` начнёт расти.
+  3. На новом узле дождаться, пока `/live-readiness` вернёт `leader=true` и новый `fencing_id`. Убедиться, что `hb_age_sec` снова малый (<2 сек).
+  4. Проверить, что старый узел остаётся в HOLD, и только после этого собирать approvals и выводить новый лидер из HOLD.
+- Форсированный перехват (steal) при зависшем лидере:
+  1. Убедиться, что старый инстанс остановлен или переведён в HOLD. Считать `hb_age_sec`/`ts` со старого `/live-readiness` или напрямую из `data/leader.hb`.
+  2. На новом узле дождаться, когда `hb_age_sec` текущего лидера превысит `LEADER_LOCK_STALE_SEC` (по умолчанию `max(2*TTL, 60)` секунд). Следующий вызов `/live-readiness` на новом узле получит лок, вернёт новый `fencing_id`, `ready=true` и `hb_age_sec≈0`.
+  3. Зафиксировать смену в журнале (новый `fencing_id`, рост `hb_age_sec` на старом узле). После восстановления старого хоста удалить `data/leader.lock`/`data/leader.hb`, вручную держать HOLD и убедиться, что он не берёт лидерство обратно.
+- После любой смены лидера прогоняем `/live-readiness`, `/healthz` и `/api/ui/status/overview`. Только после зелёных статусов собираем approvals и выводим систему из HOLD.

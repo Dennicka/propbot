@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any, List, Mapping
 
+from ..runtime import leader_lock
+
 
 def _log_path() -> Path:
     override = os.getenv("HEDGE_LOG_PATH")
@@ -41,6 +43,7 @@ def append_entry(entry: Mapping[str, Any]) -> dict:
     """Append *entry* to the persistent hedge log and return it as a dict."""
 
     record = dict(entry)
+    record = leader_lock.attach_fencing_meta(record)
     path = _log_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

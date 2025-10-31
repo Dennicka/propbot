@@ -955,6 +955,17 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         for reason in live_readiness.get("reasons", [])
         if str(reason).strip()
     ]
+    raw_fencing = live_readiness.get("fencing_id")
+    fencing_label = str(raw_fencing).strip() if isinstance(raw_fencing, str) else None
+    if not fencing_label and raw_fencing not in (None, ""):
+        fencing_label = str(raw_fencing)
+    if not fencing_label:
+        fencing_label = "N/A"
+    hb_age_raw = live_readiness.get("hb_age_sec")
+    if isinstance(hb_age_raw, (int, float)):
+        hb_age_label = f"{hb_age_raw:.1f}s"
+    else:
+        hb_age_label = "n/a"
     readiness_title_attr = ""
     if readiness_reasons:
         joined_reasons = "; ".join(readiness_reasons)
@@ -995,6 +1006,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".status-pill .label{font-weight:600;color:#475569;}"
         ".status-pill.status-ok{background:#dcfce7;color:#166534;}"
         ".status-pill.status-bad{background:#fee2e2;color:#991b1b;}"
+        ".status-pill.status-info{background:#e0f2fe;color:#0c4a6e;}"
         ".role-badge{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;text-transform:uppercase;}"
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
@@ -1115,6 +1127,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         f"<div><span class=\"label\">Role:</span> <span class=\"role-badge role-{operator_role}\">{_fmt(operator_role_label)}</span></div>"
         f"<div class=\"status-pills\">"
         f"<span class=\"status-pill {leader_class}\"><span class=\"label\">LEADER:</span> {_fmt(leader_label)}</span>"
+        f"<span class=\"status-pill status-info\"><span class=\"label\">FENCING_ID:</span> {_fmt(fencing_label)}</span>"
+        f"<span class=\"status-pill status-info\"><span class=\"label\">HB age:</span> {_fmt(hb_age_label)}</span>"
         f"<span class=\"status-pill {readiness_class}\"{readiness_title_attr}><span class=\"label\">LIVE READY:</span> {_fmt(readiness_label)}</span>"
         "</div>"
         "</div>"

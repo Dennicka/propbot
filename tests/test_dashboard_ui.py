@@ -113,6 +113,8 @@ def test_dashboard_leader_and_readiness_labels(monkeypatch, tmp_path, client) ->
     assert response.status_code == 200
     html = response.text
     assert "LEADER:" in html
+    assert "FENCING_ID:" in html
+    assert "HB age:" in html
     assert "LIVE READY:" in html
 
 
