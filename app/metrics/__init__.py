@@ -1,5 +1,17 @@
 """Metric helpers exposed for reuse across the application."""
 
+from .runtime import (
+    AUTO_TRADE_GAUGE,
+    DAILY_LOSS_BREACH_GAUGE,
+    RISK_BREACHES_COUNTER,
+    TRADES_EXECUTED_COUNTER,
+    WATCHDOG_STATE_GAUGE,
+    record_risk_breach,
+    record_trade_execution,
+    set_auto_trade_state,
+    set_daily_loss_breach,
+    set_watchdog_state,
+)
 from .slo import (
     DAILY_LOSS_BREACHED_GAUGE,
     ORDER_CYCLE_HISTOGRAM,
@@ -16,11 +28,21 @@ from .slo import (
 )
 
 __all__ = [
+    "AUTO_TRADE_GAUGE",
+    "DAILY_LOSS_BREACH_GAUGE",
+    "RISK_BREACHES_COUNTER",
+    "TRADES_EXECUTED_COUNTER",
+    "WATCHDOG_STATE_GAUGE",
     "DAILY_LOSS_BREACHED_GAUGE",
     "ORDER_CYCLE_HISTOGRAM",
     "SKIPPED_COUNTER",
     "WATCHDOG_OK_GAUGE",
     "WS_GAP_HISTOGRAM",
+    "record_trade_execution",
+    "record_risk_breach",
+    "set_auto_trade_state",
+    "set_watchdog_state",
+    "set_daily_loss_breach",
     "inc_skipped",
     "observe_ws_gap",
     "order_cycle_timer",

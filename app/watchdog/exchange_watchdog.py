@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple
 
 from ..metrics import slo
+from ..metrics.runtime import record_risk_breach, set_watchdog_state
 
 RECENT_TRANSITION_LIMIT = 50
 
@@ -109,6 +110,7 @@ class ExchangeWatchdog:
                 }
                 self._state[exchange] = entry
                 slo.set_watchdog_ok(exchange, ok)
+                set_watchdog_state(exchange, status)
                 if previous_status != status:
                     transition = WatchdogStateTransition(
                         previous=previous_status,
@@ -119,6 +121,8 @@ class ExchangeWatchdog:
                     )
                     transitions[exchange] = transition
                     self._record_transition(exchange, transition)
+                    if status == "AUTO_HOLD":
+                        record_risk_breach("watchdog")
             snapshot = {name: dict(entry) for name, entry in self._state.items()}
         return WatchdogCheckResult(snapshot=snapshot, transitions=transitions)
 
@@ -146,6 +150,7 @@ class ExchangeWatchdog:
             entry.setdefault("last_check_ts", now)
             self._state[exchange] = entry
             slo.set_watchdog_ok(exchange, False)
+            set_watchdog_state(exchange, "AUTO_HOLD")
             transition = WatchdogStateTransition(
                 previous=previous_status,
                 current="AUTO_HOLD",
@@ -154,6 +159,8 @@ class ExchangeWatchdog:
                 timestamp=now,
             )
             self._record_transition(exchange, transition)
+            if previous_status != "AUTO_HOLD":
+                record_risk_breach("watchdog")
             return transition
 
     def get_state(self) -> Dict[str, Dict[str, Any]]:

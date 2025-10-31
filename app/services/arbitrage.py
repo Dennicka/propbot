@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Tuple
 
 from ..broker.router import ExecutionRouter
 from ..core.config import ArbitragePairConfig
-from ..metrics import slo
+from ..metrics import record_trade_execution, slo
 from ..risk.core import risk_gate
 from ..risk.telemetry import record_risk_skip
 from ..universe.gate import check_pair_allowed, is_universe_enforced
@@ -527,6 +527,8 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
         pnl_bps = (pnl_usdt / plan.notional) * 10_000 if plan.notional else 0.0
         pnl_delta = 0.0 if simulated else pnl_usdt
         snapshot = accounting_record_fill(strategy_name, plan.notional, pnl_delta, simulated=simulated)
+        if not simulated and not state.control.dry_run_mode:
+            record_trade_execution()
         logger.info(
             "arbitrage plan executed",
             extra={

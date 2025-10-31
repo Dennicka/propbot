@@ -22,15 +22,22 @@
 
 ## Наблюдаемость и SLO
 
-Экспонируемый endpoint `/metrics` публикует основные SLO-метрики в формате Prometheus:
+Экспонируемый endpoint `/metrics` публикует основные SLO- и runtime-метрики в формате Prometheus:
 
 * `propbot_order_cycle_ms` — гистограмма полного цикла исполнения (ручной и автопилот).
 * `propbot_ws_gap_ms` — задержка между обновлениями стримов; при отсутствии потока публикуется безопасное значение `0`.
 * `propbot_skipped_by_reason_total{reason}` — счётчик пропущенных выполнений с метками `risk_gate`, `daily_loss_cap`, `universe`, `watchdog`, `hold`.
 * `propbot_watchdog_ok{exchange}` — индикатор готовности биржевого вотчдога (1 — здоров, 0 — деградация/auto-HOLD).
-* `propbot_daily_loss_breached` — флаг нарушения дневного лимита PnL (0/1).
+* `propbot_daily_loss_breached` — историческая метрика нарушения дневного лимита PnL (0/1).
+* `propbot_trades_executed_total` — количество реально исполненных сделок (не инкрементируется в `DRY_RUN_MODE`).
+* `propbot_risk_breaches_total{type="daily_loss"|"watchdog"}` — счётчик авто-HOLD событий от risk core и вотчдога.
+* `propbot_auto_trade{state="on"|"off"}` — состояние автоторговли (1 для текущего состояния).
+* `propbot_watchdog_state{exchange,state}` — текущий статус вотчдога по биржам (`OK`/`DEGRADED`/`AUTO_HOLD`).
+* `propbot_daily_loss_breach` — актуальный признак breach дневного лимита (1/0), совпадает с badge `daily_loss`.
 
 Метрики доступны без изменения бизнес-логики и помогают собрать дашборды/алерты для операторов.
+
+Endpoint `/live-readiness` возвращает `{"ok": true|false, "reasons": [...]}` для простых health-check'ов. `ok=false`, если вотчдог переведён в `AUTO_HOLD` или дневной лимит в статусе `BREACH`; `reasons` содержит машинно-читаемые причины (`watchdog:auto_hold`, `daily_loss:breach`).
 
 ## Coverage vs spec_archive
 
@@ -736,11 +743,10 @@ dashboard ("Risk skips (last run)") and via the `/metrics` endpoint as the
 Операторы отслеживают жизнеспособность инстанса следующими инструментами:
 
 - `GET /healthz` — базовая проверка живости контейнера.
-- `GET /live-readiness` — агрегированная готовность для оркестраторов: проверяет
-  глобальный HOLD, состояние exchange watchdog, факт превышения дневного loss cap
-  (с учётом `ENFORCE_DAILY_LOSS_CAP`) и наличие хотя бы одного торгуемого
-  инструмента во вселенной. Возвращает HTTP 200 c `{"ready": true}` либо 503 с
-  `{"ready": false, "reasons": [...]}`.
+- `GET /live-readiness` — агрегированная готовность для оркестраторов: возвращает
+  HTTP 200 и `{"ok": true}` пока дневной лимит не в статусе `BREACH` и биржевой
+  watchdog не переведён в `AUTO_HOLD`. При проблемах отвечает 503 и
+  `{"ok": false, "reasons": [...]}`.
 - `GET /api/ui/status/overview` — общий статус, включающий SAFE_MODE, HOLD,
   runaway guard, auto-hedge (`consecutive_failures`).
 - `GET /api/ui/status/components` и `GET /api/ui/status/slo` — детализация

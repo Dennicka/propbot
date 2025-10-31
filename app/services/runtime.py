@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 from ..audit_log import log_operator_action
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
-from ..metrics import slo
+from ..metrics import set_auto_trade_state, slo
 from ..runtime_state_store import (
     load_runtime_payload as _store_load_runtime_payload,
     write_runtime_payload as _store_write_runtime_payload,
@@ -1356,6 +1356,7 @@ def autopilot_apply_resume(*, safe_mode: bool) -> Dict[str, object]:
     persist_safety: Dict[str, object] | None = None
     persist_autopilot: Dict[str, object] | None = None
     hold_cleared = False
+    auto_loop_enabled = False
     with _STATE_LOCK:
         control = _STATE.control
         safety = _STATE.safety
@@ -1365,6 +1366,7 @@ def autopilot_apply_resume(*, safe_mode: bool) -> Dict[str, object]:
         control.safe_mode = bool(safe_mode)
         control.mode = "RUN"
         control.auto_loop = True
+        auto_loop_enabled = bool(control.auto_loop)
         loop_state.status = "RUN"
         loop_state.running = True
         persist_control = asdict(control)
@@ -1376,6 +1378,7 @@ def autopilot_apply_resume(*, safe_mode: bool) -> Dict[str, object]:
         _persist_control_snapshot(persist_control)
     if persist_autopilot is not None:
         _persist_autopilot_snapshot(persist_autopilot)
+    set_auto_trade_state(auto_loop_enabled)
     return {"hold_cleared": hold_cleared, "control": persist_control, "safety": persist_safety}
 
 
@@ -1405,6 +1408,7 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
     autopilot_snapshot: Dict[str, object] | None = None
     changed = False
     hold_changed = False
+    auto_loop_enabled: bool | None = None
     with _STATE_LOCK:
         control = _STATE.control
         safety = _STATE.safety
@@ -1419,6 +1423,7 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
         if control.auto_loop:
             control.auto_loop = False
             changed = True
+        auto_loop_enabled = bool(control.auto_loop)
         loop_state = _STATE.loop
         if loop_state.running:
             loop_state.running = False
@@ -1449,6 +1454,8 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
         _persist_safety_snapshot(safety_snapshot)
     if autopilot_snapshot is not None:
         _persist_autopilot_snapshot(autopilot_snapshot)
+    if auto_loop_enabled is not None:
+        set_auto_trade_state(auto_loop_enabled)
     if changed or hold_changed:
         _emit_ops_alert(
             "safety_hold",
@@ -2022,6 +2029,7 @@ def _enforce_safe_start(state: RuntimeState) -> None:
         safety.hold_reason = safety.hold_reason or "restart_safe_mode"
         safety.hold_source = safety.hold_source or "bootstrap"
     safety.resume_request = None
+    set_auto_trade_state(False)
 
 
 _STATE = _bootstrap_runtime()

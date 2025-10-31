@@ -26,7 +26,7 @@
 ## SAFE_MODE
 - По умолчанию `true`, `/api/arb/execute` только dry-run.
 - Для live: изменить конфиг/ENV, выполнить preflight, собрать approvals.
-- `/live-readiness` отражает статус (READY/HOLD) в зависимости от SAFE_MODE и approvals.
+- `/live-readiness` отражает готовность (ок=true) пока watchdog не в `AUTO_HOLD` и дневной loss cap не в `BREACH`.
 - `/api/ui/state` → `flags` показывает текущие значения `MODE`, `SAFE_MODE`, `POST_ONLY`, `REDUCE_ONLY`, `ENV`.
 
 ## Incident Handling
