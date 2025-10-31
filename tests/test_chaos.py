@@ -15,6 +15,7 @@ def test_chaos_disabled_by_default(monkeypatch):
     assert settings.ws_drop_p == 0.0
     assert settings.rest_timeout_p == 0.0
     assert settings.order_delay_ms == 0
+    assert settings.profile == "none"
 
     chaos.configure(settings)
     monkeypatch.setattr(chaos.random, "random", lambda: 0.99)
@@ -34,11 +35,30 @@ def test_chaos_env_overrides(monkeypatch):
     assert settings.ws_drop_p == 0.5
     assert settings.rest_timeout_p == 0.25
     assert settings.order_delay_ms == 123
+    assert settings.profile == "custom"
 
     chaos.configure(settings)
     monkeypatch.setattr(chaos.random, "random", lambda: 0.4)
     assert chaos.should_drop_ws_update() is True
     monkeypatch.setattr(chaos.random, "random", lambda: 0.6)
     assert chaos.should_drop_ws_update() is False
+    chaos.configure(None)
+
+
+def test_chaos_profile_defaults(monkeypatch):
+    monkeypatch.setenv("FEATURE_CHAOS", "1")
+    monkeypatch.setenv("CHAOS_PROFILE", "mild")
+    monkeypatch.delenv("CHAOS_WS_DROP_P", raising=False)
+    monkeypatch.delenv("CHAOS_REST_TIMEOUT_P", raising=False)
+    monkeypatch.delenv("CHAOS_ORDER_DELAY_MS", raising=False)
+    chaos.configure(None)
+
+    settings = chaos.resolve_settings(None)
+    assert settings.enabled is True
+    assert settings.profile == "mild"
+    assert settings.ws_drop_p == 0.05
+    assert settings.rest_timeout_p == 0.02
+    assert settings.order_delay_ms == 150
+
     chaos.configure(None)
 

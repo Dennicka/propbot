@@ -40,6 +40,7 @@ from ..services.runtime import (
     approve_resume,
     control_as_dict,
     engage_safety_hold,
+    get_chaos_state,
     get_last_plan,
     get_safety_status,
     get_state,
@@ -156,6 +157,23 @@ def runtime_badges(request: Request) -> dict[str, str]:
 
     require_token(request)
     return get_runtime_badges()
+
+
+@router.get("/chaos")
+def chaos_profile(request: Request) -> dict[str, object]:
+    """Return the currently active chaos profile and resolved parameters."""
+
+    require_token(request)
+    settings = get_chaos_state()
+    active_profile = settings.profile if settings.enabled else "none"
+    return {
+        "enabled": settings.enabled,
+        "profile": active_profile,
+        "selected_profile": settings.profile,
+        "ws_drop_p": settings.ws_drop_p,
+        "rest_timeout_p": settings.rest_timeout_p,
+        "order_delay_ms": settings.order_delay_ms,
+    }
 
 
 @router.get("/strategy_budget")

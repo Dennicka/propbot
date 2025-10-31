@@ -7,7 +7,11 @@ import random
 import threading
 import time
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Mapping
+
+import yaml
 
 
 def _parse_float(value: str | None, default: float = 0.0) -> float:
@@ -47,18 +51,65 @@ class ChaosSettings:
     ws_drop_p: float = 0.0
     rest_timeout_p: float = 0.0
     order_delay_ms: int = 0
+    profile: str = "none"
 
-    def as_dict(self) -> dict[str, float | int | bool]:
+    def as_dict(self) -> dict[str, float | int | bool | str]:
         return {
             "enabled": self.enabled,
             "ws_drop_p": self.ws_drop_p,
             "rest_timeout_p": self.rest_timeout_p,
             "order_delay_ms": self.order_delay_ms,
+            "profile": self.profile,
         }
 
 
 _SETTINGS_LOCK = threading.Lock()
 _SETTINGS: ChaosSettings | None = None
+_PROFILES_PATH = Path(__file__).resolve().parents[2] / "configs" / "fault_profiles.yaml"
+
+
+@lru_cache(maxsize=1)
+def _load_profiles(path: Path | None = None) -> dict[str, dict[str, float | int]]:
+    target = path or _PROFILES_PATH
+    try:
+        text = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return {}
+    try:
+        payload = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        return {}
+    if isinstance(payload, Mapping) and "profiles" in payload:
+        payload = payload.get("profiles")
+    if not isinstance(payload, Mapping):
+        return {}
+    profiles: dict[str, dict[str, float | int]] = {}
+    for name, raw_values in payload.items():
+        if not isinstance(raw_values, Mapping):
+            continue
+        normalized: dict[str, float | int] = {}
+        for key, value in raw_values.items():
+            key_text = str(key or "").strip().lower()
+            try:
+                if key_text in {"ws_drop_p", "ws_drop_probability"}:
+                    normalized["ws_drop_p"] = float(value)
+                elif key_text in {"rest_timeout_p", "rest_timeout_probability"}:
+                    normalized["rest_timeout_p"] = float(value)
+                elif key_text in {"order_delay_ms", "order_delay"}:
+                    normalized["order_delay_ms"] = int(float(value))
+            except (TypeError, ValueError):
+                continue
+        profiles[str(name or "").strip().lower()] = normalized
+    return profiles
+
+
+def _profile_defaults(name: str | None) -> dict[str, float | int]:
+    if not name:
+        return {}
+    profiles = _load_profiles()
+    return profiles.get(name.strip().lower(), {})
 
 
 def _extract_config_value(config: Mapping[str, Any] | Any, key: str, default: float | int = 0) -> Any:
@@ -70,19 +121,27 @@ def _extract_config_value(config: Mapping[str, Any] | Any, key: str, default: fl
 
 
 def resolve_settings(config: Mapping[str, Any] | Any | None = None) -> ChaosSettings:
-    """Resolve settings from FEATURE_CHAOS, config payload and env overrides."""
+    """Resolve settings from FEATURE_CHAOS, config payload, profiles and env overrides."""
+
+    profile_name = os.getenv("CHAOS_PROFILE")
+    profile_defaults = _profile_defaults(profile_name)
 
     if not _feature_enabled():
-        return ChaosSettings()
+        return ChaosSettings(profile="none")
 
     ws_default = _parse_float(
-        _extract_config_value(config, "ws_drop_probability", 0.0), 0.0
+        profile_defaults.get("ws_drop_p"),
+        _parse_float(_extract_config_value(config, "ws_drop_probability", 0.0), 0.0),
     )
     rest_default = _parse_float(
-        _extract_config_value(config, "rest_timeout_probability", 0.0), 0.0
+        profile_defaults.get("rest_timeout_p"),
+        _parse_float(
+            _extract_config_value(config, "rest_timeout_probability", 0.0), 0.0
+        ),
     )
     order_delay_default = _parse_int(
-        _extract_config_value(config, "order_delay_ms", 0), 0
+        profile_defaults.get("order_delay_ms"),
+        _parse_int(_extract_config_value(config, "order_delay_ms", 0), 0),
     )
 
     ws_drop_p = _parse_float(os.getenv("CHAOS_WS_DROP_P"), ws_default)
@@ -93,11 +152,14 @@ def resolve_settings(config: Mapping[str, Any] | Any | None = None) -> ChaosSett
         os.getenv("CHAOS_ORDER_DELAY_MS"), order_delay_default
     )
 
+    profile_label = str(profile_name or "custom").strip().lower() or "custom"
+
     return ChaosSettings(
         enabled=True,
         ws_drop_p=_clamp_probability(ws_drop_p),
         rest_timeout_p=_clamp_probability(rest_timeout_p),
         order_delay_ms=max(0, order_delay_ms),
+        profile=profile_label,
     )
 
 

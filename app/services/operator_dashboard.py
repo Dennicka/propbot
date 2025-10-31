@@ -25,6 +25,7 @@ from . import risk_alerts, risk_guard
 from .backtest_reports import load_latest_summary as load_latest_backtest_summary
 from .runtime import (
     get_auto_hedge_state,
+    get_chaos_state,
     get_last_opportunity_state,
     get_liquidity_status,
     get_reconciliation_status,
@@ -278,6 +279,17 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     runtime_badges = get_runtime_badges()
     persisted = load_runtime_payload()
     auto_state = get_auto_hedge_state()
+    chaos_settings = get_chaos_state()
+    selected_profile = chaos_settings.profile or ("custom" if chaos_settings.enabled else "none")
+    effective_profile = selected_profile if chaos_settings.enabled else "none"
+    chaos_payload = {
+        "enabled": chaos_settings.enabled,
+        "profile": effective_profile,
+        "selected_profile": selected_profile,
+        "ws_drop_p": chaos_settings.ws_drop_p,
+        "rest_timeout_p": chaos_settings.rest_timeout_p,
+        "order_delay_ms": chaos_settings.order_delay_ms,
+    }
     positions_snapshot_source = list_positions()
     positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
     pnl_snapshot = build_pnl_snapshot(positions_payload)
@@ -571,6 +583,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             "flags": control_flags,
         },
         "runtime_badges": runtime_badges,
+        "chaos": chaos_payload,
         "safety": safety_payload,
         "auto_hedge": auto_state.as_dict(),
         "risk_limits_env": risk_limits_env,
@@ -981,6 +994,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     runtime_badges_payload = context.get("runtime_badges") or {}
     if not isinstance(runtime_badges_payload, Mapping):
         runtime_badges_payload = {}
+    chaos_info = context.get("chaos") or {}
+    if not isinstance(chaos_info, Mapping):
+        chaos_info = {}
+    chaos_profile = str(chaos_info.get("profile") or "none")
+    chaos_selected_profile = str(chaos_info.get("selected_profile") or chaos_profile)
+    chaos_enabled = bool(chaos_info.get("enabled"))
 
     parts: list[str] = []
     parts.append(
@@ -997,6 +1016,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "button:hover{background:#0d2440;}"
         ".note{font-size:0.9rem;color:#555;margin-top:-0.5rem;margin-bottom:0.75rem;}"
         ".flash{background:#fff3cd;border:1px solid #f1c232;color:#533f03;padding:0.75rem 1rem;margin-bottom:1.5rem;border-radius:4px;}"
+        ".chaos-profile{margin:0.75rem 0 1.5rem 0;font-size:0.95rem;color:#1f2937;}"
+        ".chaos-profile strong{color:#14365d;}"
+        ".chaos-profile .status-pill{margin-left:0.5rem;}"
         "footer{margin-top:3rem;font-size:0.8rem;color:#4b5563;text-align:center;}"
         ".footer-warning{color:#9a3412;font-weight:600;}"
         ".operator-meta{background:#fff;padding:1rem 1.5rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;gap:2rem;align-items:center;flex-wrap:wrap;}"
@@ -1119,6 +1141,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     )
     parts.append(
         f"<h1>Operator Dashboard</h1><p>Build Version: <strong>{_fmt(context.get('build_version'))}</strong></p>"
+    )
+
+    chaos_status_class = "status-pill status-info" if chaos_enabled else "status-pill status-ok"
+    chaos_status_text = "ENABLED" if chaos_enabled else "DISABLED"
+    chaos_params_text = (
+        f"ws_drop_p={_fmt(chaos_info.get('ws_drop_p'))}, "
+        f"rest_timeout_p={_fmt(chaos_info.get('rest_timeout_p'))}, "
+        f"order_delay_ms={_fmt(chaos_info.get('order_delay_ms'))}"
+    )
+    parts.append(
+        "<p class=\"chaos-profile\">"
+        f"Chaos profile: <strong>{_fmt(chaos_profile)}</strong> "
+        f"<span class=\"{chaos_status_class}\">{_fmt(chaos_status_text)}</span> "
+        f"<span class=\"chaos-params\">({chaos_params_text})</span>"
+        "</p>"
     )
 
     parts.append(
