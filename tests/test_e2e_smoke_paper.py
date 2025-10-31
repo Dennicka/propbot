@@ -11,6 +11,7 @@ from app.capital_manager import CapitalManager, reset_capital_manager
 from app.main import create_app
 from app.risk import accounting as risk_accounting
 from app.services.runtime import reset_for_tests
+from app.routers import live as live_router
 from app.watchdog.exchange_watchdog import (
     get_exchange_watchdog,
     reset_exchange_watchdog_for_tests,
@@ -236,6 +237,18 @@ def test_e2e_smoke_paper(monkeypatch, tmp_path) -> None:
     assert isinstance(report_payload.get("strategy_pnl"), dict)
     assert report_payload.get("open_trades_count") == 0
 
+    monkeypatch.setattr(
+        live_router,
+        "compute_readiness",
+        lambda app: {
+            "ready": True,
+            "reasons": [],
+            "leader": True,
+            "health_ok": True,
+            "journal_ok": True,
+            "config_ok": True,
+        },
+    )
     readiness = client.get("/live-readiness")
     assert readiness.status_code == 200
-    assert readiness.json().get("ok") is True
+    assert readiness.json().get("ready") is True

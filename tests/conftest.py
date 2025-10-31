@@ -21,6 +21,7 @@ os.environ.setdefault("CAPITAL_STATE_PATH", "/tmp/propbot-tests-capital.json")
 
 from app import ledger
 from app.main import app
+from app.runtime import leader_lock
 from app.services import runtime, approvals_store
 from app.services.loop import hold_loop
 from app.services.runtime import reset_for_tests
@@ -135,3 +136,14 @@ def reset_strategy_pnl_tracker():
     reset_strategy_pnl_tracker_for_tests()
     yield
     reset_strategy_pnl_tracker_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def reset_leader_lock(monkeypatch, tmp_path: Path):
+    path = tmp_path / "leader.lock"
+    monkeypatch.setenv("LEADER_LOCK_PATH", str(path))
+    monkeypatch.delenv("FEATURE_LEADER_LOCK", raising=False)
+    monkeypatch.delenv("LEADER_LOCK_INSTANCE_ID", raising=False)
+    leader_lock.reset_for_tests()
+    yield
+    leader_lock.reset_for_tests()
