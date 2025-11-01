@@ -13,6 +13,9 @@ REMOTE ?= origin
 TAG ?= 0.1.2
 export TAG
 
+CI_TESTING ?= 0
+export CI_TESTING
+
 venv:
 	python3 -m venv $(VENV)
 	$(PIP) install -U pip wheel
