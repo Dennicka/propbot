@@ -58,6 +58,49 @@ Runtime публикует отдельный блок «Reconciliation status»
 дублирует событие в `audit_log` от имени `system`. Интервал чтения задаётся
 флагом `AUTOPILOT_GUARD_INTERVAL_SEC` (по умолчанию 5 секунд). 【F:app/services/autopilot_guard.py†L24-L174】
 
+## Операционные сценарии
+
+### Включить автоторговлю
+
+1. Проверьте, что система в HOLD и `SAFE_MODE=false` (бейджи `/ui/dashboard`, `GET /api/ui/status`). 【F:app/services/runtime.py†L713-L733】【F:app/services/runtime_badges.py†L41-L81】
+2. Первый оператор выполняет `POST /api/ui/resume-request` с причиной и именем; сервис возвращает `request_id`. 【F:app/routers/ui.py†L1202-L1235】
+3. Второй оператор подтверждает `POST /api/ui/resume-confirm` с `APPROVE_TOKEN`, `actor` и `request_id`. 【F:app/routers/ui.py†L1295-L1335】
+4. После двух approvals выполните `POST /api/ui/resume`; endpoint проверит, что HOLD снят, и вызовет `resume_loop`, переключив режим в `RUN`. 【F:app/routers/ui.py†L1338-L1353】【F:app/services/loop.py†L83-L199】
+
+### Выполнить partial-hedge
+
+1. Получите план через `GET /api/ui/hedge/plan` — ответ содержит ордера и агрегаты. 【F:app/routers/ui_partial_hedge.py†L20-L34】
+2. Убедитесь, что HOLD выключен, `safe_mode=false`, и собрано ≥2 approvals; иначе раннер вернёт `blocked`. 【F:app/services/partial_hedge_runner.py†L285-L300】
+3. Запустите `POST /api/ui/hedge/execute` с `{ "confirm": true }` и operator-токеном. Ответ содержит результат исполнения и актуальный статус раннера. 【F:app/routers/ui_partial_hedge.py†L37-L50】
+
+### Снять снапшот
+
+1. При активном `INCIDENT_MODE_ENABLED` вызовите `POST /api/ui/incident/snapshot` c необязательным `note`. Endpoint проверит токен, сохранит `data/snapshots/incident_*.json` и вернёт путь. 【F:app/routers/ui_incident.py†L48-L66】
+2. Сохраните путь в журнале смены.
+
+### Откатиться на снапшот
+
+1. Создайте заявку: `POST /api/ui/incident/rollback` с `confirm=false`, указав `path`. 【F:app/routers/ui_incident.py†L68-L90】
+2. Найдите `request_id` в `/api/ui/approvals` и убедитесь, что action = `incident_rollback`.
+3. Повторите `POST /api/ui/incident/rollback` с `confirm=true`, `request_id` и тем же `path` — обработчик сверит путь и вернёт `status="applied"` с данными снапшота. 【F:app/routers/ui_incident.py†L90-L121】
+4. Перед переходом в RUN выполните процедуру двухоператорного resume. 【F:app/routers/ui.py†L1202-L1353】
+
+### Запустить сверку
+
+1. Запустите одиночный прогон:
+
+   ```bash
+   python - <<'PY'
+   from app.services.recon_runner import get_runner
+   import asyncio
+
+   asyncio.run(get_runner().run_once())
+   PY
+   ```
+
+   Метод `run_once` обновит snapshot и вернёт `diffs`. 【F:app/services/recon_runner.py†L83-L127】
+2. Проверяйте результаты через `GET /api/ui/recon/status` или виджет «Reconciliation» на дашборде (`diff_count`, `issues`, `auto_hold`). 【F:app/routers/ui_recon.py†L10-L21】【F:app/services/operator_dashboard.py†L539-L574】
+
 ## Chaos-инжекторы
 
 Для проверки отказоустойчивости без модификации кода используется блок хаос-флагов. При `FEATURE_CHAOS=1` и заданном `CHAOS_PROFILE` (см. `configs/fault_profiles.yaml`) активируются имитации:

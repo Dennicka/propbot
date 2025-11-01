@@ -17,6 +17,7 @@ venv/
 .env.*
 !.env.example
 !.env.prod.example
+!configs/examples/.env.live.sample
 pip-wheel-metadata/
 data/*
 !data/execution_stats.json
