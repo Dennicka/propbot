@@ -75,6 +75,11 @@ def clear() -> None:
     """Drop all cached entries."""
 
     _STORE.clear()
+    try:
+        from ..utils.ttl_cache import clear_cache as clear_response_cache
+    except Exception:  # pragma: no cover - defensive
+        return
+    clear_response_cache()
 
 
 reset_for_tests = clear
@@ -119,12 +124,14 @@ async def get_or_set(
     key: Hashable,
     ttl: float | None,
     loader: Callable[[], T | Awaitable[T]],
+    *,
+    allow_in_tests: bool = False,
 ) -> T:
     """Return the cached value for ``key`` or compute it using ``loader``."""
 
     endpoint_label = _endpoint_label(key)
 
-    if _testing_bypass_enabled():
+    if _testing_bypass_enabled() and not allow_in_tests:
         value = await _ensure_value(loader)
         record_cache_observation(endpoint_label, False)
         return value

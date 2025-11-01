@@ -358,11 +358,24 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     return {"strategies": rows, "snapshot": snapshot}
 
 
-def _strategy_pnl_cache_vary(request: Request, _args, _kwargs) -> tuple[bool]:
+def _auth_cache_vary(request: Request, _args, _kwargs) -> tuple[str, ...]:
+    auth = request.headers.get("authorization", "")
+    marker = os.getenv("PYTEST_CURRENT_TEST", "")
+    parts = []
+    if auth:
+        parts.append(auth)
+    if marker:
+        parts.append(marker)
+    return tuple(parts)
+
+
+def _strategy_pnl_cache_vary(request: Request, _args, _kwargs) -> tuple[object, ...]:
     tracker = get_strategy_pnl_tracker()
     flag = bool(tracker.exclude_simulated_entries())
     setattr(request.state, "_strategy_pnl_exclude_simulated", flag)
-    return (flag,)
+    parts = list(_auth_cache_vary(request, _args, _kwargs))
+    parts.append(flag)
+    return tuple(parts)
 
 
 @router.get("/strategy_pnl")
@@ -419,7 +432,7 @@ def backtest_last_summary(request: Request) -> dict[str, Any]:
 
 
 @router.get("/risk_snapshot")
-@cache_response(2.0)
+@cache_response(2.0, vary=_auth_cache_vary)
 async def risk_snapshot(request: Request) -> dict[str, Any]:
     """Return combined portfolio and execution risk telemetry."""
 
