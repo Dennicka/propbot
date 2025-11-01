@@ -43,6 +43,12 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
 - Для runaway rescue: `POST /api/hedge/flatten`, затем ручная проверка позиций.
 - Инциденты логируются в `RuntimeState.incidents` и доступны в `/api/ui/status/components` (Incident Journal).
 
+## Recon — устранение расхождений
+1. Застопорить торговлю: `POST /api/ui/cancel_all` (или кнопка Cancel-All на `/ui/dashboard`).
+2. Закрыть остаточные позиции вручную: через `/api/ui/close_exposure` (по venue/symbol) или прямыми сделками на бирже до нулевой позиции.
+3. Зафиксировать изменения и обновить снимок: после закрытия выполнить `python - <<'PY'\nfrom app.services.recon_runner import get_runner\nimport asyncio\nasyncio.run(get_runner().run_once())\nPY` либо дождаться фонового раннера (30 с). Проверить `/api/ui/recon/status`/виджет «Recon» — `diffs` должны быть пусты.
+4. Залогику вмешательства занести в `/api/ui/events` (`ledger.record_event`) и обновить операционный журнал.
+
 ## 5. Конфиг-пайплайн
 1. `POST /api/ui/config/validate` → убедиться, что YAML валиден.
 2. `POST /api/ui/config/apply` → сохраняет бэкап и перезагружает runtime.

@@ -19,6 +19,7 @@ from .routers import (
     ui_config,
     ui_ops_report,
     ui_partial_hedge,
+    ui_recon,
     ui_secrets,
 )
 from .routers import ui_universe
@@ -42,6 +43,7 @@ from .services.orchestrator_alerts import setup_orchestrator_alerts
 from .services.exchange_watchdog_runner import setup_exchange_watchdog
 from .services.autopilot_guard import setup_autopilot_guard
 from .services.partial_hedge_runner import setup_partial_hedge_runner
+from .services.recon_runner import setup_recon_runner
 
 
 def _should_guard(request: Request) -> bool:
@@ -112,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_ops_report.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_partial_hedge.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_pnl_attrib.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(ui_recon.router, prefix="/api/ui/recon", tags=["ui"])
     app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_status.router, prefix="/api/ui/status")
@@ -129,6 +132,7 @@ def create_app() -> FastAPI:
     setup_autopilot_guard(app)
     setup_orchestrator_alerts(app)
     setup_exchange_watchdog(app)
+    setup_recon_runner(app)
     setup_partial_hedge_runner(app)
     setup_slo_monitor(app)
     return app

@@ -442,6 +442,12 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     summary_highlights: list[str] = []
     exchange_watchdog_hold_reason = ""
     lowered_reason = hold_reason.lower()
+    recon_diff_count = _coerce_int(
+        reconciliation_status.get("diff_count"),
+        len(reconciliation_status.get("diffs") or []),
+    )
+    if recon_diff_count:
+        summary_highlights.append(f"Recon mismatches: {recon_diff_count}")
     if lowered_reason.startswith("exchange_watchdog:"):
         detail = hold_reason.split(":", 1)[1].strip() if ":" in hold_reason else ""
         display_detail = detail or hold_reason_display or hold_reason
@@ -2180,28 +2186,89 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
 
-    parts.append("<h2>Reconciliation status</h2>")
-    if desync_detected:
-        parts.append(
-            "<div style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;"
-            "padding:1rem;border-radius:6px;font-weight:700;font-size:1.1rem;\">"
-            "STATE DESYNC — manual intervention required"
-            "</div>"
-        )
+    recon_diffs = reconciliation.get("diffs") or []
+    diff_count = reconciliation.get("diff_count")
+    if diff_count is None:
+        diff_count = len(recon_diffs)
     else:
-        parts.append(
-            "<p><strong style=\"color:#166534;\">In sync with exchange state.</strong></p>"
-        )
+        diff_count = _coerce_int(diff_count, len(recon_diffs))
+    auto_hold_enabled = bool(reconciliation.get("auto_hold"))
+    recon_error = reconciliation.get("error")
+    card_style = (
+        "background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;"
+        if diff_count
+        else "background:#ecfdf5;border:1px solid #15803d;color:#064e3b;"
+    )
+    parts.append("<h2>Recon</h2>")
     parts.append(
-        "<p class=\"note\">Outstanding mismatches: {count}. Resolve manually before resume.</p>".format(
-            count=_fmt(issue_count)
+        "<div style=\"{style}padding:1rem;border-radius:8px;margin-bottom:1rem;\">".format(
+            style=card_style
         )
     )
+    status_label = "DESYNC" if diff_count or desync_detected else "IN SYNC"
+    status_colour = "#b91c1c" if diff_count or desync_detected else "#166534"
+    header_html = (
+        '<div style="display:flex;justify-content:space-between;align-items:center;">'
+        '<strong>Reconciliation</strong>'
+        f'<span style="font-weight:700;color:{status_colour};">{status_label}</span>'
+        '</div>'
+    )
+    parts.append(header_html)
+    summary_bits = [f"Diffs: {_fmt(diff_count)}"]
+    if auto_hold_enabled:
+        summary_bits.append("AUTO-HOLD enabled")
+    parts.append("<p>{text}</p>".format(text=" · ".join(summary_bits)))
     if last_recon_ts:
+        parts.append(f"<p class=\"note\">Last checked: {_fmt(last_recon_ts)}.</p>")
+    if recon_error:
         parts.append(
-            f"<p class=\"note\">Last checked: {_fmt(last_recon_ts)}.</p>"
+            "<p style=\"margin:0;color:#b91c1c;font-weight:600;\">Error: {err}</p>".format(
+                err=_fmt(recon_error)
+            )
         )
-    if desync_detected and reconciliation_issues:
+    visible_diffs = recon_diffs[:5]
+    if visible_diffs:
+        parts.append(
+            "<table style=\"width:100%;margin-top:0.75rem;border-collapse:collapse;\">"
+            "<thead><tr><th style=\"text-align:left;padding:0.25rem;\">Venue</th>"
+            "<th style=\"text-align:left;padding:0.25rem;\">Symbol</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Exchange</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Ledger</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Delta</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Notional&nbsp;USD</th></tr></thead><tbody>"
+        )
+        for diff in visible_diffs:
+            notional_value = diff.get("notional_usd")
+            if isinstance(notional_value, (int, float)):
+                notional_display = f"{float(notional_value):.2f}"
+            else:
+                notional_display = notional_value
+            parts.append(
+                "<tr>"
+                "<td style=\"padding:0.25rem;\">{venue}</td>"
+                "<td style=\"padding:0.25rem;\">{symbol}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{exch}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{ledger}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{delta}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{notional}</td>"
+                "</tr>".format(
+                    venue=_fmt(diff.get("venue")),
+                    symbol=_fmt(diff.get("symbol")),
+                    exch=_fmt(diff.get("exch_qty")),
+                    ledger=_fmt(diff.get("ledger_qty")),
+                    delta=_fmt(diff.get("delta")),
+                    notional=_fmt(notional_display),
+                )
+            )
+        parts.append("</tbody></table>")
+        remaining = max(0, diff_count - len(visible_diffs))
+        if remaining > 0:
+            parts.append(
+                "<p style=\"margin-top:0.5rem;color:#7f1d1d;\">+{count} more diffs not shown</p>".format(
+                    count=_fmt(remaining)
+                )
+            )
+    elif desync_detected and reconciliation_issues:
         visible_issues = reconciliation_issues[:5]
         parts.append("<ul style=\"background:#fff;border:1px solid #fca5a5;padding:0.75rem 1rem;\">")
         for issue in visible_issues:
@@ -2219,6 +2286,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 f"<li style=\"color:#b91c1c;\">+{remaining} more issues not shown</li>"
             )
         parts.append("</ul>")
+    else:
+        parts.append("<p style=\"margin:0;\">All venues in sync.</p>")
+    parts.append("</div>")
 
     parts.append("<h2>Balances / Liquidity</h2>")
     if liquidity_blocked:

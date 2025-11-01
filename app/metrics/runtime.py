@@ -10,6 +10,8 @@ __all__ = [
     "AUTO_TRADE_GAUGE",
     "WATCHDOG_STATE_GAUGE",
     "DAILY_LOSS_BREACH_GAUGE",
+    "RECON_EXCEPTIONS_COUNTER",
+    "RECON_DIFFS_GAUGE",
     "record_trade_execution",
     "record_risk_breach",
     "set_auto_trade_state",
@@ -53,6 +55,18 @@ DAILY_LOSS_BREACH_GAUGE = Gauge(
     "Daily loss breach active (1 when breached)",
 )
 DAILY_LOSS_BREACH_GAUGE.set(0.0)
+
+RECON_EXCEPTIONS_COUNTER = Counter(
+    "propbot_recon_exceptions_total",
+    "Total reconciliation exceptions encountered",
+)
+RECON_EXCEPTIONS_COUNTER.inc(0.0)
+
+RECON_DIFFS_GAUGE = Gauge(
+    "propbot_recon_diffs",
+    "Current number of reconciliation mismatches",
+)
+RECON_DIFFS_GAUGE.set(0.0)
 
 
 def record_trade_execution() -> None:
