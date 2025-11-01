@@ -796,3 +796,65 @@ def test_dashboard_html_includes_daily_report_section() -> None:
     assert "Daily PnL / Ops summary" in html
     assert "PnL realised (24h)" in html
     assert "HOLD / throttle events" in html
+
+
+def test_dashboard_html_renders_router_preview() -> None:
+    from app.services.operator_dashboard import render_dashboard_html
+
+    context = {
+        "build_version": "test",
+        "safety": {},
+        "auto_hedge": {},
+        "risk_limits_env": {},
+        "risk_limits_state": {},
+        "positions": [],
+        "exposure": {},
+        "position_totals": {},
+        "health_checks": [],
+        "pending_approvals": [],
+        "persisted_snapshot": {},
+        "active_alerts": [],
+        "recent_audit": [],
+        "recent_ops_incidents": [],
+        "risk_throttled": False,
+        "risk_throttle_reason": "",
+        "edge_guard": {"allowed": True, "reason": "ok", "context": {}},
+        "pnl_history": [],
+        "pnl_trend": {},
+        "risk_advice": {},
+        "execution_quality": {},
+        "daily_report": {},
+        "smart_router_preview": {
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "qty": 1.0,
+            "venues": ["binance-um", "okx-perp"],
+            "best": "binance-um",
+            "scores": {
+                "binance-um": {
+                    "score": 1.2,
+                    "base_cost_usdt": 0.5,
+                    "impact_penalty_usdt": 0.1,
+                    "latency_penalty_usdt": 0.6,
+                    "rest_latency_ms": 12.0,
+                    "ws_latency_ms": 20.0,
+                    "book_liquidity_usdt": 1_000_000.0,
+                },
+                "okx-perp": {
+                    "score": 2.0,
+                    "base_cost_usdt": 1.0,
+                    "impact_penalty_usdt": 0.5,
+                    "latency_penalty_usdt": 0.5,
+                    "rest_latency_ms": 25.0,
+                    "ws_latency_ms": 45.0,
+                    "book_liquidity_usdt": 500_000.0,
+                },
+            },
+        },
+        "smart_router_error": None,
+    }
+
+    html = render_dashboard_html(context)
+    assert "Router preview" in html
+    assert "binance-um" in html
+    assert "Score (USDT)" in html

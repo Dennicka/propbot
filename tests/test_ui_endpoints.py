@@ -474,6 +474,30 @@ def test_ui_events_endpoint_pagination(client):
     assert len(next_page["items"]) <= 2
 
 
+def test_router_preview_endpoint(monkeypatch, client):
+    monkeypatch.setenv("FEATURE_SMART_ROUTER", "1")
+
+    class DummyRouter:
+        def available_venues(self):
+            return ["binance-um", "okx-perp"]
+
+        def choose(self, venues, *, side, qty, symbol, **_kwargs):
+            return "binance-um", {
+                "binance-um": {"score": 1.0, "base_cost_usdt": 0.5},
+                "okx-perp": {"score": 2.0, "base_cost_usdt": 1.5},
+            }
+
+    monkeypatch.setattr("app.routers.ui.SmartRouter", DummyRouter)
+    monkeypatch.setattr("app.routers.ui.smart_router_feature_enabled", lambda: True)
+
+    response = client.get("/api/ui/router/preview", params={"symbol": "BTCUSDT", "side": "buy", "qty": 1.0})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["best"] == "binance-um"
+    assert set(payload["venues"]) == {"binance-um", "okx-perp"}
+    assert "scores" in payload and "binance-um" in payload["scores"]
+
+
 def test_risk_state_endpoint(client):
     ledger.reset()
     resp = client.get("/api/risk/state")
