@@ -2337,6 +2337,59 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append(
         f"<tr><th>Runaway Counters (last min)</th><td>{orders_line}<br />{cancels_line}</td></tr>"
     )
+    runaway_snapshot = safety.get("runaway_guard") if isinstance(safety, Mapping) else {}
+    if not isinstance(runaway_snapshot, Mapping):
+        runaway_snapshot = {}
+    runaway_details = []
+    enabled_flag = "YES" if runaway_snapshot.get("enabled") else "NO"
+    runaway_details.append(f"Enabled: {enabled_flag}")
+    limit_value = runaway_snapshot.get("max_cancels_per_min")
+    if limit_value is not None:
+        runaway_details.append(f"Limit: {_fmt(limit_value)} / 60s")
+    cooldown_value = runaway_snapshot.get("cooldown_sec")
+    if cooldown_value is not None:
+        runaway_details.append(f"Cooldown: {_fmt(cooldown_value)}s")
+    last_trigger_value = runaway_snapshot.get("last_trigger_ts")
+    if last_trigger_value:
+        runaway_details.append(f"Last trigger: {_fmt(last_trigger_value)}")
+    runaway_counts = []
+    per_venue_snapshot = runaway_snapshot.get("per_venue")
+    if isinstance(per_venue_snapshot, Mapping) and per_venue_snapshot:
+        for venue, symbols in sorted(per_venue_snapshot.items()):
+            if not isinstance(symbols, Mapping):
+                continue
+            symbol_entries = ", ".join(
+                f"{escape(str(symbol))}={_fmt(count)}"
+                for symbol, count in sorted(symbols.items())
+            )
+            runaway_counts.append(f"{escape(str(venue))}: {symbol_entries}")
+    else:
+        runaway_counts.append("no cancels in window")
+    last_block = runaway_snapshot.get("last_block")
+    if isinstance(last_block, Mapping) and last_block:
+        reason_text = escape(str(last_block.get("reason") or ""))
+        detail_bits = []
+        venue_detail = last_block.get("venue")
+        symbol_detail = last_block.get("symbol")
+        if venue_detail:
+            detail_bits.append(f"venue={escape(str(venue_detail))}")
+        if symbol_detail:
+            detail_bits.append(f"symbol={escape(str(symbol_detail))}")
+        count_detail = last_block.get("count")
+        if count_detail is not None:
+            detail_bits.append(f"count={_fmt(count_detail)}")
+        cooldown_remaining = last_block.get("cooldown_remaining")
+        if cooldown_remaining:
+            detail_bits.append(f"cooldown_remaining={_fmt(cooldown_remaining)}s")
+        detail_suffix = f" ({', '.join(detail_bits)})" if detail_bits else ""
+        runaway_counts.append(
+            f"<span style=\"color:#b00020;font-weight:600;\">Last block: {reason_text}{detail_suffix}</span>"
+        )
+    runaway_text = "<br />".join(runaway_counts)
+    details_text = " | ".join(runaway_details)
+    parts.append(
+        f"<tr><th>Runaway guard v2</th><td>{details_text}<br />{runaway_text}</td></tr>"
+    )
     resume_request = safety.get("resume_request")
     if isinstance(resume_request, Mapping):
         rr_line = (

@@ -20,6 +20,7 @@ from ..runtime_state_store import (
 from . import approvals_store
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
 from .marketdata import MarketDataAggregator
+from ..risk.runaway_guard import get_guard
 from ..utils.chaos import (
     ChaosSettings,
     configure as configure_chaos,
@@ -439,6 +440,56 @@ class RunawayCounterState:
 
 
 @dataclass
+class RunawayGuardV2State:
+    enabled: bool = False
+    max_cancels_per_min: int = 0
+    cooldown_sec: int = 0
+    last_trigger_ts: str | None = None
+    per_venue: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    last_block: Dict[str, object] | None = None
+
+    def as_dict(self) -> Dict[str, object | None]:
+        payload: Dict[str, object | None] = {
+            "enabled": self.enabled,
+            "max_cancels_per_min": self.max_cancels_per_min,
+            "cooldown_sec": self.cooldown_sec,
+            "per_venue": {venue: dict(symbols) for venue, symbols in self.per_venue.items()},
+            "last_trigger_ts": self.last_trigger_ts,
+        }
+        if self.last_block:
+            payload["last_block"] = dict(self.last_block)
+        return payload
+
+    def update_from_snapshot(self, snapshot: Mapping[str, object]) -> None:
+        self.enabled = bool(snapshot.get("enabled", self.enabled))
+        max_cancels = snapshot.get("max_cancels_per_min")
+        if isinstance(max_cancels, (int, float)):
+            self.max_cancels_per_min = max(0, int(float(max_cancels)))
+        cooldown = snapshot.get("cooldown_sec")
+        if isinstance(cooldown, (int, float)):
+            self.cooldown_sec = max(0, int(float(cooldown)))
+        per_venue_payload = snapshot.get("per_venue")
+        per_venue: Dict[str, Dict[str, int]] = {}
+        if isinstance(per_venue_payload, Mapping):
+            for venue, symbols in per_venue_payload.items():
+                if not isinstance(symbols, Mapping):
+                    continue
+                per_venue[str(venue)] = {
+                    str(symbol): max(0, int(float(value)))
+                    for symbol, value in symbols.items()
+                    if isinstance(value, (int, float))
+                }
+        self.per_venue = per_venue
+        last_trigger = snapshot.get("last_trigger_ts")
+        self.last_trigger_ts = str(last_trigger) if last_trigger else None
+        last_block = snapshot.get("last_block")
+        if isinstance(last_block, Mapping):
+            self.last_block = {str(key): value for key, value in last_block.items()}
+        else:
+            self.last_block = None
+
+
+@dataclass
 class SafetyLimits:
     max_orders_per_min: int = 300
     max_cancels_per_min: int = 600
@@ -460,6 +511,7 @@ class SafetyState:
     resume_request: ResumeRequestState | None = None
     limits: SafetyLimits = field(default_factory=SafetyLimits)
     counters: RunawayCounterState = field(default_factory=RunawayCounterState)
+    runaway_guard: RunawayGuardV2State = field(default_factory=RunawayGuardV2State)
     clock_skew_s: float | None = None
     clock_skew_checked_ts: str | None = None
     risk_snapshot: Dict[str, object] = field(default_factory=dict)
@@ -510,6 +562,7 @@ class SafetyState:
             "desync_detected": bool(self.desync_detected),
             "issues": [],
         }
+        payload["runaway_guard"] = self.runaway_guard.as_dict()
         return payload
 
     def status_payload(self) -> Dict[str, object | None]:
@@ -701,6 +754,23 @@ def _bootstrap_runtime() -> RuntimeState:
         max_orders_per_min=_env_int("MAX_ORDERS_PER_MIN", 300),
         max_cancels_per_min=_env_int("MAX_CANCELS_PER_MIN", 600),
     )
+    runaway_cfg = getattr(getattr(loaded.data, "risk", None), "runaway", None)
+    runaway_guard_config = {
+        "max_cancels_per_min": getattr(runaway_cfg, "max_cancels_per_min", 0) if runaway_cfg else 0,
+        "cooldown_sec": getattr(runaway_cfg, "cooldown_sec", 0) if runaway_cfg else 0,
+    }
+    guard_instance = get_guard()
+    guard_instance.configure(
+        max_cancels_per_min=runaway_guard_config["max_cancels_per_min"],
+        cooldown_sec=runaway_guard_config["cooldown_sec"],
+    )
+    runaway_guard_state = RunawayGuardV2State(
+        max_cancels_per_min=runaway_guard_config["max_cancels_per_min"],
+        cooldown_sec=runaway_guard_config["cooldown_sec"],
+        enabled=guard_instance.feature_enabled()
+        and runaway_guard_config["max_cancels_per_min"] > 0,
+    )
+    runaway_guard_state.update_from_snapshot(guard_instance.snapshot())
     state = RuntimeState(
         config=loaded,
         guards=guards,
@@ -720,7 +790,7 @@ def _bootstrap_runtime() -> RuntimeState:
         risk=risk_state,
         auto_hedge=AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False)),
         autopilot=autopilot_state,
-        safety=SafetyState(limits=safety_limits),
+        safety=SafetyState(limits=safety_limits, runaway_guard=runaway_guard_state),
         chaos=chaos_settings,
     )
     _sync_loop_from_control(state)
@@ -752,6 +822,16 @@ def get_loop_state() -> LoopState:
 def get_safety_status() -> Dict[str, object]:
     with _STATE_LOCK:
         return dict(_STATE.safety.status_payload())
+
+
+def update_runaway_guard_snapshot(snapshot: Mapping[str, object]) -> None:
+    persist_snapshot: Dict[str, object] | None = None
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        safety.runaway_guard.update_from_snapshot(snapshot)
+        persist_snapshot = safety.as_dict()
+    if persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
 
 
 def get_chaos_state() -> ChaosSettings:
@@ -1512,7 +1592,22 @@ def reset_for_tests() -> None:
         _STATE.hedge_positions = []
         _STATE.last_opportunity = OpportunityState()
         limits = _STATE.safety.limits
-        _STATE.safety = SafetyState(limits=limits)
+        per_venue_copy = {
+            str(venue): dict(symbols)
+            for venue, symbols in _STATE.safety.runaway_guard.per_venue.items()
+        }
+        last_block_value = None
+        if isinstance(_STATE.safety.runaway_guard.last_block, Mapping):
+            last_block_value = dict(_STATE.safety.runaway_guard.last_block)
+        existing_guard = RunawayGuardV2State(
+            enabled=_STATE.safety.runaway_guard.enabled,
+            max_cancels_per_min=_STATE.safety.runaway_guard.max_cancels_per_min,
+            cooldown_sec=_STATE.safety.runaway_guard.cooldown_sec,
+            last_trigger_ts=_STATE.safety.runaway_guard.last_trigger_ts,
+            per_venue=per_venue_copy,
+            last_block=last_block_value,
+        )
+        _STATE.safety = SafetyState(limits=limits, runaway_guard=existing_guard)
         _STATE.auto_hedge = AutoHedgeState(enabled=_env_flag("AUTO_HEDGE_ENABLED", False))
         _STATE.autopilot = AutopilotState(enabled=_env_flag("AUTOPILOT_ENABLE", False))
         _enforce_safe_start(_STATE)
@@ -1954,6 +2049,9 @@ def _load_persisted_state(state: RuntimeState) -> None:
                 safety.counters.cancels_last_min = max(0, int(float(cancels_counter)))
             except (TypeError, ValueError):
                 pass
+        runaway_snapshot = safety_payload.get("runaway_guard")
+        if isinstance(runaway_snapshot, Mapping):
+            safety.runaway_guard.update_from_snapshot(runaway_snapshot)
         skew_value = safety_payload.get("clock_skew_s")
         if isinstance(skew_value, (int, float)):
             safety.clock_skew_s = float(skew_value)

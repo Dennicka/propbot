@@ -627,6 +627,9 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     safety_snapshot = state.safety.status_payload()
     resume_request = state.safety.resume_request
     resume_pending = bool(resume_request and getattr(resume_request, "approved_ts", None) is None)
+    runaway_guard_v2 = safety_snapshot.get("runaway_guard")
+    if not isinstance(runaway_guard_v2, Mapping):
+        runaway_guard_v2 = {}
     snapshot = {
         "ts": now.isoformat(),
         "overall": overall,
@@ -651,6 +654,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "runaway_guard": {
             "limits": dict(safety_snapshot.get("limits", {})),
             "counters": dict(safety_snapshot.get("counters", {})),
+            "v2": dict(runaway_guard_v2),
         },
     }
     snapshot["partial_rebalance"] = _partial_rebalance_summary()

@@ -44,10 +44,16 @@ class NotionalCapsConfig(BaseModel):
     total_usd: float = Field(..., ge=0)
 
 
+class RunawayRiskConfig(BaseModel):
+    max_cancels_per_min: int = Field(0, ge=0)
+    cooldown_sec: int = Field(0, ge=0)
+
+
 class RiskConfig(BaseModel):
     notional_caps: NotionalCapsConfig
     max_day_drawdown_bps: int | None = None
     cross_venue_delta_abs_max_usd: float | None = None
+    runaway: RunawayRiskConfig | None = None
 
 
 class DerivRoutingConfig(BaseModel):

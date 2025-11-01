@@ -15,6 +15,9 @@ risk:
     per_venue_usd: 2500
     total_usd: 2500
   cross_venue_delta_abs_max_usd: 100
+  runaway:
+    max_cancels_per_min: 240
+    cooldown_sec: 120
 status_thresholds_file: status_thresholds.yaml
 derivatives:
   venues:
