@@ -7,8 +7,47 @@ import pytest
 pytest_plugins = ["tests.test_ops_report_endpoint"]
 
 
-def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeypatch):
+@pytest.mark.parametrize("exclude_sim", [True, False])
+def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeypatch, exclude_sim):
     monkeypatch.setenv("MAX_OPEN_POSITIONS", "6")
+    monkeypatch.setenv("EXCLUDE_DRY_RUN_FROM_PNL", str(exclude_sim).lower())
+
+    def dynamic_pnl_attribution():
+        return {
+            "generated_at": "2024-03-02T00:00:00+00:00",
+            "by_strategy": {
+                "alpha": {
+                    "realized": 40.0,
+                    "unrealized": 2.0,
+                    "fees": 0.3,
+                    "rebates": 0.05,
+                    "funding": 0.1,
+                    "net": 41.85,
+                }
+            },
+            "by_venue": {
+                "binance": {
+                    "realized": 38.0,
+                    "unrealized": 1.5,
+                    "fees": 0.25,
+                    "rebates": 0.03,
+                    "funding": 0.1,
+                    "net": 39.38,
+                }
+            },
+            "totals": {
+                "realized": 40.0,
+                "unrealized": 2.0,
+                "fees": 0.3,
+                "rebates": 0.05,
+                "funding": 0.1,
+                "net": 41.85,
+            },
+            "meta": {"exclude_simulated": exclude_sim},
+            "simulated_excluded": exclude_sim,
+        }
+
+    monkeypatch.setattr("app.services.ops_report.build_pnl_attribution", dynamic_pnl_attribution)
     monkeypatch.setattr(
         "app.services.ops_report.get_risk_accounting_snapshot",
         lambda: {
@@ -56,6 +95,7 @@ def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeyp
         "attrib_rebates",
         "attrib_funding",
         "attrib_net",
+        "attrib_simulated_excluded",
     ]
     assert any(row["strategy"] == "alpha" for row in rows)
     assert any(row["strategy"] == "gamma" for row in rows)
@@ -88,4 +128,5 @@ def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeyp
     assert float(totals_row["attrib_rebates"]) == pytest.approx(attrib_totals["rebates"])
     assert float(totals_row["attrib_funding"]) == pytest.approx(attrib_totals["funding"])
     assert float(totals_row["attrib_net"]) == pytest.approx(attrib_totals["net"])
-    assert json_payload["pnl_attribution"]["simulated_excluded"] is True
+    assert json_payload["pnl_attribution"]["simulated_excluded"] is exclude_sim
+    assert totals_row["attrib_simulated_excluded"] == str(exclude_sim)

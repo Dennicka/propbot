@@ -114,15 +114,11 @@ async def test_build_pnl_attribution_respects_exclude_flag(monkeypatch: pytest.M
 
         def snapshot(self, *, exclude_simulated: bool | None = None):
             self.calls.append(exclude_simulated)
-            return {"alpha": {"realized_7d": 0.0}}
+            return {"alpha": {"realized_today": 50.0}}
 
     tracker = DummyTracker()
     monkeypatch.setattr(service, "get_strategy_pnl_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        service,
-        "snapshot_strategy_pnl",
-        lambda: {"alpha": {"realized_pnl_today": 60.0}},
-    )
+    monkeypatch.setattr(service, "snapshot_strategy_pnl", lambda: {})
 
     result = await service.build_pnl_attribution()
 
@@ -130,13 +126,14 @@ async def test_build_pnl_attribution_respects_exclude_flag(monkeypatch: pytest.M
     assert result["simulated_excluded"] is True
 
     totals = result["totals"]
-    assert totals["realized"] == pytest.approx(60.0)
+    assert totals["realized"] == pytest.approx(50.0)
     assert totals["funding"] == pytest.approx(3.0)
 
     alpha_bucket = result["by_strategy"]["alpha"]
-    assert alpha_bucket["realized"] == pytest.approx(60.0)
+    assert alpha_bucket["realized"] == pytest.approx(50.0)
     assert alpha_bucket["funding"] == pytest.approx(3.0)
-    assert result["meta"]["trades_count"] == 2
+    assert "tracker-adjustment" not in result["by_venue"]
+    assert result["meta"]["trades_count"] == 1
     assert result["meta"]["funding_events_count"] == 1
 
 
@@ -198,15 +195,11 @@ async def test_build_pnl_attribution_includes_simulated_when_flag_false(
 
         def snapshot(self, *, exclude_simulated: bool | None = None):
             self.calls.append(exclude_simulated)
-            return {"alpha": {"realized_7d": 0.0}}
+            return {"alpha": {"realized_today": 70.0}}
 
     tracker = DummyTracker()
     monkeypatch.setattr(service, "get_strategy_pnl_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        service,
-        "snapshot_strategy_pnl",
-        lambda: {"alpha": {"realized_pnl_today": 70.0}},
-    )
+    monkeypatch.setattr(service, "snapshot_strategy_pnl", lambda: {})
 
     result = await service.build_pnl_attribution()
 

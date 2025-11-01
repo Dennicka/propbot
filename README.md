@@ -287,6 +287,9 @@ notional'а, например:
 - `/ui/dashboard` расширен блоком «PnL Attribution»: две таблицы (по стратегиям и
   по биржам) и агрегированные тоталы. Отдельный бейдж подсказывает, исключены ли
   симуляционные записи из расчёта.
+- Флаг `EXCLUDE_DRY_RUN_FROM_PNL` применяется единообразно: API, UI, ops-report
+  (JSON и CSV) используют одну и ту же фильтрацию и возвращают признак
+  `simulated_excluded` (в CSV — колонка `attrib_simulated_excluded`).
 
 ### Strategy status API & Dashboard
 
@@ -857,7 +860,8 @@ dashboard ("Risk skips (last run)") and via the `/metrics` endpoint as the
   привилегий.
 - Для экспорта в Excel/архив используйте `GET /api/ui/ops_report.csv` — тот же
   отчёт в стабильном CSV (`content-type: text/csv`) с секциями runtime, стратегий
-  и аудита. Поддерживает те же bearer-токены, что и JSON.
+  и аудита. Поддерживает те же bearer-токены, что и JSON. Колонка
+  `attrib_simulated_excluded` отражает применённый режим DRY_RUN-фильтра.
 - Используйте экспорт для отчётов инвесторам, расследования инцидентов и
   юридической фиксации «что бот знал и делал» без SSH-доступа к контейнеру.
 

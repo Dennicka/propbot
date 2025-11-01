@@ -180,7 +180,9 @@ JSON-отчёт по стратегиям содержит `realized_today`, `re
 в срез. Используйте этот эндпоинт, чтобы сверять суммарные комиссии/фандинг с
 биржевыми отчётами.
 Измените `EXCLUDE_DRY_RUN_FROM_PNL=false`, чтобы видеть симулированные сделки в
-агрегатах. 【F:tests/test_pnl_attrib_endpoint.py†L1-L41】
+агрегатах. Текущее состояние флага возвращается отдельно в поле
+`simulated_excluded`, которое также попадает в `/ui/dashboard`, `/api/ui/ops_report`
+и CSV-экспорт (`attrib_simulated_excluded`). 【F:tests/test_pnl_attrib_endpoint.py†L1-L41】
 
 ### `/api/ui/open-trades.csv`
 

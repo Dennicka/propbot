@@ -107,3 +107,54 @@ def test_calc_attribution_with_fees_rebates_and_funding(tca_config: Path) -> Non
     assert totals["funding"] == pytest.approx(5.0, abs=1e-9)
     net_expected = 80.0 + 5.0 - expected_fees_value + (0.01 + 0.1) + 5.0
     assert totals["net"] == pytest.approx(net_expected, abs=1e-9)
+
+
+def test_calc_attribution_includes_simulated_when_flag_false(
+    tca_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EXCLUDE_DRY_RUN_FROM_PNL", "false")
+    trades = [
+        {
+            "strategy": "alpha",
+            "venue": "binance-um",
+            "realized": 100.0,
+            "unrealized": 10.0,
+            "notional": 1_000.0,
+            "liquidity": "taker",
+        },
+        {
+            "strategy": "alpha",
+            "venue": "okx-perp",
+            "realized": -20.0,
+            "unrealized": -5.0,
+            "notional": 500.0,
+            "liquidity": "maker",
+        },
+        {
+            "strategy": "beta",
+            "venue": "binance-um",
+            "realized": 50.0,
+            "unrealized": 0.0,
+            "notional": 700.0,
+            "liquidity": "taker",
+            "simulated": True,
+        },
+    ]
+    fees = [{"strategy": "alpha", "venue": "binance-um", "amount": 0.5}]
+    rebates = [{"strategy": "alpha", "venue": "okx-perp", "amount": 0.1}]
+    funding_events = [
+        {"strategy": "alpha", "venue": "binance-um", "amount": 5.0},
+        {"strategy": "beta", "venue": "okx-perp", "amount": -3.0, "simulated": True},
+    ]
+
+    result = calc_attribution(trades, fees, rebates, funding_events)
+
+    totals = result["totals"]
+    assert totals["realized"] == pytest.approx(130.0, abs=1e-9)
+    assert totals["unrealized"] == pytest.approx(5.0, abs=1e-9)
+    assert totals["funding"] == pytest.approx(2.0, abs=1e-9)
+    assert totals["fees"] == pytest.approx(0.875, abs=1e-9)
+    assert totals["rebates"] == pytest.approx(0.11, abs=1e-9)
+    expected_net = 130.0 + 5.0 - 0.875 + 0.11 + 2.0
+    assert totals["net"] == pytest.approx(expected_net, abs=1e-9)
+    assert result["meta"]["exclude_simulated"] is False
