@@ -2100,6 +2100,102 @@ def _persist_runtime_payload(updates: Mapping[str, Any]) -> None:
     _store_write_runtime_payload(payload)
 
 
+def _to_epoch_timestamp(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        return parsed.timestamp()
+    return None
+
+
+def _reconciliation_state(snapshot: Mapping[str, Any]) -> str:
+    enabled = _env_flag("RECON_ENABLED", True)
+    if not enabled:
+        return "DISABLED"
+    status_text = str(snapshot.get("status") or "").replace("-", "_").upper()
+    auto_hold = bool(snapshot.get("auto_hold")) or status_text == "AUTO_HOLD"
+    if auto_hold:
+        return "DEGRADED"
+    if status_text in {"DEGRADED", "DRIFT", "DEGRADED_DRIFT"}:
+        return "DEGRADED"
+    desync = bool(snapshot.get("desync_detected"))
+    diff_count_raw = snapshot.get("diff_count")
+    issue_count_raw = snapshot.get("issue_count")
+    try:
+        diff_count = int(diff_count_raw)
+    except (TypeError, ValueError):
+        diffs = snapshot.get("diffs") if isinstance(snapshot.get("diffs"), Sequence) else []
+        diff_count = len(diffs) if isinstance(diffs, Sequence) else 0
+    try:
+        issue_count = int(issue_count_raw)
+    except (TypeError, ValueError):
+        issues = snapshot.get("issues") if isinstance(snapshot.get("issues"), Sequence) else []
+        issue_count = len(issues) if isinstance(issues, Sequence) else 0
+    mismatch_total = max(diff_count, issue_count)
+    if desync or mismatch_total > 0 or status_text in {"MISMATCH", "DESYNC"}:
+        return "MISMATCH"
+    return "OK"
+
+
+def _build_reconciliation_runtime(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+    last_run_value = snapshot.get("last_run_iso") or snapshot.get("last_checked")
+    last_run_iso = str(last_run_value) if last_run_value else None
+    last_run_ts = _to_epoch_timestamp(last_run_value)
+    diffs_payload = snapshot.get("diffs") if isinstance(snapshot.get("diffs"), Sequence) else []
+    issues_payload = snapshot.get("issues") if isinstance(snapshot.get("issues"), Sequence) else []
+    try:
+        diff_count = int(snapshot.get("diff_count", len(diffs_payload)))
+    except (TypeError, ValueError):
+        diff_count = len(diffs_payload)
+    try:
+        issue_count = int(snapshot.get("issue_count", len(issues_payload)))
+    except (TypeError, ValueError):
+        issue_count = len(issues_payload)
+    state = _reconciliation_state(snapshot)
+    overview = {
+        "state": state,
+        "summary": f"Reconciliation status: {state}",
+        "last_run_ts": last_run_ts,
+        "last_run_iso": last_run_iso,
+        "desync_detected": bool(snapshot.get("desync_detected")),
+        "diff_count": diff_count,
+        "issue_count": issue_count,
+        "mismatches_count": max(diff_count, issue_count),
+        "auto_hold": bool(snapshot.get("auto_hold")),
+    }
+    status_text = snapshot.get("status")
+    if status_text:
+        overview["status"] = status_text
+    error_text = snapshot.get("error")
+    if error_text:
+        overview["error"] = error_text
+    return overview
+
+
+def make_runtime_snapshot() -> Dict[str, Any]:
+    status_payload = _runtime_status_snapshot()
+    reconciliation_snapshot = get_reconciliation_status()
+    status_payload["reconciliation"] = _build_reconciliation_runtime(reconciliation_snapshot)
+    status_payload["reconciliation_snapshot"] = dict(reconciliation_snapshot)
+    leader_status = leader_lock.get_status()
+    status_payload["leader_lock"] = leader_status
+    status_payload["leader_fencing_id"] = leader_status.get("fencing_id")
+    return status_payload
+
+
 def _persist_control_snapshot(snapshot: Mapping[str, object]) -> None:
     _persist_runtime_payload({"control": dict(snapshot)})
 

@@ -6,9 +6,10 @@ import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
 from .. import ledger, risk_governor
+from ..broker.base import CancelAllResult
 from ..journal import is_enabled as journal_enabled
 from ..journal import order_journal
 from ..metrics import set_auto_trade_state
@@ -353,6 +354,73 @@ async def stop_loop() -> LoopState:
     return await _CONTROLLER.stop_after_cycle()
 
 
+def _normalise_cancel_all_result(
+    result: object, *, orders: Sequence[Mapping[str, object]]
+) -> CancelAllResult | None:
+    if isinstance(result, CancelAllResult):
+        return result
+    if not isinstance(result, Mapping):
+        return None
+    cancelled_raw = result.get("cleared", result.get("cancelled"))
+    cleared = 0
+    total_orders = len(orders)
+    if isinstance(cancelled_raw, str) and cancelled_raw.lower() == "all":
+        cleared = total_orders
+    elif isinstance(cancelled_raw, (int, float)):
+        cleared = max(0, int(cancelled_raw))
+    failed_raw = result.get("failed", 0)
+    try:
+        failed = max(0, int(float(failed_raw)))
+    except (TypeError, ValueError):
+        failed = 0
+    ok_field = result.get("ok")
+    ok = bool(ok_field) if ok_field is not None else failed == 0
+    order_ids_raw = result.get("order_ids")
+    order_ids: Sequence[int] = ()
+    if isinstance(order_ids_raw, Iterable) and not isinstance(order_ids_raw, (str, bytes)):
+        ids: list[int] = []
+        for entry in order_ids_raw:
+            try:
+                ids.append(int(entry))
+            except (TypeError, ValueError):
+                continue
+        order_ids = tuple(ids)
+    if not order_ids and cleared >= total_orders and total_orders > 0:
+        derived_ids: list[int] = []
+        for order in orders:
+            try:
+                derived_ids.append(int(order.get("id", 0)))
+            except (TypeError, ValueError):
+                continue
+        order_ids = tuple(id_ for id_ in derived_ids if id_)
+    if cleared < total_orders and not order_ids:
+        # Partial result without explicit IDs — defer to per-order cancellation.
+        cleared = 0
+    details = {key: value for key, value in result.items()}
+    return CancelAllResult(ok=ok, cleared=cleared, failed=failed, order_ids=order_ids, details=details)
+
+
+async def _call_cancel_all_orders_idempotent(
+    broker,
+    *,
+    venue: str,
+    orders: Sequence[Mapping[str, object]],
+    correlation_id: str | None,
+) -> CancelAllResult | None:
+    method = getattr(broker, "cancel_all_orders_idempotent", None)
+    if not callable(method):
+        return None
+    try:
+        maybe = method(venue=venue, correlation_id=correlation_id, orders=orders)
+    except TypeError:
+        try:
+            maybe = method(venue=venue, correlation_id=correlation_id)
+        except TypeError:
+            maybe = method(venue=venue)
+    result = await maybe if inspect.isawaitable(maybe) else maybe
+    return _normalise_cancel_all_result(result, orders=orders)
+
+
 async def cancel_all_orders(
     venue: str | None = None,
     *,
@@ -415,7 +483,7 @@ async def cancel_all_orders(
 
     for venue_key, bucket in grouped_orders.items():
         venue_display = bucket["display"]
-        venue_orders = bucket["orders"]
+        venue_orders = list(bucket["orders"])
         if guard_enabled and guard.feature_enabled():
             symbol_counts = Counter()
             for entry in venue_orders:
@@ -458,10 +526,49 @@ async def cancel_all_orders(
                         payload,
                     )
                     raise RunawayGuardCooldownError(block_details or payload)
-        for order in venue_orders:
+        broker = router.broker_for_venue(venue_display)
+        idempotent_result = await _call_cancel_all_orders_idempotent(
+            broker,
+            venue=venue_display,
+            orders=tuple(venue_orders),
+            correlation_id=correlation_id,
+        )
+        pending_orders = list(venue_orders)
+        if idempotent_result is not None:
+            cleared_ids = {int(order_id) for order_id in idempotent_result.order_ids}
+            if cleared_ids:
+                await asyncio.gather(
+                    *(
+                        asyncio.to_thread(ledger.update_order_status, order_id, "cancelled")
+                        for order_id in cleared_ids
+                    )
+                )
+                pending_orders = [
+                    order
+                    for order in pending_orders
+                    if int(order.get("id", 0)) not in cleared_ids
+                ]
+            cleared_count = max(0, int(idempotent_result.cleared))
+            failed += max(0, int(idempotent_result.failed))
+            cancelled += cleared_count
+            if guard_enabled and guard.feature_enabled():
+                ids_for_guard = cleared_ids
+                if not ids_for_guard and idempotent_result.ok and cleared_count >= len(venue_orders):
+                    ids_for_guard = {
+                        int(order.get("id", 0)) for order in venue_orders if int(order.get("id", 0))
+                    }
+                if ids_for_guard:
+                    for order in venue_orders:
+                        order_id = int(order.get("id", 0))
+                        if order_id in ids_for_guard:
+                            guard.register_cancel(venue_key, str(order.get("symbol") or "").upper())
+            if idempotent_result.ok and cleared_count >= len(venue_orders):
+                if guard_enabled and guard.feature_enabled():
+                    update_runaway_guard_snapshot(guard.snapshot())
+                continue
+        for order in pending_orders:
             venue_value = str(order.get("venue") or "")
             order_id = int(order.get("id", 0))
-            broker = router.broker_for_venue(venue_value)
             try:
                 register_cancel_attempt(reason="runaway_cancels_per_min", source=f"cancel_all:{venue_value}")
                 await broker.cancel(venue=venue_value, order_id=order_id)

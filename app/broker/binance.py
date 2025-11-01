@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .base import Broker
+from .base import Broker, CancelAllResult
 from .. import ledger
 from ..metrics.observability import record_order_error
 
@@ -456,6 +456,125 @@ class _BaseBinanceBroker(Broker):
             )
             raise
         return {"cancelled": "all", "failed": 0}
+
+    async def get_recently_closed_symbols(self, *, since: datetime | None = None) -> List[str]:
+        fills = await self.get_fills(since=since)
+        seen: set[str] = set()
+        symbols: List[str] = []
+        for fill in fills:
+            if not isinstance(fill, Mapping):
+                continue
+            symbol = str(fill.get("symbol") or "").upper()
+            if symbol and symbol not in seen:
+                seen.add(symbol)
+                symbols.append(symbol)
+        return symbols
+
+    async def positions_snapshot(self, *, venue: str | None = None) -> List[Dict[str, Any]]:
+        state = await self.get_account_state()
+        positions = state.get("positions")
+        if not isinstance(positions, Iterable):
+            return []
+        snapshot: List[Dict[str, Any]] = []
+        for row in positions:
+            if not isinstance(row, Mapping):
+                continue
+            symbol = str(row.get("symbol") or "").upper()
+            qty = _float(row.get("qty"), 0.0)
+            if not symbol or abs(qty) <= 1e-12:
+                continue
+            entry_price = _float(
+                row.get("avg_entry")
+                or row.get("entry_price")
+                or row.get("entryPrice"),
+                0.0,
+            )
+            mark_price = _float(row.get("mark_price") or row.get("markPrice"), entry_price)
+            notional = abs(qty) * (mark_price or entry_price)
+            snapshot.append(
+                {
+                    "venue": self.venue,
+                    "symbol": symbol,
+                    "side": "long" if qty > 0 else "short",
+                    "base_qty": abs(qty),
+                    "entry_price": entry_price,
+                    "mark_price": mark_price,
+                    "notional_usd": notional,
+                }
+            )
+        return snapshot
+
+    async def cancel_all_orders_idempotent(
+        self,
+        *,
+        venue: str | None = None,
+        correlation_id: str | None = None,
+        orders: Sequence[Mapping[str, object]] | None = None,
+    ) -> CancelAllResult:
+        target = str(venue or self.venue).lower()
+        if orders is None:
+            fetched = await asyncio.to_thread(ledger.fetch_open_orders)
+            orders = [
+                order
+                for order in fetched
+                if str(order.get("venue") or "").lower() == target
+            ]
+        order_ids: List[int] = []
+        for order in orders:
+            try:
+                order_id = int(order.get("id", 0))
+            except (TypeError, ValueError):
+                continue
+            if order_id:
+                order_ids.append(order_id)
+        if not order_ids:
+            return CancelAllResult(ok=True, cleared=0, failed=0, order_ids=())
+        try:
+            response = await self.cancel_all(batch_id=correlation_id)
+        except Exception as exc:  # pragma: no cover - defensive propagation
+            ledger.record_event(
+                level="ERROR",
+                code="binance_cancel_all_error",
+                payload={"venue": self.venue, "error": str(exc)},
+            )
+            return CancelAllResult(
+                ok=False,
+                cleared=0,
+                failed=len(order_ids),
+                order_ids=(),
+                details={"error": str(exc)},
+            )
+        cancelled_raw = response.get("cancelled") if isinstance(response, Mapping) else None
+        failed_raw = response.get("failed") if isinstance(response, Mapping) else 0
+        skipped = bool(response.get("skipped")) if isinstance(response, Mapping) else False
+        cleared = 0
+        if isinstance(cancelled_raw, str) and cancelled_raw.lower() == "all":
+            cleared = len(order_ids)
+        elif isinstance(cancelled_raw, (int, float)):
+            cleared = int(cancelled_raw)
+        failed = int(failed_raw or 0)
+        handled = cleared >= len(order_ids) and failed == 0
+        if handled:
+            await asyncio.gather(
+                *(
+                    asyncio.to_thread(ledger.update_order_status, order_id, "cancelled")
+                    for order_id in order_ids
+                )
+            )
+            return CancelAllResult(
+                ok=True,
+                cleared=len(order_ids),
+                failed=0,
+                order_ids=tuple(order_ids),
+                details={"response": dict(response)},
+            )
+        return CancelAllResult(
+            ok=skipped or failed == 0,
+            cleared=max(0, cleared),
+            failed=failed,
+            order_ids=(),
+            details={"response": dict(response)},
+        )
 
     async def positions(self, *, venue: str) -> Dict[str, Any]:
         state = await self.get_account_state()

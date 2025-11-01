@@ -8,10 +8,10 @@ breach occurs.
 
 | Domain | Metric | Target |
 | --- | --- | --- |
-| API responsiveness | 95% of `api_request_latency_seconds` < 500 ms | Keep p95 latency under 500 ms over any 5 minute window. |
+| API responsiveness | 95% of `api_latency_seconds` < 350 ms | Keep p95 latency under 350 ms over any 5 minute window. |
 | Market data freshness | `market_data_staleness_seconds` < 3 s | Top-of-book feeds stay < 3 s old; otherwise treat the venue as stale. |
 | Order success rate | `order_errors_total` increase ≤ 3 per minute | More than 3 errors/min triggers a trading pause and investigation. |
-| Watchdog coverage | `watchdog_health{venue}` == 1 | Gauge must remain 1; zero indicates degraded or auto-hold state. |
+| Watchdog coverage | `watchdog_state{venue}` == 0 | Gauge must remain 0 (OK); non-zero indicates degraded or auto-hold. |
 
 ## Instrumentation defaults
 
@@ -19,20 +19,20 @@ breach occurs.
   `emit_order_latency`, `emit_marketdata_staleness`, `metrics_tags`). Each
   method is a safe no-op in :mod:`app.broker.base`, so existing brokers and unit
   tests do not need to override them unless they opt in to telemetry.
-* SLO collectors are guarded behind the ``METRICS_SLO_ENABLED`` feature flag.
-  Keep it unset (or ``0``/``false``) during development to avoid importing
-  Prometheus collectors in tests. Set ``METRICS_SLO_ENABLED=1`` in production to
-  activate registration and exposure on ``/metrics``.
+* SLO collectors are enabled by default. Set ``METRICS_SLO_ENABLED=0`` only when
+  running stripped-down integration tests that cannot import Prometheus
+  collectors. Otherwise leave it unset so the `/metrics` endpoint exposes all
+  indicators.
 
 ## Metric reference
 
 The following Prometheus series back the alerts and dashboards described in
 this document:
 
-* ``api_request_latency_seconds{route,method,status}``
+* ``api_latency_seconds{route,method,status}``
 * ``market_data_staleness_seconds{venue,symbol}``
 * ``order_errors_total{venue,reason}``
-* ``watchdog_health{venue}``
+* ``watchdog_state{venue}``
 
 ## Operator Response
 
@@ -58,8 +58,8 @@ this document:
 4. Escalate to the venue integration owner if errors continue for 10 minutes.
 
 ### Watchdog health degraded
-1. The `watchdog_health` gauge dropping to 0 indicates the exchange watchdog marked
-   the venue as unhealthy or auto-hold.
+1. The `watchdog_state` gauge rising above 0 indicates the exchange watchdog marked
+   the venue as degraded (`1`) or auto-hold (`2`).
 2. Check ``/api/ui/status`` for the detailed watchdog reason and ensure the
    corresponding mitigation (auto-hold, manual intervention) remains active.
 3. Clear the condition once telemetry confirms the venue recovered.
