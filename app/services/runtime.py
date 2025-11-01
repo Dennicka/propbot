@@ -1781,6 +1781,139 @@ def apply_control_patch(patch: Mapping[str, object]) -> Tuple[ControlState, Dict
     return _STATE.control, updates
 
 
+def apply_control_snapshot(payload: Mapping[str, object]) -> Dict[str, object]:
+    """Replace the in-memory control state with ``payload``."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("control_snapshot_invalid")
+    persist_snapshot: Dict[str, object] | None = None
+    autopilot_snapshot: Dict[str, object] | None = None
+    auto_loop_changed = False
+    auto_loop_enabled: bool | None = None
+    result_snapshot: Dict[str, object] | None = None
+    with _STATE_LOCK:
+        control = _STATE.control
+        before_auto_loop = control.auto_loop
+        try:
+            if "safe_mode" in payload:
+                control.safe_mode = _coerce_bool("safe_mode", payload.get("safe_mode"))
+            if "two_man_rule" in payload:
+                control.two_man_rule = _coerce_bool("two_man_rule", payload.get("two_man_rule"))
+            if "dry_run" in payload:
+                control.dry_run = _coerce_bool("dry_run", payload.get("dry_run"))
+            if "dry_run_mode" in payload:
+                control.dry_run_mode = _coerce_bool("dry_run_mode", payload.get("dry_run_mode"))
+            if "auto_loop" in payload:
+                control.auto_loop = _coerce_bool("auto_loop", payload.get("auto_loop"))
+            if "post_only" in payload:
+                control.post_only = _coerce_bool("post_only", payload.get("post_only"))
+            if "reduce_only" in payload:
+                control.reduce_only = _coerce_bool("reduce_only", payload.get("reduce_only"))
+            if "order_notional_usdt" in payload:
+                control.order_notional_usdt = _coerce_float(
+                    "order_notional_usdt", payload.get("order_notional_usdt"), minimum=1.0, maximum=1_000_000.0
+                )
+            if "max_slippage_bps" in payload:
+                control.max_slippage_bps = _coerce_int(
+                    "max_slippage_bps", payload.get("max_slippage_bps"), minimum=0, maximum=50
+                )
+            if "min_spread_bps" in payload:
+                control.min_spread_bps = _coerce_float(
+                    "min_spread_bps", payload.get("min_spread_bps"), minimum=0.0, maximum=100.0
+                )
+            if "poll_interval_sec" in payload:
+                control.poll_interval_sec = _coerce_int("poll_interval_sec", payload.get("poll_interval_sec"), minimum=1)
+            if "loop_pair" in payload:
+                control.loop_pair = _coerce_loop_pair(payload.get("loop_pair"))
+            if "loop_venues" in payload:
+                control.loop_venues = _coerce_loop_venues(payload.get("loop_venues"))
+            if "taker_fee_bps_binance" in payload:
+                control.taker_fee_bps_binance = _coerce_int(
+                    "taker_fee_bps_binance", payload.get("taker_fee_bps_binance"), minimum=0, maximum=10_000
+                )
+            if "taker_fee_bps_okx" in payload:
+                control.taker_fee_bps_okx = _coerce_int(
+                    "taker_fee_bps_okx", payload.get("taker_fee_bps_okx"), minimum=0, maximum=10_000
+                )
+        except ValueError as exc:  # pragma: no cover - defensive propagation
+            raise ValueError("control_snapshot_invalid") from exc
+        approvals_payload = payload.get("approvals")
+        if approvals_payload is not None:
+            if not isinstance(approvals_payload, Mapping):
+                raise ValueError("control_snapshot_invalid")
+            control.approvals = {str(actor): str(ts) for actor, ts in approvals_payload.items()}
+        if "preflight_passed" in payload:
+            try:
+                control.preflight_passed = _coerce_bool("preflight_passed", payload.get("preflight_passed"))
+            except ValueError:
+                control.preflight_passed = bool(payload.get("preflight_passed"))
+        if "last_preflight_ts" in payload:
+            ts_value = payload.get("last_preflight_ts")
+            control.last_preflight_ts = str(ts_value) if ts_value is not None else None
+        if "deployment_mode" in payload:
+            mode_value = payload.get("deployment_mode")
+            control.deployment_mode = str(mode_value) if mode_value is not None else None
+        if "environment" in payload:
+            env_value = payload.get("environment")
+            control.environment = str(env_value) if env_value is not None else None
+        _sync_loop_from_control(_STATE)
+        result_snapshot = asdict(control)
+        persist_snapshot = dict(result_snapshot)
+        autopilot_snapshot = _sync_autopilot_targets_locked()
+        auto_loop_changed = before_auto_loop != control.auto_loop
+        auto_loop_enabled = control.auto_loop
+    if persist_snapshot is not None:
+        _persist_control_snapshot(persist_snapshot)
+    if autopilot_snapshot is not None:
+        _persist_autopilot_snapshot(autopilot_snapshot)
+    if auto_loop_changed and auto_loop_enabled is not None:
+        set_auto_trade_state(auto_loop_enabled)
+    return result_snapshot or asdict(get_state().control)
+
+
+def apply_risk_limits_snapshot(payload: Mapping[str, object]) -> Dict[str, object]:
+    """Replace the risk limits state with ``payload``."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("risk_limits_snapshot_invalid")
+    with _STATE_LOCK:
+        limits = _STATE.risk.limits
+        positions_payload = payload.get("max_position_usdt")
+        if positions_payload is not None:
+            if not isinstance(positions_payload, Mapping):
+                raise ValueError("risk_limits_snapshot_invalid")
+            updated_positions: Dict[str, float] = {}
+            for symbol, value in positions_payload.items():
+                try:
+                    updated_positions[str(symbol).upper()] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            limits.max_position_usdt = updated_positions
+        open_orders_payload = payload.get("max_open_orders")
+        if open_orders_payload is not None:
+            if not isinstance(open_orders_payload, Mapping):
+                raise ValueError("risk_limits_snapshot_invalid")
+            updated_orders: Dict[str, int] = {}
+            for venue, value in open_orders_payload.items():
+                try:
+                    updated_orders[str(venue).lower()] = int(round(float(value)))
+                except (TypeError, ValueError):
+                    continue
+            limits.max_open_orders = updated_orders
+        if "max_daily_loss_usdt" in payload:
+            value = payload.get("max_daily_loss_usdt")
+            if value is None:
+                limits.max_daily_loss_usdt = None
+            else:
+                try:
+                    limits.max_daily_loss_usdt = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("risk_limits_snapshot_invalid") from exc
+        snapshot = limits.as_dict()
+    _persist_runtime_payload({"risk_limits": snapshot})
+    return snapshot
+
+
 def _normalise_control_patch(patch: Mapping[str, object]) -> Dict[str, object]:
     if not isinstance(patch, Mapping):
         raise ValueError("control patch payload must be a mapping")

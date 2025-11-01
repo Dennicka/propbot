@@ -247,6 +247,17 @@ class StrategyBudgetManager:
                 entry["current_open_positions"] = 0
             self._persist_unlocked()
 
+    def apply_snapshot(
+        self, payload: Mapping[str, Mapping[str, object]]
+    ) -> dict[str, dict[str, float | int | bool | None]]:
+        budgets = self._normalise_budgets(payload)
+        if not budgets:
+            raise ValueError("budget_snapshot_invalid")
+        with self._lock:
+            self._budgets = budgets
+            self._persist_unlocked()
+            return self.snapshot()
+
     def snapshot(self) -> dict[str, dict[str, float | int | bool | None]]:
         with self._lock:
             result: dict[str, dict[str, float | int | bool | None]] = {}
