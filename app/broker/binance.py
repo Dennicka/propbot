@@ -15,6 +15,7 @@ import httpx
 
 from .base import Broker
 from .. import ledger
+from ..metrics.observability import record_order_error
 
 
 LOGGER = logging.getLogger(__name__)
@@ -143,6 +144,19 @@ class _BaseBinanceBroker(Broker):
             )
         response.raise_for_status()
         return response.json()
+
+
+def _order_error_reason(exc: Exception) -> str:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is not None:
+        try:
+            return f"http_{int(status)}"
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            pass
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code.lower()
+    return exc.__class__.__name__.lower()
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -344,6 +358,7 @@ class _BaseBinanceBroker(Broker):
         try:
             response = await self._request("POST", "/fapi/v1/order", params=params, signed=True)
         except Exception as exc:  # pragma: no cover - defensive logging
+            record_order_error(venue or self.venue, _order_error_reason(exc))
             await asyncio.to_thread(ledger.update_order_status, order_id, "failed")
             ledger.record_event(
                 level="ERROR",

@@ -28,6 +28,16 @@ from .slo import (
     set_daily_loss_breached,
     set_watchdog_ok,
 )
+from .observability import (
+    API_REQUEST_LATENCY,
+    MARKET_DATA_STALENESS,
+    ORDER_ERRORS_COUNTER,
+    WATCHDOG_HEALTH_GAUGE,
+    observe_api_request,
+    record_order_error,
+    set_market_data_staleness,
+    set_watchdog_health,
+)
 
 __all__ = [
     "AUTO_TRADE_GAUGE",
@@ -42,6 +52,10 @@ __all__ = [
     "SKIPPED_COUNTER",
     "WATCHDOG_OK_GAUGE",
     "WS_GAP_HISTOGRAM",
+    "API_REQUEST_LATENCY",
+    "MARKET_DATA_STALENESS",
+    "ORDER_ERRORS_COUNTER",
+    "WATCHDOG_HEALTH_GAUGE",
     "record_trade_execution",
     "record_risk_breach",
     "set_auto_trade_state",
@@ -54,4 +68,8 @@ __all__ = [
     "reset_for_tests",
     "set_daily_loss_breached",
     "set_watchdog_ok",
+    "observe_api_request",
+    "set_market_data_staleness",
+    "record_order_error",
+    "set_watchdog_health",
 ]

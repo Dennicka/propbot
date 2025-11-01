@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from .base import Broker
 from .paper import PaperBroker
 from .. import ledger
+from ..metrics.observability import record_order_error
 from ..services.runtime import get_state
 
 
@@ -181,6 +182,7 @@ class TestnetBroker(Broker):
             await self._invoke_with_retries(client.place_order, **params)
             await asyncio.to_thread(ledger.update_order_status, order_id, "open")
         except Exception as exc:
+            record_order_error(venue or self.venue, exc.__class__.__name__)
             await asyncio.to_thread(ledger.update_order_status, order_id, "failed")
             ledger.record_event(
                 level="ERROR",
