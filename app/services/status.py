@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Mapping, Tuple
 
 from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
+from .partial_hedge_runner import get_partial_hedge_status
 from ..utils import redact_sensitive_data
 from ..version import APP_VERSION
 from positions import list_open_positions
@@ -208,6 +209,39 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
             summary="aligned" if slo_mismatch == 0 else f"mismatch={slo_mismatch}",
             metrics={"mismatch": slo_mismatch},
             links=[{"title": "Recon", "href": "/api/ui/recon"}],
+        )
+    )
+    partial_snapshot = get_partial_hedge_status()
+    partial_totals = (
+        partial_snapshot.get("totals")
+        if isinstance(partial_snapshot.get("totals"), Mapping)
+        else {}
+    )
+    partial_orders = int(partial_totals.get("orders", 0) or 0)
+    partial_notional = float(partial_totals.get("notional_usdt", 0.0) or 0.0)
+    partial_error = partial_snapshot.get("last_error")
+    partial_enabled = bool(partial_snapshot.get("enabled"))
+    partial_status = "OK" if partial_enabled else "WARN"
+    partial_summary = (
+        f"orders={partial_orders}, notional={partial_notional:.2f}"
+    )
+    if partial_error:
+        partial_status = "ERROR"
+        partial_summary = f"error={partial_error}"
+    components.append(
+        _component(
+            component_id="partial_hedge",
+            title="Partial Hedge",
+            group="P1",
+            status=partial_status,
+            summary=partial_summary,
+            metrics={
+                "orders": partial_orders,
+                "notional_usdt": partial_notional,
+                "failure_streak": partial_snapshot.get("failure_streak", 0),
+                "dry_run": int(bool(partial_snapshot.get("dry_run"))),
+            },
+            links=[{"title": "Plan", "href": "/api/ui/hedge/plan"}],
         )
     )
     components.append(
@@ -658,6 +692,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         },
     }
     snapshot["partial_rebalance"] = _partial_rebalance_summary()
+    snapshot["partial_hedge"] = get_partial_hedge_status()
     snapshot["autopilot"] = state.autopilot.as_dict()
     auto_payload = state.auto_hedge.as_dict()
     snapshot["auto_hedge"] = {
@@ -698,6 +733,7 @@ def get_status_components() -> Dict[str, object]:
         "autopilot": snapshot.get("autopilot"),
         "auto_hedge": snapshot.get("auto_hedge"),
         "partial_rebalance": snapshot.get("partial_rebalance"),
+        "partial_hedge": snapshot.get("partial_hedge"),
     }
 
 
@@ -719,5 +755,6 @@ def get_status_slo() -> Dict[str, object]:
         "autopilot": snapshot.get("autopilot"),
         "auto_hedge": snapshot.get("auto_hedge"),
         "partial_rebalance": snapshot.get("partial_rebalance"),
+        "partial_hedge": snapshot.get("partial_hedge"),
     }
 

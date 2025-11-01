@@ -34,6 +34,7 @@ from .runtime import (
 )
 from .runtime_badges import get_runtime_badges
 from .status import get_partial_rebalance_summary
+from .partial_hedge_runner import get_partial_hedge_status
 from .positions_view import build_positions_snapshot
 from .pnl_attribution import build_pnl_attribution
 from positions import list_positions
@@ -452,6 +453,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     elif not watchdog_status.get("overall_ok", True):
         summary_highlights.append("Exchange watchdog reports degraded venues")
     partial_summary = get_partial_rebalance_summary()
+    partial_hedge_status = get_partial_hedge_status()
     if partial_summary.get("count", 0):
         label = partial_summary.get("label", "PARTIAL")
         attempts = partial_summary.get("attempts", 0)
@@ -460,6 +462,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         if last_error:
             highlight += f" last_error={last_error}"
         summary_highlights.append(highlight)
+    hedge_error = partial_hedge_status.get("last_error")
+    if hedge_error:
+        summary_highlights.append(f"Partial hedge planner error: {hedge_error}")
     limits_for_advisor = {
         "MAX_TOTAL_NOTIONAL_USDT": risk_limits_env.get("MAX_TOTAL_NOTIONAL_USDT"),
         "MAX_OPEN_POSITIONS": risk_limits_env.get("MAX_OPEN_POSITIONS"),
@@ -699,6 +704,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "strategy_budget_snapshot": strategy_budget_snapshot,
         "daily_strategy_budgets": daily_strategy_budgets,
         "partial_rebalance": partial_summary,
+        "partial_hedge": partial_hedge_status,
         "summary_highlights": summary_highlights,
         "exchange_watchdog_hold_reason": exchange_watchdog_hold_reason,
         "auto_hold_daily_loss": auto_hold_daily_loss,
@@ -939,6 +945,52 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     autopilot_decision_ts = autopilot.get("last_decision_ts") or ""
     universe_enforced = bool(context.get("universe_enforced"))
     partial_rebalance = context.get("partial_rebalance", {}) or {}
+    partial_hedge = context.get("partial_hedge", {}) or {}
+    if not isinstance(partial_hedge, Mapping):
+        partial_hedge = {}
+    partial_hedge_plan = (
+        partial_hedge.get("last_plan")
+        if isinstance(partial_hedge.get("last_plan"), Mapping)
+        else {}
+    )
+    partial_hedge_orders = (
+        partial_hedge_plan.get("orders")
+        if isinstance(partial_hedge_plan.get("orders"), Sequence)
+        else []
+    )
+    partial_hedge_totals = (
+        partial_hedge.get("totals")
+        if isinstance(partial_hedge.get("totals"), Mapping)
+        else {}
+    )
+    partial_hedge_notional = partial_hedge_totals.get("notional_usdt") or 0.0
+    partial_hedge_order_count = partial_hedge_totals.get("orders") or 0
+    partial_hedge_generated = (
+        partial_hedge_plan.get("generated_ts")
+        or partial_hedge.get("last_snapshot_ts")
+        or ""
+    )
+    partial_hedge_execution = (
+        partial_hedge.get("last_execution")
+        if isinstance(partial_hedge.get("last_execution"), Mapping)
+        else {}
+    )
+    partial_hedge_enabled = bool(partial_hedge.get("enabled"))
+    partial_hedge_dry_run = bool(partial_hedge.get("dry_run"))
+    partial_hedge_failure = int(partial_hedge.get("failure_streak", 0) or 0)
+    partial_hedge_error = partial_hedge.get("last_error") or ""
+    partial_hedge_auto_hold = bool(partial_hedge.get("auto_hold_triggered"))
+    partial_hedge_execute_disabled = (
+        not partial_hedge_enabled or partial_hedge_dry_run or not partial_hedge_orders
+    )
+    execute_reason_parts: list[str] = []
+    if not partial_hedge_enabled:
+        execute_reason_parts.append("runner disabled")
+    if partial_hedge_dry_run:
+        execute_reason_parts.append("dry-run mode")
+    if not partial_hedge_orders:
+        execute_reason_parts.append("no orders planned")
+    partial_hedge_execute_reason = ", ".join(execute_reason_parts)
     tca_preview_payload = context.get("tca_preview")
     tca_preview_error = context.get("tca_preview_error")
     smart_router_preview = context.get("smart_router_preview")
@@ -1087,6 +1139,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "input[type=text]{width:100%;padding:0.5rem;border:1px solid #c1c7d0;border-radius:4px;margin-bottom:0.5rem;}"
         "button{padding:0.5rem 1rem;border:none;border-radius:4px;background:#14365d;color:#fff;cursor:pointer;}"
         "button:hover{background:#0d2440;}"
+        ".partial-hedge{background:#fff;padding:1.5rem;border:1px solid #d0d5dd;margin-bottom:2rem;}"
+        ".partial-hedge h2{margin-top:0;display:flex;align-items:center;gap:0.5rem;}"
+        ".partial-hedge table{margin-top:1rem;width:100%;border-collapse:collapse;}"
+        ".partial-hedge th,.partial-hedge td{border:1px solid #d0d5dd;padding:0.5rem 0.75rem;text-align:left;vertical-align:top;}"
+        ".partial-hedge .meta{font-size:0.9rem;color:#4b5563;margin:0.35rem 0;}"
+        ".partial-hedge .warning{color:#b91c1c;font-weight:700;margin:0.5rem 0;}"
+        ".partial-hedge button.execute{margin-top:0.75rem;background:#b91c1c;}"
+        ".partial-hedge button.execute[disabled]{background:#d1d5db;color:#6b7280;cursor:not-allowed;}"
         ".note{font-size:0.9rem;color:#555;margin-top:-0.5rem;margin-bottom:0.75rem;}"
         ".flash{background:#fff3cd;border:1px solid #f1c232;color:#533f03;padding:0.75rem 1rem;margin-bottom:1.5rem;border-radius:4px;}"
         ".chaos-profile{margin:0.75rem 0 1.5rem 0;font-size:0.95rem;color:#1f2937;}"
@@ -2497,6 +2557,71 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append(f"<tr><th>Pending Resume Request</th><td>{rr_line}</td></tr>")
     parts.append("</tbody></table>")
 
+    parts.append("<div class=\"partial-hedge\">")
+    parts.append("<h2>Partial Hedge</h2>")
+    meta_lines = [
+        f"Enabled: {'YES' if partial_hedge_enabled else 'NO'}",
+        f"Dry-run: {'YES' if partial_hedge_dry_run else 'NO'}",
+        f"Orders planned: {_fmt(partial_hedge_order_count)}",
+        f"Notional: {_fmt(partial_hedge_notional)} USDT",
+        f"Failure streak: {_fmt(partial_hedge_failure)}",
+    ]
+    if partial_hedge_auto_hold:
+        meta_lines.append("Auto-HOLD: engaged")
+    parts.append(
+        "<p class=\"meta\">{}</p>".format(
+            " &bull; ".join(escape(line) for line in meta_lines)
+        )
+    )
+    if partial_hedge_generated:
+        parts.append(
+            f"<p class=\"meta\">Plan generated at {_fmt(partial_hedge_generated)}</p>"
+        )
+    if partial_hedge_error:
+        parts.append(
+            f"<p class=\"warning\">Last error: {_fmt(partial_hedge_error)}</p>"
+        )
+    if partial_hedge_execution:
+        parts.append(
+            "<p class=\"meta\">Last execution: status={} at {}</p>".format(
+                _fmt(partial_hedge_execution.get("status")),
+                _fmt(partial_hedge_execution.get("ts")),
+            )
+        )
+    if partial_hedge_orders:
+        parts.append(
+            "<table><thead><tr><th>Venue</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Notional</th><th>Reason</th></tr></thead><tbody>"
+        )
+        for order in partial_hedge_orders:
+            if not isinstance(order, Mapping):
+                continue
+            parts.append(
+                "<tr><td>{venue}</td><td>{symbol}</td><td>{side}</td><td>{qty}</td><td>{notional}</td><td>{reason}</td></tr>".format(
+                    venue=_fmt(order.get("venue")),
+                    symbol=_fmt(order.get("symbol")),
+                    side=_fmt(order.get("side")),
+                    qty=_fmt(order.get("qty")),
+                    notional=_fmt(order.get("notional_usdt")),
+                    reason=_fmt(order.get("reason")),
+                )
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p class=\"meta\">No hedge orders required.</p>")
+    warning_text = (
+        "Execution requires two active approvals and places market orders immediately."
+    )
+    parts.append(f"<p class=\"warning\">{escape(warning_text)}</p>")
+    if partial_hedge_execute_reason:
+        parts.append(
+            f"<p class=\"meta\">Execute disabled: {escape(partial_hedge_execute_reason)}</p>"
+        )
+    button_attrs = "class=\"execute\" type=\"button\" onclick=\"executePartialHedge()\""
+    if partial_hedge_execute_disabled:
+        button_attrs += " disabled"
+    parts.append(f"<button {button_attrs}>Execute plan</button>")
+    parts.append("</div>")
+
     parts.append("<h3 style=\"margin-top:1rem;\">Recent operator actions</h3>")
     parts.append(
         "<table><thead><tr><th>Timestamp</th><th>Operator</th><th>Action</th><th>Details</th></tr></thead><tbody>"
@@ -2957,6 +3082,20 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             snapshot=last_snapshot_ts,
             warning=_fmt(warning_text),
         )
+    )
+
+    parts.append(
+        "<script>async function executePartialHedge(){"
+        "if(!confirm('Execute partial hedge plan? This will place market orders immediately.')){return;}"
+        "try{"
+        "const response=await fetch('/api/ui/hedge/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true})});"
+        "const payload=await response.json();"
+        "if(!response.ok){alert('Execution failed: '+(payload.detail||response.status));return;}"
+        "const status=(payload.execution&&payload.execution.status)||'ok';"
+        "alert('Partial hedge execution: '+status);"
+        "window.location.reload();"
+        "}catch(err){alert('Execution failed: '+err);}"
+        "}</script>"
     )
 
     parts.append("</body></html>")
