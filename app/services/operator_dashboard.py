@@ -67,6 +67,13 @@ from ..utils.symbols import normalise_symbol
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None:
@@ -99,6 +106,96 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def _normalise_reconciliation_snapshot(snapshot: object | None) -> dict[str, object]:
+    if isinstance(snapshot, Mapping):
+        payload: dict[str, object] = dict(snapshot)
+    else:
+        payload = {}
+
+    status_attr: object | None = None
+    if snapshot is not None:
+        status_attr = getattr(snapshot, "status", None)
+    if status_attr is None:
+        status_attr = payload.get("status")
+    if status_attr is None:
+        desync_flag = bool(payload.get("desync_detected"))
+        mismatch_guess = payload.get("diff_count")
+        if mismatch_guess is None:
+            diffs = payload.get("diffs")
+            if isinstance(diffs, Sequence):
+                mismatch_guess = len(diffs)
+        mismatch_count = _coerce_int(mismatch_guess, 0)
+        status_attr = "DEGRADED" if desync_flag or mismatch_count else "OK"
+    status_text = str(status_attr or "DEGRADED").upper() or "DEGRADED"
+
+    mismatches_attr: object | None = None
+    if snapshot is not None:
+        mismatches_attr = getattr(snapshot, "mismatches_count", None)
+    if mismatches_attr is None:
+        mismatches_attr = payload.get("mismatches_count")
+    if mismatches_attr is None:
+        mismatches_attr = payload.get("diff_count")
+    diffs_value = payload.get("diffs")
+    if isinstance(diffs_value, Sequence):
+        mismatches_default = len(diffs_value)
+    else:
+        mismatches_default = 0
+    mismatches_count = _coerce_int(mismatches_attr, mismatches_default)
+    issues_value = payload.get("issues")
+    if isinstance(issues_value, Sequence):
+        issue_default = len(issues_value)
+    else:
+        issue_default = 0
+    issue_count = _coerce_int(payload.get("issue_count"), issue_default)
+    if issue_count > mismatches_count:
+        mismatches_count = issue_count
+
+    auto_hold_attr: object | None = None
+    if snapshot is not None:
+        auto_hold_attr = getattr(snapshot, "auto_hold", None)
+    if auto_hold_attr is None:
+        auto_hold_attr = payload.get("auto_hold", False)
+    auto_hold_enabled = bool(auto_hold_attr)
+
+    last_run_value: object | None = None
+    if snapshot is not None:
+        last_run_value = getattr(snapshot, "last_run", None)
+    if last_run_value is None:
+        last_run_value = payload.get("last_run")
+    if last_run_value is None:
+        last_run_value = payload.get("last_checked")
+    if isinstance(last_run_value, datetime):
+        last_run_iso = last_run_value.isoformat()
+    else:
+        last_run_iso = str(last_run_value) if last_run_value else None
+
+    payload.update(
+        {
+            "status": status_text,
+            "mismatches_count": mismatches_count,
+            "auto_hold": auto_hold_enabled,
+            "last_run_iso": last_run_iso,
+        }
+    )
+    return payload
+
+
+def build_reconciliation_summary(snapshot: object | None = None) -> dict[str, object]:
+    base_snapshot = snapshot if snapshot is not None else get_reconciliation_status()
+    normalized = _normalise_reconciliation_snapshot(base_snapshot)
+    diffs = normalized.get("diffs") if isinstance(normalized.get("diffs"), Sequence) else []
+    diff_count = _coerce_int(normalized.get("diff_count"), len(diffs))
+    issues = normalized.get("issues") if isinstance(normalized.get("issues"), Sequence) else []
+    issue_count = _coerce_int(normalized.get("issue_count"), len(issues))
+    mismatch_total = diff_count if diff_count >= issue_count else issue_count
+    return {
+        "status": str(normalized.get("status") or "DEGRADED"),
+        "mismatches_count": _coerce_int(normalized.get("mismatches_count"), mismatch_total),
+        "auto_hold": bool(normalized.get("auto_hold")),
+        "last_run_iso": normalized.get("last_run_iso"),
+    }
 
 
 def _trend_summary(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -287,6 +384,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     chaos_settings = get_chaos_state()
     selected_profile = chaos_settings.profile or ("custom" if chaos_settings.enabled else "none")
     effective_profile = selected_profile if chaos_settings.enabled else "none"
+    show_recon_status = _env_flag("SHOW_RECON_STATUS", True)
+
     chaos_payload = {
         "enabled": chaos_settings.enabled,
         "profile": effective_profile,
@@ -423,7 +522,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     guard_allowed, guard_reason = edge_guard_allowed()
     guard_context = edge_guard_current_context()
     liquidity_status = get_liquidity_status()
-    reconciliation_status = get_reconciliation_status()
+    reconciliation_raw = get_reconciliation_status()
+    reconciliation_status = _normalise_reconciliation_snapshot(reconciliation_raw)
+    reconciliation_runtime = build_reconciliation_summary(reconciliation_status)
     autopilot_state = state.autopilot.as_dict()
 
     try:
@@ -442,6 +543,12 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     summary_highlights: list[str] = []
     exchange_watchdog_hold_reason = ""
     lowered_reason = hold_reason.lower()
+    recon_diff_count = _coerce_int(
+        reconciliation_status.get("diff_count"),
+        len(reconciliation_status.get("diffs") or []),
+    )
+    if recon_diff_count:
+        summary_highlights.append(f"Recon mismatches: {recon_diff_count}")
     if lowered_reason.startswith("exchange_watchdog:"):
         detail = hold_reason.split(":", 1)[1].strip() if ":" in hold_reason else ""
         display_detail = detail or hold_reason_display or hold_reason
@@ -676,6 +783,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "recent_ops_incidents": recent_ops_incidents,
         "liquidity": liquidity_status,
         "reconciliation": reconciliation_status,
+        "runtime_snapshot": {"reconciliation": reconciliation_runtime},
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
         "edge_guard": {
@@ -712,6 +820,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "universe_enforced": is_universe_enforced(),
         "tca_preview": tca_preview_payload,
         "tca_preview_error": tca_preview_error,
+        "env": {"SHOW_RECON_STATUS": show_recon_status},
         "smart_router_preview": smart_router_preview,
         "smart_router_error": smart_router_error,
     }
@@ -902,6 +1011,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
     liquidity_reason = liquidity.get("reason") or ""
     liquidity_snapshot = liquidity.get("per_venue") or {}
+    env_flags = context.get("env", {}) or {}
+    show_recon_widget = bool(env_flags.get("SHOW_RECON_STATUS", True))
+    runtime_snapshot = context.get("runtime_snapshot", {}) or {}
+    reconciliation_snapshot = runtime_snapshot.get("reconciliation") or {}
     reconciliation = context.get("reconciliation", {}) or {}
     desync_detected = bool(reconciliation.get("desync_detected"))
     reconciliation_issues = reconciliation.get("issues") or []
@@ -910,7 +1023,27 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         issue_count = len(reconciliation_issues)
     else:
         issue_count = _coerce_int(issue_count, len(reconciliation_issues))
-    last_recon_ts = reconciliation.get("last_checked")
+    last_recon_ts = reconciliation.get("last_run_iso") or reconciliation.get("last_checked")
+    recon_diffs_list = reconciliation.get("diffs") or []
+    recon_diff_value = _coerce_int(reconciliation.get("diff_count"), len(recon_diffs_list))
+    mismatch_value = recon_diff_value if recon_diff_value >= issue_count else issue_count
+    recon_widget_status = (
+        reconciliation_snapshot.get("status")
+        or reconciliation.get("status")
+        or ("DEGRADED" if mismatch_value or desync_detected else "OK")
+    )
+    recon_widget_last_run = reconciliation_snapshot.get("last_run_iso") or last_recon_ts
+    if isinstance(recon_widget_last_run, datetime):
+        recon_widget_last_run_display = recon_widget_last_run.isoformat()
+    else:
+        recon_widget_last_run_display = str(recon_widget_last_run) if recon_widget_last_run else "-"
+    recon_widget_mismatches = _coerce_int(
+        reconciliation_snapshot.get("mismatches_count"),
+        mismatch_value,
+    )
+    recon_widget_auto_hold = bool(
+        reconciliation_snapshot.get("auto_hold") or reconciliation.get("auto_hold")
+    )
 
     recent_ops_incidents = context.get("recent_ops_incidents", []) or []
 
@@ -1312,6 +1445,20 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append(
             f"<div class=\"read-only-banner\">{_fmt(banner_text)}</div>"
         )
+
+    if show_recon_widget:
+        status_display = _fmt(str(recon_widget_status or "DEGRADED"))
+        parts.append("<!-- Reconciliation widget -->")
+        parts.append("<section id=\"reconciliation\">")
+        parts.append("<h3>Reconciliation status</h3>")
+        parts.append(f"<p>Status: {status_display}</p>")
+        parts.append(
+            f"<p>Last run: {_fmt(recon_widget_last_run_display) if recon_widget_last_run_display else '-'}</p>"
+        )
+        parts.append(f"<p>Mismatches: {_fmt(recon_widget_mismatches)}</p>")
+        if recon_widget_auto_hold:
+            parts.append("<p>Auto-HOLD: active</p>")
+        parts.append("</section>")
 
     for message in flash_messages:
         parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
@@ -2180,28 +2327,97 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "</div>"
         )
 
-    parts.append("<h2>Reconciliation status</h2>")
-    if desync_detected:
-        parts.append(
-            "<div style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;"
-            "padding:1rem;border-radius:6px;font-weight:700;font-size:1.1rem;\">"
-            "STATE DESYNC — manual intervention required"
-            "</div>"
-        )
+    recon_diffs = reconciliation.get("diffs") or []
+    diff_count = reconciliation.get("diff_count")
+    if diff_count is None:
+        diff_count = len(recon_diffs)
     else:
-        parts.append(
-            "<p><strong style=\"color:#166534;\">In sync with exchange state.</strong></p>"
-        )
+        diff_count = _coerce_int(diff_count, len(recon_diffs))
+    auto_hold_enabled = bool(reconciliation.get("auto_hold"))
+    recon_error = reconciliation.get("error")
+    mismatch_count = diff_count if diff_count >= issue_count else issue_count
+    card_style = (
+        "background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;"
+        if diff_count
+        else "background:#ecfdf5;border:1px solid #15803d;color:#064e3b;"
+    )
+    parts.append("<h2>Recon</h2>")
     parts.append(
-        "<p class=\"note\">Outstanding mismatches: {count}. Resolve manually before resume.</p>".format(
-            count=_fmt(issue_count)
+        "<div style=\"{style}padding:1rem;border-radius:8px;margin-bottom:1rem;\">".format(
+            style=card_style
         )
     )
-    if last_recon_ts:
+    status_label = "DESYNC" if mismatch_count or desync_detected else "IN SYNC"
+    status_colour = "#b91c1c" if mismatch_count or desync_detected else "#166534"
+    header_html = (
+        '<div style="display:flex;justify-content:space-between;align-items:center;">'
+        '<strong>Reconciliation</strong>'
+        f'<span style="font-weight:700;color:{status_colour};">{status_label}</span>'
+        '</div>'
+    )
+    parts.append(header_html)
+    summary_bits = [f"Diffs: {_fmt(mismatch_count)}"]
+    if auto_hold_enabled:
+        summary_bits.append("AUTO-HOLD enabled")
+    parts.append("<p>{text}</p>".format(text=" · ".join(summary_bits)))
+    if mismatch_count or desync_detected:
         parts.append(
-            f"<p class=\"note\">Last checked: {_fmt(last_recon_ts)}.</p>"
+            "<p style=\"font-weight:700;color:#b91c1c;\">STATE DESYNC — manual intervention required</p>"
         )
-    if desync_detected and reconciliation_issues:
+    if last_recon_ts:
+        parts.append(f"<p class=\"note\">Last checked: {_fmt(last_recon_ts)}.</p>")
+    if recon_error:
+        parts.append(
+            "<p style=\"margin:0;color:#b91c1c;font-weight:600;\">Error: {err}</p>".format(
+                err=_fmt(recon_error)
+            )
+        )
+    if mismatch_count:
+        parts.append("<!-- Outstanding mismatches: -->")
+        parts.append("<p><strong>Outstanding mismatches:</strong></p>")
+    visible_diffs = recon_diffs[:5]
+    if visible_diffs:
+        parts.append(
+            "<table style=\"width:100%;margin-top:0.75rem;border-collapse:collapse;\">"
+            "<thead><tr><th style=\"text-align:left;padding:0.25rem;\">Venue</th>"
+            "<th style=\"text-align:left;padding:0.25rem;\">Symbol</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Exchange</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Ledger</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Delta</th>"
+            "<th style=\"text-align:right;padding:0.25rem;\">Notional&nbsp;USD</th></tr></thead><tbody>"
+        )
+        for diff in visible_diffs:
+            notional_value = diff.get("notional_usd")
+            if isinstance(notional_value, (int, float)):
+                notional_display = f"{float(notional_value):.2f}"
+            else:
+                notional_display = notional_value
+            parts.append(
+                "<tr>"
+                "<td style=\"padding:0.25rem;\">{venue}</td>"
+                "<td style=\"padding:0.25rem;\">{symbol}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{exch}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{ledger}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{delta}</td>"
+                "<td style=\"padding:0.25rem;text-align:right;\">{notional}</td>"
+                "</tr>".format(
+                    venue=_fmt(diff.get("venue")),
+                    symbol=_fmt(diff.get("symbol")),
+                    exch=_fmt(diff.get("exch_qty")),
+                    ledger=_fmt(diff.get("ledger_qty")),
+                    delta=_fmt(diff.get("delta")),
+                    notional=_fmt(notional_display),
+                )
+            )
+        parts.append("</tbody></table>")
+        remaining = max(0, diff_count - len(visible_diffs))
+        if remaining > 0:
+            parts.append(
+                "<p style=\"margin-top:0.5rem;color:#7f1d1d;\">+{count} more diffs not shown</p>".format(
+                    count=_fmt(remaining)
+                )
+            )
+    elif desync_detected and reconciliation_issues:
         visible_issues = reconciliation_issues[:5]
         parts.append("<ul style=\"background:#fff;border:1px solid #fca5a5;padding:0.75rem 1rem;\">")
         for issue in visible_issues:
@@ -2219,6 +2435,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 f"<li style=\"color:#b91c1c;\">+{remaining} more issues not shown</li>"
             )
         parts.append("</ul>")
+    else:
+        parts.append("<p style=\"margin:0;\">All venues in sync.</p>")
+    parts.append("</div>")
 
     parts.append("<h2>Balances / Liquidity</h2>")
     if liquidity_blocked:
@@ -3102,5 +3321,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     return "".join(parts)
 
 
-__all__ = ["build_dashboard_context", "render_dashboard_html"]
+__all__ = [
+    "build_dashboard_context",
+    "render_dashboard_html",
+    "build_reconciliation_summary",
+]
 

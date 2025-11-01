@@ -26,8 +26,9 @@
    cp .env.example .env
    ```
 7. Откройте `.env` и убедитесь, что для локального paper-старта заданы
-   `SAFE_MODE=true`, `DRY_RUN_MODE=true`, `AUTH_ENABLED=false` и тестовый
-   `API_TOKEN=devtoken123` (или любой другой случайный токен).
+   `SAFE_MODE=true`, `DRY_RUN_MODE=true`, `AUTH_ENABLED=false`, `RECON_ENABLED=true`
+   и тестовый `API_TOKEN=devtoken123` (или любой другой случайный токен). Флаг
+   `SHOW_RECON_STATUS=true` оставляет на дашборде сводку сверки позиций.
 8. Выполните дымовой тест: запустите минимальную выборку pytest, чтобы
    убедиться, что окружение собрано корректно:
    ```bash

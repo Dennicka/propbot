@@ -555,13 +555,25 @@ class SafetyState:
         payload["liquidity_reason"] = self.liquidity_reason
         payload["liquidity_snapshot"] = dict(self.liquidity_snapshot)
         payload["desync_detected"] = bool(self.desync_detected)
-        payload["reconciliation"] = {
-            "desync_detected": bool(self.desync_detected),
-            **{str(k): v for k, v in self.reconciliation_snapshot.items()},
-        } if self.reconciliation_snapshot else {
-            "desync_detected": bool(self.desync_detected),
-            "issues": [],
-        }
+        if self.reconciliation_snapshot:
+            snapshot = {str(k): v for k, v in self.reconciliation_snapshot.items()}
+        else:
+            snapshot = {}
+        snapshot.setdefault("desync_detected", bool(self.desync_detected))
+        issues = snapshot.get("issues")
+        if isinstance(issues, Sequence):
+            snapshot["issues"] = [dict(issue) for issue in issues if isinstance(issue, Mapping)]
+        else:
+            snapshot["issues"] = []
+        diffs = snapshot.get("diffs")
+        if isinstance(diffs, Sequence):
+            snapshot["diffs"] = [dict(diff) for diff in diffs if isinstance(diff, Mapping)]
+        else:
+            snapshot["diffs"] = []
+        snapshot.setdefault("issue_count", len(snapshot["issues"]))
+        snapshot.setdefault("diff_count", len(snapshot["diffs"]))
+        snapshot.setdefault("auto_hold", False)
+        payload["reconciliation"] = snapshot
         payload["runaway_guard"] = self.runaway_guard.as_dict()
         return payload
 
@@ -1314,18 +1326,25 @@ def get_liquidity_status() -> Dict[str, object]:
 
 def update_reconciliation_status(
     *,
-    desync_detected: bool,
-    issues: Sequence[Mapping[str, Any]],
+    desync_detected: bool | None = None,
+    issues: Sequence[Mapping[str, Any]] | None = None,
+    diffs: Sequence[Mapping[str, Any]] | None = None,
     last_checked: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Dict[str, object]:
     timestamp = last_checked or _ts()
-    issue_list = [dict(issue) for issue in issues]
+    issue_list = [dict(issue) for issue in issues] if issues else []
+    diff_list = [dict(diff) for diff in diffs] if diffs else []
+    desync_flag = bool(issue_list or diff_list)
+    if desync_detected is not None:
+        desync_flag = bool(desync_detected) or desync_flag
     snapshot: Dict[str, Any] = {
-        "desync_detected": bool(desync_detected),
+        "desync_detected": desync_flag,
         "last_checked": timestamp,
         "issues": issue_list,
+        "diffs": diff_list,
         "issue_count": len(issue_list),
+        "diff_count": len(diff_list),
     }
     if metadata:
         snapshot.update({str(key): value for key, value in metadata.items()})
@@ -1334,9 +1353,9 @@ def update_reconciliation_status(
         safety = _STATE.safety
         previous_snapshot = dict(safety.reconciliation_snapshot)
         previous_flag = bool(safety.desync_detected)
-        safety.desync_detected = bool(desync_detected)
+        safety.desync_detected = bool(desync_flag)
         safety.reconciliation_snapshot = snapshot
-        if previous_flag != bool(desync_detected) or previous_snapshot != snapshot:
+        if previous_flag != bool(desync_flag) or previous_snapshot != snapshot:
             persist_snapshot = safety.as_dict()
     if persist_snapshot is not None:
         _persist_safety_snapshot(persist_snapshot)
@@ -1351,10 +1370,15 @@ def get_reconciliation_status() -> Dict[str, object]:
             snapshot = {
                 "desync_detected": bool(safety.desync_detected),
                 "issues": [],
+                "diffs": [],
                 "issue_count": 0,
+                "diff_count": 0,
             }
         snapshot.setdefault("desync_detected", bool(safety.desync_detected))
         snapshot.setdefault("issue_count", len(snapshot.get("issues", [])))
+        snapshot.setdefault("diffs", [])
+        snapshot.setdefault("diff_count", len(snapshot.get("diffs", [])))
+        snapshot.setdefault("auto_hold", False)
         return snapshot
 
 
@@ -2069,14 +2093,25 @@ def _load_persisted_state(state: RuntimeState) -> None:
                 ]
             else:
                 snapshot["issues"] = []
+            diffs_payload = snapshot.get("diffs")
+            if isinstance(diffs_payload, list):
+                snapshot["diffs"] = [
+                    dict(diff) for diff in diffs_payload if isinstance(diff, Mapping)
+                ]
+            else:
+                snapshot["diffs"] = []
             snapshot.setdefault("desync_detected", safety.desync_detected)
             snapshot.setdefault("issue_count", len(snapshot.get("issues", [])))
+            snapshot.setdefault("diff_count", len(snapshot.get("diffs", [])))
+            snapshot.setdefault("auto_hold", False)
             safety.reconciliation_snapshot = snapshot
         else:
             safety.reconciliation_snapshot = {
                 "desync_detected": safety.desync_detected,
                 "issues": [],
+                "diffs": [],
                 "issue_count": 0,
+                "diff_count": 0,
             }
         resume_payload = safety_payload.get("resume_request")
         if isinstance(resume_payload, Mapping):
