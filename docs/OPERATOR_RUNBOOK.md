@@ -70,6 +70,9 @@ python -m app.tools.replay_runner --file data/replay/sample.jsonl
   управляются переменными `REBALANCER_INTERVAL_SEC`, `REBALANCER_RETRY_DELAY_SEC`, `REBALANCER_BATCH_NOTIONAL_USD`, `REBALANCER_MAX_RETRY`.
 - Каждая попытка фиксируется в `positions_store` и `ledger`, UI отображает лейбл `PARTIAL/REBALANCING`, количество попыток и последнее сообщение об ошибке
   в `/api/ui/status` и на `/ui/dashboard`.
+- Для остаточной дельты запущен планировщик `app/services/partial_hedge_runner.PartialHedgeRunner`. Флаги `HEDGE_ENABLED`, `HEDGE_INTERVAL_SEC`, `HEDGE_MIN_NOTIONAL_USDT`, `HEDGE_MAX_NOTIONAL_USDT_PER_ORDER`, `HEDGE_DRY_RUN` задают периодичность и лимиты. В режиме dry-run (`HEDGE_DRY_RUN=1`) ордера не отправляются — доступен только просмотр плана.
+- План частичного хеджа можно запросить через `GET /api/ui/hedge/plan`; ответ содержит список ордеров, агрегаты по символам и текущее состояние раннера. На `/ui/dashboard` отображается виджет «Partial Hedge» с таблицей заявок и кнопкой Execute.
+- Ручное исполнение делается `POST /api/ui/hedge/execute` с `{ "confirm": true }` и требует соблюдения Two-Man Rule — если включено двухоператорное подтверждение, нужно минимум две активные approvals. Неудачи вида `insufficient balance`/`price out of bounds` накапливаются; при трёх подряд срабатывает `engage_safety_hold("partial_hedge:auto_hold")`.
 
 ## TCA Preview и подбор маршрута
 
