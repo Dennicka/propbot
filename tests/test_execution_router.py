@@ -27,6 +27,7 @@ def _patch_runtime(monkeypatch):
     )
     monkeypatch.setattr(execution_router, "get_state", lambda: state)
     monkeypatch.setattr(execution_router, "is_dry_run_mode", lambda: False)
+    monkeypatch.setattr(execution_router, "get_liquidity_status", lambda: {})
 
 
 def test_choose_venue_prefers_best_effective_price(monkeypatch):

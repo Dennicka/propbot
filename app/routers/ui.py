@@ -4,12 +4,13 @@ import asyncio
 import csv
 import io
 import json
+import math
 import os
 import logging
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from urllib.parse import parse_qs
 
@@ -22,6 +23,7 @@ from ..metrics import set_auto_trade_state
 from ..audit_log import list_recent_operator_actions, log_operator_action
 from ..dashboard_helpers import render_dashboard_response
 from ..version import APP_VERSION
+from ..router.smart_router import SmartRouter, feature_enabled as smart_router_feature_enabled
 from ..tca.preview import compute_tca_preview, feature_enabled as tca_feature_enabled
 from ..capital_manager import get_capital_manager
 from ..pnl_report import DailyPnLReporter
@@ -70,12 +72,27 @@ from ..services.strategy_status import build_strategy_status
 from ..orchestrator import orchestrator
 from ..services.positions_view import build_positions_snapshot
 from ..utils import redact_sensitive_data
+from ..utils.symbols import normalise_symbol
 from ..utils.operators import OperatorIdentity, resolve_operator_identity
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
 from services.audit_snapshot import get_recent_audit_snapshot
 from services.daily_reporter import load_latest_report
 from services.snapshotter import create_snapshot
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float):
+        if math.isinf(value):
+            return "inf"
+        if math.isnan(value):
+            return "nan"
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(val) for key, val in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 logger = logging.getLogger(__name__)
@@ -149,6 +166,71 @@ def tca_preview_endpoint(
         logger.exception("failed to compute tca preview", extra={"pair": pair})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error") from exc
     return payload
+
+
+@router.get("/router/preview")
+def smart_router_preview(
+    request: Request,
+    symbol: str = Query(..., description="Target symbol (e.g. BTCUSDT)"),
+    side: str = Query(..., description="buy/sell or long/short"),
+    qty: float = Query(..., gt=0.0, description="Order size in base units"),
+    book_liq: float | None = Query(
+        None,
+        ge=0.0,
+        description="Optional uniform book liquidity per venue in USDT",
+    ),
+    lat_rest: float | None = Query(
+        None,
+        ge=0.0,
+        description="Optional REST latency override in ms",
+    ),
+    lat_ws: float | None = Query(
+        None,
+        ge=0.0,
+        description="Optional websocket latency override in ms",
+    ),
+) -> dict[str, Any]:
+    require_token(request)
+    if not smart_router_feature_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="smart router disabled")
+    symbol_clean = normalise_symbol(symbol)
+    side_normalised = str(side or "").strip().lower()
+    if side_normalised not in {"buy", "sell", "long", "short"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid side")
+    try:
+        qty_value = float(qty)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="qty must be numeric")
+    if qty_value <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="qty must be positive")
+
+    router = SmartRouter()
+    venues = list(router.available_venues())
+    if not venues:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="no venues available")
+
+    book_map = {venue: float(book_liq) for venue in venues} if book_liq is not None else None
+    rest_map = {venue: float(lat_rest) for venue in venues} if lat_rest is not None else None
+    ws_map = {venue: float(lat_ws) for venue in venues} if lat_ws is not None else None
+
+    best, scores = router.choose(
+        venues,
+        side=side_normalised,
+        qty=qty_value,
+        symbol=symbol_clean,
+        book_liquidity_usdt=book_map,
+        rest_latency_ms=rest_map,
+        ws_latency_ms=ws_map,
+    )
+
+    return {
+        "symbol": symbol_clean,
+        "side": side_normalised,
+        "qty": qty_value,
+        "venues": venues,
+        "best": best,
+        "scores": {venue: _json_safe(payload) for venue, payload in scores.items()},
+    }
 
 
 @router.get("/runtime_badges")

@@ -28,6 +28,7 @@ from .runtime import (
     get_chaos_state,
     get_last_opportunity_state,
     get_liquidity_status,
+    get_market_data,
     get_reconciliation_status,
     get_state,
 )
@@ -56,7 +57,9 @@ from ..strategy_risk import get_strategy_risk_manager
 from ..universe.gate import is_universe_enforced
 from .strategy_status import build_strategy_status
 from .live_readiness import compute_readiness
+from ..router.smart_router import SmartRouter, feature_enabled as smart_router_feature_enabled
 from ..tca.preview import compute_tca_preview, feature_enabled as tca_feature_enabled
+from ..utils.symbols import normalise_symbol
 
 
 logger = logging.getLogger(__name__)
@@ -539,23 +542,24 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     live_readiness = compute_readiness(request.app)
 
+    config_data = getattr(state.config, "data", None)
+    derivatives_cfg = getattr(config_data, "derivatives", None) if config_data else None
+    arbitrage_cfg = getattr(derivatives_cfg, "arbitrage", None) if derivatives_cfg else None
+    pairs_cfg = getattr(arbitrage_cfg, "pairs", None) if arbitrage_cfg else None
+    default_symbol: str | None = None
+    if pairs_cfg:
+        for entry in pairs_cfg:
+            symbol_candidate = getattr(getattr(entry, "long", None), "symbol", None)
+            if not symbol_candidate:
+                symbol_candidate = getattr(getattr(entry, "short", None), "symbol", None)
+            if symbol_candidate:
+                default_symbol = str(symbol_candidate)
+                break
+
     tca_preview_payload: Dict[str, object] | None = None
     tca_preview_error: str | None = None
     if tca_feature_enabled():
         try:
-            config_data = getattr(state.config, "data", None)
-            derivatives_cfg = getattr(config_data, "derivatives", None) if config_data else None
-            arbitrage_cfg = getattr(derivatives_cfg, "arbitrage", None) if derivatives_cfg else None
-            pairs_cfg = getattr(arbitrage_cfg, "pairs", None) if arbitrage_cfg else None
-            default_symbol: str | None = None
-            if pairs_cfg:
-                for entry in pairs_cfg:
-                    symbol_candidate = getattr(getattr(entry, "long", None), "symbol", None)
-                    if not symbol_candidate:
-                        symbol_candidate = getattr(getattr(entry, "short", None), "symbol", None)
-                    if symbol_candidate:
-                        default_symbol = str(symbol_candidate)
-                        break
             if default_symbol:
                 tca_preview_payload = compute_tca_preview(
                     default_symbol,
@@ -570,6 +574,58 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         except Exception as exc:  # pragma: no cover - defensive
             tca_preview_error = str(exc)
             logger.debug("tca preview unavailable", exc_info=exc)
+
+    smart_router_preview: Dict[str, object] | None = None
+    smart_router_error: str | None = None
+    if smart_router_feature_enabled():
+        try:
+            router = SmartRouter()
+            venues = list(router.available_venues())
+            if venues and default_symbol:
+                market_data = get_market_data()
+                symbol_norm = normalise_symbol(default_symbol)
+                price_hint = 0.0
+                for venue in venues:
+                    try:
+                        book = market_data.top_of_book(venue, symbol_norm)
+                    except Exception:
+                        continue
+                    ask = _coerce_float(book.get("ask"))
+                    bid = _coerce_float(book.get("bid"))
+                    if ask > 0:
+                        price_hint = ask
+                        break
+                    if bid > 0 and price_hint <= 0:
+                        price_hint = bid
+                order_notional = getattr(state.control, "order_notional_usdt", None)
+                qty_value = None
+                if order_notional and price_hint and price_hint > 0:
+                    qty_value = float(order_notional) / float(price_hint)
+                if qty_value is None or qty_value <= 0:
+                    qty_value = 1.0
+                best, scores = router.choose(
+                    venues,
+                    side="buy",
+                    qty=qty_value,
+                    symbol=default_symbol,
+                )
+                smart_router_preview = {
+                    "symbol": default_symbol,
+                    "side": "buy",
+                    "qty": qty_value,
+                    "venues": venues,
+                    "best": best,
+                    "scores": scores,
+                }
+            elif not venues:
+                smart_router_error = "no venues available"
+            else:
+                smart_router_error = "no arbitrage pair symbol available"
+        except RuntimeError as exc:
+            smart_router_error = str(exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            smart_router_error = str(exc)
+            logger.debug("smart router preview unavailable", exc_info=exc)
 
     return {
         "request": request,
@@ -637,6 +693,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "universe_enforced": is_universe_enforced(),
         "tca_preview": tca_preview_payload,
         "tca_preview_error": tca_preview_error,
+        "smart_router_preview": smart_router_preview,
+        "smart_router_error": smart_router_error,
     }
 
 
@@ -870,6 +928,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     partial_rebalance = context.get("partial_rebalance", {}) or {}
     tca_preview_payload = context.get("tca_preview")
     tca_preview_error = context.get("tca_preview_error")
+    smart_router_preview = context.get("smart_router_preview")
+    smart_router_error = context.get("smart_router_error")
 
     pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
     pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
@@ -1402,6 +1462,59 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 preview_blocks.append("<p class=\"note\">No venue routes evaluated.</p>")
         preview_blocks.append("</div>")
         parts.append("".join(preview_blocks))
+
+    if smart_router_error or smart_router_preview:
+        router_blocks: list[str] = ["<div class=\"router-preview\"><h2>Router preview</h2>"]
+        if smart_router_error:
+            router_blocks.append(f"<p class=\"note\">{_fmt(smart_router_error)}</p>")
+        elif isinstance(smart_router_preview, Mapping):
+            qty_value = smart_router_preview.get("qty")
+            side_value = smart_router_preview.get("side")
+            router_blocks.append(
+                "<p class=\"note\">Side {side} · Qty {qty}</p>".format(
+                    side=_fmt(side_value).upper() or "N/A",
+                    qty=_fmt(qty_value),
+                )
+            )
+            best_venue = smart_router_preview.get("best")
+            venues = smart_router_preview.get("venues") or []
+            scores_payload = smart_router_preview.get("scores")
+            if not isinstance(scores_payload, Mapping):
+                scores_payload = {}
+            router_blocks.append(
+                "<table><thead><tr><th>Venue</th><th>Score (USDT)</th><th>Base cost</th><th>Impact penalty</th><th>Latency penalty</th><th>REST ms</th><th>WS ms</th><th>Book liq (USDT)</th></tr></thead><tbody>"
+            )
+            for venue in venues:
+                payload = scores_payload.get(venue)
+                highlight = " class=\"best\"" if venue == best_venue else ""
+                if isinstance(payload, Mapping):
+                    score_value = _fmt(payload.get("score"))
+                    base_cost = _fmt(payload.get("base_cost_usdt"))
+                    impact_penalty = _fmt(payload.get("impact_penalty_usdt"))
+                    latency_penalty = _fmt(payload.get("latency_penalty_usdt"))
+                    rest_ms = _fmt(payload.get("rest_latency_ms"))
+                    ws_ms = _fmt(payload.get("ws_latency_ms"))
+                    liquidity_value = _fmt(payload.get("book_liquidity_usdt"))
+                else:
+                    score_value = base_cost = impact_penalty = latency_penalty = rest_ms = ws_ms = liquidity_value = "n/a"
+                router_blocks.append(
+                    (
+                        "<tr{highlight}><th>{venue}</th><td>{score}</td><td>{base}</td><td>{impact}</td><td>{latency}</td><td>{rest}</td><td>{ws}</td><td>{liq}</td></tr>"
+                    ).format(
+                        highlight=highlight,
+                        venue=_fmt(venue),
+                        score=score_value,
+                        base=base_cost,
+                        impact=impact_penalty,
+                        latency=latency_penalty,
+                        rest=rest_ms,
+                        ws=ws_ms,
+                        liq=liquidity_value,
+                    )
+                )
+            router_blocks.append("</tbody></table>")
+        router_blocks.append("</div>")
+        parts.append("".join(router_blocks))
 
 
     strategy_pnl_tracker_snapshot = context.get("strategy_pnl_tracker_snapshot", {}) or {}
