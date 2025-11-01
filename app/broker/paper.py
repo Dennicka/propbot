@@ -81,6 +81,19 @@ class PaperBroker(Broker):
     async def cancel(self, *, venue: str, order_id: int) -> None:
         await asyncio.to_thread(ledger.update_order_status, order_id, "cancelled")
 
+    async def cancel_all(
+        self,
+        *,
+        venue: str | None = None,
+        batch_id: str | None = None,
+    ) -> Dict[str, object]:
+        target = str(venue or self.venue).lower()
+        orders = await asyncio.to_thread(ledger.fetch_open_orders)
+        affected = [order for order in orders if str(order.get("venue") or "").lower() == target]
+        for order in affected:
+            await asyncio.to_thread(ledger.update_order_status, int(order.get("id", 0)), "cancelled")
+        return {"cancelled": len(affected), "failed": 0, "batch_id": batch_id}
+
     async def positions(self, *, venue: str) -> Dict[str, object]:
         rows = await asyncio.to_thread(ledger.fetch_positions)
         return {"positions": [row for row in rows if row["venue"] == (venue or self.venue)]}

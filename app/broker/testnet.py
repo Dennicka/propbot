@@ -257,6 +257,42 @@ class TestnetBroker(Broker):
             payload={"venue": venue or self.venue, "order_id": order_id, "symbol": symbol},
         )
 
+    async def cancel_all(
+        self,
+        *,
+        venue: str | None = None,
+        batch_id: str | None = None,
+    ) -> Dict[str, object]:
+        target_venue = venue or self.venue
+        if not self._should_place():
+            return await self._paper.cancel_all(venue=target_venue, batch_id=batch_id)
+        client = self._client()
+        if client is None:
+            return await self._paper.cancel_all(venue=target_venue, batch_id=batch_id)
+        cancel_all_fn = getattr(client, "cancel_all_orders", None)
+        if callable(cancel_all_fn):
+            params: Dict[str, object] = {}
+            if batch_id:
+                params["batch_id"] = batch_id
+            try:
+                await self._invoke_with_retries(cancel_all_fn, **params)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                ledger.record_event(
+                    level="ERROR",
+                    code="testnet_cancel_all_error",
+                    payload={"venue": target_venue, "error": str(exc)},
+                )
+                return await self._paper.cancel_all(venue=target_venue, batch_id=batch_id)
+        orders = await asyncio.to_thread(ledger.fetch_open_orders)
+        affected = [
+            order
+            for order in orders
+            if str(order.get("venue") or "").lower() == str(target_venue).lower()
+        ]
+        for order in affected:
+            await asyncio.to_thread(ledger.update_order_status, int(order.get("id", 0)), "cancelled")
+        return {"cancelled": len(affected), "failed": 0, "batch_id": batch_id}
+
     async def positions(self, *, venue: str) -> Dict[str, object]:
         if not self._should_place():
             return await self._paper.positions(venue=venue)

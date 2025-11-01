@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -47,6 +48,7 @@ from .services.exchange_watchdog_runner import setup_exchange_watchdog
 from .services.autopilot_guard import setup_autopilot_guard
 from .services.partial_hedge_runner import setup_partial_hedge_runner
 from .services.recon_runner import setup_recon_runner
+from .services import runtime as runtime_service
 
 
 def _should_guard(request: Request) -> bool:
@@ -154,6 +156,14 @@ def create_app() -> FastAPI:
     setup_recon_runner(app)
     setup_partial_hedge_runner(app)
     setup_slo_monitor(app)
+
+    @app.on_event("startup")
+    async def _install_shutdown_handlers() -> None:  # pragma: no cover - integration glue
+        try:
+            runtime_service.setup_signal_handlers(asyncio.get_running_loop())
+        except RuntimeError:  # pragma: no cover - no running loop
+            logger.debug("signal handler installation skipped: no running loop")
+
     return app
 
 

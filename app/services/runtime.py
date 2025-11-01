@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import inspect
+import logging
 import os
+import signal
 import time
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from ..audit_log import log_operator_action
+from .. import ledger
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
 from ..metrics import set_auto_trade_state, slo
@@ -26,6 +32,15 @@ from ..utils.chaos import (
     configure as configure_chaos,
     resolve_settings as resolve_chaos_settings,
 )
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+_SHUTDOWN_LOCK: asyncio.Lock | None = None
+_SHUTDOWN_STARTED = False
+_LAST_SHUTDOWN_RESULT: Dict[str, object] | None = None
+_SIGNAL_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 DEFAULT_CONFIG_PATHS = {
@@ -1605,7 +1620,10 @@ def get_last_plan() -> Dict[str, object] | None:
 
 def reset_for_tests() -> None:
     """Helper used in tests to reset runtime state."""
-    global _STATE
+    global _STATE, _SHUTDOWN_LOCK, _SHUTDOWN_STARTED, _LAST_SHUTDOWN_RESULT
+    _SHUTDOWN_LOCK = None
+    _SHUTDOWN_STARTED = False
+    _LAST_SHUTDOWN_RESULT = None
     with _STATE_LOCK:
         _STATE = _bootstrap_runtime()
         _load_persisted_state(_STATE)
@@ -2333,4 +2351,210 @@ class HoldActiveError(RuntimeError):
         super().__init__(reason)
         self.reason = reason
 
+
+def _coerce_text(value: object) -> str:
+    return str(value) if value is not None else ""
+
+
+def _batch_id_for_orders(orders: Iterable[Mapping[str, object]]) -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    hasher = hashlib.sha256()
+    normalised: list[dict[str, object]] = []
+    for order in orders:
+        normalised.append(
+            {
+                "id": int(order.get("id", 0)),
+                "venue": _coerce_text(order.get("venue")),
+                "symbol": _coerce_text(order.get("symbol")),
+                "idemp_key": _coerce_text(order.get("idemp_key")),
+            }
+        )
+    for entry in sorted(normalised, key=lambda item: (item["venue"].lower(), item["id"])):
+        hasher.update(str(entry["id"]).encode("utf-8"))
+        if entry["venue"]:
+            hasher.update(entry["venue"].lower().encode("utf-8"))
+        if entry["symbol"]:
+            hasher.update(entry["symbol"].upper().encode("utf-8"))
+        if entry["idemp_key"]:
+            hasher.update(entry["idemp_key"].encode("utf-8"))
+    digest = hasher.hexdigest()[:12]
+    return f"shutdown-{timestamp}-{digest}"
+
+
+def setup_signal_handlers(loop: asyncio.AbstractEventLoop | None = None) -> None:
+    """Register SIGTERM/SIGINT handlers for graceful shutdown."""
+
+    global _SIGNAL_LOOP
+
+    try:
+        candidate_loop = loop or asyncio.get_event_loop()
+    except RuntimeError:
+        LOGGER.debug("no running loop available for shutdown handlers")
+        return
+
+    _SIGNAL_LOOP = candidate_loop
+
+    def _handler(signum: int, frame) -> None:  # pragma: no cover - exercised via tests
+        handle_shutdown_signal(signum)
+
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, RuntimeError):  # pragma: no cover - unsupported in env
+            LOGGER.debug("failed to install signal handler", exc_info=True)
+
+
+def handle_shutdown_signal(signum: int) -> asyncio.Task[Dict[str, object]] | None:
+    """Schedule shutdown coroutine; returns created task for observability."""
+
+    loop: asyncio.AbstractEventLoop | None = None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _SIGNAL_LOOP
+    if loop is None or loop.is_closed():
+        LOGGER.debug("shutdown signal ignored — no active loop", extra={"signal": signum})
+        return None
+    try:
+        signal_name = signal.Signals(signum).name
+    except Exception:  # pragma: no cover - defensive
+        signal_name = str(signum)
+    LOGGER.info("shutdown signal received", extra={"signal": signal_name})
+    return loop.create_task(on_shutdown(reason=signal_name))
+
+
+async def _stop_component(
+    label: str,
+    stop_func: Callable[[], Awaitable[object] | object],
+) -> dict[str, object]:
+    try:
+        result = stop_func()
+        if inspect.isawaitable(result):
+            await result
+        LOGGER.info("component stopped", extra={"component": label})
+        return {"component": label, "status": "stopped"}
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.exception("component stop failed", extra={"component": label})
+        return {"component": label, "status": "error", "error": str(exc)}
+
+
+async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
+    """Engage HOLD, stop background workers and cancel open orders."""
+
+    global _SHUTDOWN_LOCK, _SHUTDOWN_STARTED, _LAST_SHUTDOWN_RESULT
+
+    if _SHUTDOWN_LOCK is None:
+        _SHUTDOWN_LOCK = asyncio.Lock()
+
+    async with _SHUTDOWN_LOCK:
+        if _SHUTDOWN_STARTED:
+            return _LAST_SHUTDOWN_RESULT or {"status": "duplicate"}
+        _SHUTDOWN_STARTED = True
+
+        shutdown_reason = reason or "signal"
+        LOGGER.info("initiating shutdown", extra={"reason": shutdown_reason})
+        summary: Dict[str, object] = {"reason": shutdown_reason}
+
+        hold_changed = engage_safety_hold("shutdown", source="signal_handler")
+        set_mode("HOLD")
+        summary["hold_engaged"] = hold_changed or bool(get_state().safety.hold_active)
+
+        stop_results: list[dict[str, object]] = []
+        try:
+            from . import loop as loop_service
+
+            stop_results.append(await _stop_component("loop", loop_service.stop_loop))
+        except Exception as exc:  # pragma: no cover - defensive import failure
+            LOGGER.debug("loop.stop_loop not available", exc_info=True)
+            stop_results.append({"component": "loop", "status": "error", "error": str(exc)})
+
+        stoppables: list[tuple[str, Callable[[], Awaitable[object] | object]]] = []
+        try:
+            from .partial_hedge_runner import get_runner as get_partial_runner
+
+            stoppables.append(("partial_hedge_runner", lambda: get_partial_runner().stop()))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("partial hedge runner unavailable", exc_info=True)
+        try:
+            from .recon_runner import get_runner as get_recon_runner
+
+            stoppables.append(("recon_runner", lambda: get_recon_runner().stop()))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("recon runner unavailable", exc_info=True)
+        try:
+            from .exchange_watchdog_runner import get_runner as get_watchdog_runner
+
+            stoppables.append(("exchange_watchdog", lambda: get_watchdog_runner().stop()))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("exchange watchdog runner unavailable", exc_info=True)
+        try:
+            from ..auto_hedge_daemon import _daemon as auto_hedge_daemon
+
+            stoppables.append(("auto_hedge_daemon", auto_hedge_daemon.stop))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("auto hedge daemon unavailable", exc_info=True)
+        try:
+            from .autopilot_guard import get_guard as get_autopilot_guard
+
+            stoppables.append(("autopilot_guard", lambda: get_autopilot_guard().stop()))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("autopilot guard unavailable", exc_info=True)
+        try:
+            from .orchestrator_alerts import _ALERT_LOOP
+
+            stoppables.append(("orchestrator_alerts", _ALERT_LOOP.stop))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("orchestrator alerts unavailable", exc_info=True)
+        try:
+            from services.opportunity_scanner import get_scanner
+
+            stoppables.append(("opportunity_scanner", lambda: get_scanner().stop()))
+        except Exception:  # pragma: no cover
+            LOGGER.debug("opportunity scanner unavailable", exc_info=True)
+
+        for label, stopper in stoppables:
+            stop_results.append(await _stop_component(label, stopper))
+
+        summary["stopped"] = stop_results
+
+        try:
+            open_orders = await asyncio.to_thread(ledger.fetch_open_orders)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.exception("failed to load open orders prior to cancel-all")
+            open_orders = []
+
+        batch_id = _batch_id_for_orders(open_orders)
+        cancel_summary = {"batch_id": batch_id, "cancelled": 0, "failed": 0, "venues": []}
+        if open_orders:
+            from ..broker.router import ExecutionRouter
+
+            router = ExecutionRouter()
+            grouped: Dict[str, list[Dict[str, object]]] = {}
+            for order in open_orders:
+                venue_key = _coerce_text(order.get("venue")).lower()
+                grouped.setdefault(venue_key, []).append(order)
+            for venue_key, venue_orders in grouped.items():
+                venue_batch = f"{batch_id}:{venue_key}" if batch_id else None
+                try:
+                    result = await router.cancel_all(
+                        venue=venue_key,
+                        orders=venue_orders,
+                        batch_id=venue_batch,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    LOGGER.exception("cancel-all failed", extra={"venue": venue_key})
+                    result = {"venue": venue_key, "cancelled": 0, "failed": len(venue_orders), "error": str(exc)}
+                cancel_summary["cancelled"] += int(result.get("cancelled", 0) or 0)
+                cancel_summary["failed"] += int(result.get("failed", 0) or 0)
+                cancel_summary["venues"].append(result)
+        summary["cancel_all"] = cancel_summary
+
+        if cancel_summary["cancelled"]:
+            remaining = await asyncio.to_thread(ledger.fetch_open_orders)
+            set_open_orders(remaining)
+
+        _LAST_SHUTDOWN_RESULT = dict(summary)
+        return summary
 
