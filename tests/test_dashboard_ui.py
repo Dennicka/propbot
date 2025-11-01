@@ -629,7 +629,15 @@ def test_dashboard_shows_risk_throttle_banner(monkeypatch, client) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "risk-throttle")
 
-    runtime.engage_safety_hold(risk_guard.REASON_PARTIAL_STALLED, source="risk_guard")
+    runtime.update_risk_throttle(True, reason="LOW_SUCCESS_RATE", source="test")
+    runtime.update_risk_snapshot(
+        {
+            "governor": {
+                "success_rate_1h": 0.91,
+                "reason": "LOW_SUCCESS_RATE",
+            }
+        }
+    )
 
     response = client.get(
         "/ui/dashboard",
@@ -640,6 +648,8 @@ def test_dashboard_shows_risk_throttle_banner(monkeypatch, client) -> None:
     html = response.text
     assert "RISK_THROTTLED" in html
     assert "Manual two-step RESUME approval required" in html
+    assert "Trigger: LOW_SUCCESS_RATE" in html
+    assert "Success rate (1h): 91.00%" in html
 
 
 def test_dashboard_shows_exchange_watchdog_reason(monkeypatch, client) -> None:

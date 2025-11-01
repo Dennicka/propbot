@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover
 
 from . import InMemoryDerivClient, build_in_memory_client
 from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
+from app.watchdog.broker_watchdog import get_broker_watchdog
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from ..core.config import DerivVenueConfig
@@ -40,6 +41,7 @@ class BinanceUMClient:
         self._client: Optional[httpx.Client] = None
         self._api_key = os.getenv("BINANCE_UM_API_KEY_TESTNET")
         self._api_secret = os.getenv("BINANCE_UM_API_SECRET_TESTNET")
+        self._watchdog = get_broker_watchdog()
 
         if not safe_mode:
             if not self._api_key or not self._api_secret:
@@ -79,17 +81,47 @@ class BinanceUMClient:
         params.setdefault("timestamp", self._timestamp())
         headers = {"X-MBX-APIKEY": self._api_key or ""}
         signed = self._sign(params.copy())
-        maybe_raise_rest_timeout(context="binance_um.signed_request")
-        response = client.request(method, path, params=signed, headers=headers)
-        response.raise_for_status()
-        return response.json()
+        try:
+            maybe_raise_rest_timeout(context="binance_um.signed_request")
+            response = client.request(method, path, params=signed, headers=headers)
+            response.raise_for_status()
+        except httpx.TimeoutException:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                self._watchdog.record_rest_error(self.config.id, "5xx")
+            else:
+                self._watchdog.record_rest_error(self.config.id, "error")
+            raise
+        except TimeoutError:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
+        else:
+            self._watchdog.record_rest_ok(self.config.id)
+            return response.json()
 
     def _public_get(self, path: str, params: Dict[str, Any] | None = None) -> Dict[str, Any] | list[Any]:
         client = self._ensure_http()
-        maybe_raise_rest_timeout(context="binance_um.public_get")
-        response = client.get(path, params=params or {})
-        response.raise_for_status()
-        return response.json()
+        try:
+            maybe_raise_rest_timeout(context="binance_um.public_get")
+            response = client.get(path, params=params or {})
+            response.raise_for_status()
+        except httpx.TimeoutException:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                self._watchdog.record_rest_error(self.config.id, "5xx")
+            else:
+                self._watchdog.record_rest_error(self.config.id, "error")
+            raise
+        except TimeoutError:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
+        else:
+            self._watchdog.record_rest_ok(self.config.id)
+            return response.json()
 
     # ------------------------------------------------------------------
     # Public market data

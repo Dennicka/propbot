@@ -42,6 +42,12 @@ from .observability import (
     set_watchdog_health,
     set_watchdog_state_metric,
 )
+from .risk_governor import (
+    increment_window as increment_risk_window,
+    set_error_rate as set_risk_error_rate,
+    set_success_rate as set_risk_success_rate,
+    set_throttled as set_risk_throttled,
+)
 
 __all__ = [
     "AUTO_TRADE_GAUGE",
@@ -80,4 +86,8 @@ __all__ = [
     "set_watchdog_health",
     "set_watchdog_state_metric",
     "register_slo_metrics",
+    "set_risk_success_rate",
+    "set_risk_error_rate",
+    "set_risk_throttled",
+    "increment_risk_window",
 ]

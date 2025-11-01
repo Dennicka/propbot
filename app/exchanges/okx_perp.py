@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover
 
 from . import InMemoryDerivClient, build_in_memory_client
 from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
+from app.watchdog.broker_watchdog import get_broker_watchdog
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.config import DerivVenueConfig
@@ -40,6 +41,7 @@ class OKXPerpClient:
         self._filters_cache: Dict[str, Dict[str, float]] = {}
         self._fees_cache: Dict[str, Dict[str, float]] = {}
         self._client: Optional[httpx.Client] = None
+        self._watchdog = get_broker_watchdog()
 
         self._api_key = os.getenv("OKX_API_KEY_TESTNET")
         self._api_secret = os.getenv("OKX_API_SECRET_TESTNET")
@@ -89,18 +91,33 @@ class OKXPerpClient:
             "OK-ACCESS-PASSPHRASE": self._passphrase or "",
             "Content-Type": "application/json",
         }
-        maybe_raise_rest_timeout(context="okx_perp.request")
-        response = client.request(
-            method,
-            path,
-            params=params or None,
-            data=body_json if body_json else None,
-            headers=headers,
-        )
-        response.raise_for_status()
+        try:
+            maybe_raise_rest_timeout(context="okx_perp.request")
+            response = client.request(
+                method,
+                path,
+                params=params or None,
+                data=body_json if body_json else None,
+                headers=headers,
+            )
+            response.raise_for_status()
+        except httpx.TimeoutException:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                self._watchdog.record_rest_error(self.config.id, "5xx")
+            else:
+                self._watchdog.record_rest_error(self.config.id, "error")
+            raise
+        except TimeoutError:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
         payload = response.json()
         if isinstance(payload, dict) and payload.get("code") not in ("0", 0, None):
+            self._watchdog.record_rest_error(self.config.id, str(payload.get("code")))
             raise RuntimeError(f"OKX error: {payload}")
+        self._watchdog.record_rest_ok(self.config.id)
         return payload.get("data", payload)
 
     def _public_get(
@@ -109,10 +126,24 @@ class OKXPerpClient:
         if self.safe_mode:
             raise RuntimeError("public requests not expected in SAFE_MODE")
         client = self._ensure_http()
-        maybe_raise_rest_timeout(context="okx_perp.public_get")
-        response = client.get(path, params=params or {})
-        response.raise_for_status()
+        try:
+            maybe_raise_rest_timeout(context="okx_perp.public_get")
+            response = client.get(path, params=params or {})
+            response.raise_for_status()
+        except httpx.TimeoutException:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                self._watchdog.record_rest_error(self.config.id, "5xx")
+            else:
+                self._watchdog.record_rest_error(self.config.id, "error")
+            raise
+        except TimeoutError:
+            self._watchdog.record_rest_error(self.config.id, "timeout")
+            raise
         payload = response.json()
+        self._watchdog.record_rest_ok(self.config.id)
         return payload.get("data", payload)
 
     # ------------------------------------------------------------------

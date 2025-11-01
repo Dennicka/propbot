@@ -901,10 +901,7 @@ async def risk_advice(request: Request) -> dict[str, Any]:
         "hold_since": safety.hold_since,
         "last_released_ts": safety.last_released_ts,
     }
-    risk_throttled = bool(
-        safety.hold_active
-        and str(safety.hold_reason or "").upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX)
-    )
+    risk_throttled = bool(getattr(safety, "risk_throttled", False))
     advice = adaptive_risk_advisor.generate_risk_advice(
         snapshots,
         hold_info=hold_info,
