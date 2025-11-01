@@ -529,3 +529,36 @@ def test_daily_loss_status_endpoint(client, monkeypatch):
     embedded = state_payload.get("daily_loss_cap")
     assert embedded
     assert embedded["losses_usdt"] == pytest.approx(30.0)
+
+def test_status_includes_watchdog_reason(client):
+    from app.watchdog.broker_watchdog import (
+        STATE_DOWN,
+        configure_broker_watchdog,
+        get_broker_watchdog,
+    )
+
+    configure_broker_watchdog(
+        thresholds={
+            "ws_lag_ms_p95": {"degraded": 400.0, "down": 1200.0},
+            "ws_disconnects_per_min": {"degraded": 2.0, "down": 6.0},
+            "rest_5xx_rate": {"degraded": 0.02, "down": 0.10},
+            "rest_timeouts_rate": {"degraded": 0.02, "down": 0.10},
+            "order_reject_rate": {"degraded": 0.01, "down": 0.05},
+        },
+        auto_hold_on_down=False,
+        block_on_down=True,
+    )
+    watchdog = get_broker_watchdog()
+    watchdog.record_ws_lag("binance", 1500.0)
+
+    overview = client.get("/api/ui/status/overview")
+    assert overview.status_code == 200
+    payload = overview.json()
+    watchdog_block = payload.get("watchdog")
+    assert isinstance(watchdog_block, dict)
+    assert watchdog_block.get("throttled") is True
+    assert isinstance(watchdog_block.get("last_reason"), str)
+    venue_snapshot = watchdog_block["per_venue"].get("binance")
+    assert venue_snapshot
+    assert venue_snapshot["state"] == STATE_DOWN
+    assert venue_snapshot["ws_lag_ms_p95"] >= 1500.0

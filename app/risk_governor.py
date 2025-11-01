@@ -12,6 +12,18 @@ from .services import portfolio, risk, runtime
 
 LOGGER = logging.getLogger(__name__)
 
+throttled: bool = False
+throttle_reason: str | None = None
+
+
+def set_throttle(active: bool, *, reason: str | None = None) -> None:
+    """Expose the current broker throttle state to downstream consumers."""
+
+    global throttled, throttle_reason
+    throttled = bool(active)
+    throttle_reason = reason if active else None
+    runtime.update_risk_throttle(active, reason=reason, source="risk_governor")
+
 
 @dataclass(frozen=True)
 class GovernorLimits:

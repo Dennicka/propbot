@@ -540,10 +540,12 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     hold_reason = str(safety_payload.get("hold_reason") or "")
     hold_reason_display = _format_hold_reason(hold_reason)
-    risk_throttled = bool(
-        safety_payload.get("hold_active")
-        and hold_reason.upper().startswith(risk_guard.AUTO_THROTTLE_PREFIX)
-    )
+    risk_throttled = bool(safety_payload.get("risk_throttled"))
+    throttle_reason = str(safety_payload.get("risk_throttle_reason") or "")
+    if not risk_throttled:
+        throttle_reason = ""
+    safety_payload["risk_throttle_reason"] = throttle_reason
+    safety_payload["risk_throttled"] = risk_throttled
     safety_payload["hold_reason_display"] = hold_reason_display
 
     pnl_history = list_recent_snapshots(limit=5)
@@ -843,7 +845,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "reconciliation": reconciliation_status,
         "runtime_snapshot": runtime_snapshot_payload,
         "risk_throttled": risk_throttled,
-        "risk_throttle_reason": hold_reason if risk_throttled else "",
+        "risk_throttle_reason": throttle_reason,
         "edge_guard": {
             "allowed": guard_allowed,
             "reason": guard_reason,

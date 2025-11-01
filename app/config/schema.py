@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 
 
 class RateLimitConfig(BaseModel):
@@ -26,6 +26,34 @@ class MaintenanceWindow(BaseModel):
     start: str
     end: str
     title: str | None = None
+
+
+class ThresholdBand(BaseModel):
+    degraded: float = Field(..., ge=0.0)
+    down: float = Field(..., ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate_order(self) -> "ThresholdBand":
+        if self.down < self.degraded:
+            raise ValueError("down must be >= degraded")
+        return self
+
+
+class BrokerWatchdogThresholds(BaseModel):
+    ws_lag_ms_p95: ThresholdBand
+    ws_disconnects_per_min: ThresholdBand
+    rest_5xx_rate: ThresholdBand
+    rest_timeouts_rate: ThresholdBand = Field(
+        default_factory=lambda: ThresholdBand(degraded=0.02, down=0.10)
+    )
+    order_reject_rate: ThresholdBand
+
+
+class BrokerWatchdogConfig(BaseModel):
+    auto_hold_on_down: bool = True
+    block_on_down: bool = True
+    error_budget_window_s: int = Field(600, ge=60)
+    thresholds: BrokerWatchdogThresholds
 
 
 class GuardsConfig(BaseModel):
@@ -215,6 +243,7 @@ class AppConfig(BaseModel):
     status_thresholds_file: str | None = None
     chaos: ChaosConfig | None = None
     incident: IncidentConfig | None = None
+    watchdog: BrokerWatchdogConfig | None = None
 
 
 @dataclass
@@ -229,6 +258,9 @@ __all__ = [
     "KillCapsConfig",
     "RunawayBreakerConfig",
     "MaintenanceWindow",
+    "ThresholdBand",
+    "BrokerWatchdogThresholds",
+    "BrokerWatchdogConfig",
     "GuardsConfig",
     "NotionalCapsConfig",
     "RiskConfig",

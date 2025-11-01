@@ -23,6 +23,7 @@ from ..services.runtime import (
     register_order_attempt,
     set_open_orders,
 )
+from ..watchdog.broker_watchdog import get_broker_watchdog
 from ..util.venues import VENUE_ALIASES
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -96,6 +97,7 @@ class ExecutionRouter:
                 required_env=("OKX_API_KEY_TESTNET", "OKX_API_SECRET_TESTNET", "OKX_API_PASSPHRASE_TESTNET"),
             ),
         }
+        self._watchdog = get_broker_watchdog()
 
     def _resolve_broker(self, exchange: str) -> Broker:
         canonical = VENUE_ALIASES.get(exchange.lower(), exchange.lower())
@@ -236,6 +238,9 @@ class ExecutionRouter:
                     venue=venue, symbol=symbol, side=side, original=price_to_use
                 )
             try:
+                if self._watchdog.should_block_orders(venue):
+                    raise HoldActiveError("WATCHDOG_DOWN")
+                self._watchdog.record_order_submit(venue)
                 register_order_attempt(
                     reason="runaway_orders_per_min",
                     source=f"execution_router:{venue}:{side.lower()}",

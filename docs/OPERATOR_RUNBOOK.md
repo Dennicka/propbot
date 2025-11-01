@@ -58,6 +58,31 @@ Runtime публикует отдельный блок «Reconciliation status»
 дублирует событие в `audit_log` от имени `system`. Интервал чтения задаётся
 флагом `AUTOPILOT_GUARD_INTERVAL_SEC` (по умолчанию 5 секунд). 【F:app/services/autopilot_guard.py†L24-L174】
 
+## Exchange Watchdog & Error-Budget
+
+`BrokerWatchdog` агрегирует операционные метрики по площадкам: лаг и разрывы
+веб-сокетов, REST-ошибки (5xx/таймауты) и частоту отказов заявок. Для каждой
+биржи рассчитываются rolling-метрики и сравниваются с порогами из конфигурации
+(`cfg.watchdog.thresholds`). Результат публикуется в `/api/ui/status` в виде
+блока `watchdog`, а на дашборде отображается бейдж «Exchange watchdog».
+
+* `state=OK` — показатели в норме, `risk_throttled=false`.
+* `state=DEGRADED` — превышены soft-пороги (например, 2+ disconnect в минуту);
+  Runtime включает `risk_throttled=true`, ордера продолжают выполняться через
+  обычные rate-limit'ы, но UI подчёркивает деградацию. Бейдж на дашборде
+  подсвечивается жёлтым, `watchdog.last_reason` указывает, какая метрика
+  превысила лимит (например, `binance:DEGRADED:ws_lag_ms_p95_elevated`).
+* `state=DOWN` — жёсткий порог (6 disconnect/min, spike по lag, серия
+  reject'ов). Если `cfg.watchdog.auto_hold_on_down=true`, Runtime переводит
+  систему в HOLD с причиной `EXCHANGE_WATCHDOG::<VENUE>::DOWN`, блокирует
+  отправку новых ордеров (`block_on_down=true`) и фиксирует событие в журнале.
+
+`BrokerWatchdog` ведёт error-budget с окном `cfg.watchdog.error_budget_window_s`
+и автоматически снимает троттлинг после двух последовательных стабильных окон.
+Все метрики экспортируются в Prometheus (`propbot_watchdog_*`) и доступны для
+алертинга: `watchdog_state{state="DOWN"}` — страница SRE, `auto_hold_total`
+используется для postmortem отчётов.
+
 ## Операционные сценарии
 
 ### Включить автоторговлю

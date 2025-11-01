@@ -8,6 +8,7 @@ from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_s
 from .partial_hedge_runner import get_partial_hedge_status
 from ..utils import redact_sensitive_data
 from ..version import APP_VERSION
+from ..watchdog.broker_watchdog import get_broker_watchdog
 from positions import list_open_positions
 
 
@@ -704,6 +705,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "last_execution_ts": auto_payload.get("last_execution_ts"),
         "last_success_ts": auto_payload.get("last_success_ts"),
     }
+    snapshot["watchdog"] = get_broker_watchdog().snapshot()
     return redact_sensitive_data(snapshot)
 
 

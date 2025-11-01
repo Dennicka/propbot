@@ -39,6 +39,7 @@ WATCHDOG_STATE_GAUGE: Gauge | None = None
 _WATCHDOG_STATE_VALUES = {
     "OK": 0.0,
     "DEGRADED": 1.0,
+    "DOWN": 2.0,
     "AUTO_HOLD": 2.0,
 }
 
@@ -85,7 +86,7 @@ def register_slo_metrics() -> bool:
         if WATCHDOG_STATE_GAUGE is None:
             WATCHDOG_STATE_GAUGE = Gauge(
                 "watchdog_state",
-                "Exchange watchdog state indicator (0=OK, 1=DEGRADED, 2=AUTO_HOLD).",
+                "Exchange watchdog state indicator (0=OK, 1=DEGRADED, 2=DOWN/AUTO_HOLD).",
                 ("venue",),
             )
     return True

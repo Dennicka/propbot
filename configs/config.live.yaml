@@ -9,6 +9,26 @@ guards:
   kill_caps: { enabled: true, flatten_on_breach: true }
   runaway_breaker: { place_per_min: 120, cancel_per_min: 240 }
   maintenance_calendar: []
+watchdog:
+  auto_hold_on_down: true
+  block_on_down: true
+  error_budget_window_s: 600
+  thresholds:
+    ws_lag_ms_p95:
+      degraded: 400
+      down: 1200
+    ws_disconnects_per_min:
+      degraded: 2
+      down: 6
+    rest_5xx_rate:
+      degraded: 0.02
+      down: 0.10
+    rest_timeouts_rate:
+      degraded: 0.02
+      down: 0.10
+    order_reject_rate:
+      degraded: 0.01
+      down: 0.05
 risk:
   notional_caps:
     per_symbol_usd: 500

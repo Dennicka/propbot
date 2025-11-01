@@ -17,6 +17,11 @@ from ..audit_log import log_operator_action
 from .. import ledger
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
+from ..watchdog.broker_watchdog import (
+    configure_broker_watchdog,
+    get_broker_watchdog,
+    STATE_DOWN,
+)
 from ..metrics import set_auto_trade_state, slo
 from ..persistence import state_store
 from ..runtime import leader_lock
@@ -536,6 +541,8 @@ class SafetyState:
     liquidity_snapshot: Dict[str, object] = field(default_factory=dict)
     desync_detected: bool = False
     reconciliation_snapshot: Dict[str, object] = field(default_factory=dict)
+    risk_throttled: bool = False
+    risk_throttle_reason: str | None = None
 
     def engage_hold(self, reason: str, *, source: str) -> bool:
         changed = not self.hold_active
@@ -571,6 +578,8 @@ class SafetyState:
         payload["liquidity_reason"] = self.liquidity_reason
         payload["liquidity_snapshot"] = dict(self.liquidity_snapshot)
         payload["desync_detected"] = bool(self.desync_detected)
+        payload["risk_throttled"] = self.risk_throttled
+        payload["risk_throttle_reason"] = self.risk_throttle_reason
         if self.reconciliation_snapshot:
             snapshot = {str(k): v for k, v in self.reconciliation_snapshot.items()}
         else:
@@ -682,6 +691,31 @@ def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
     return defaults
 
 
+def _extract_watchdog_thresholds(watchdog_cfg) -> Dict[str, Dict[str, float]]:
+    if watchdog_cfg is None:
+        return {}
+    thresholds = getattr(watchdog_cfg, "thresholds", None)
+    if thresholds is None:
+        return {}
+    if isinstance(thresholds, Mapping):
+        raw_mapping = thresholds
+    else:
+        try:
+            raw_mapping = thresholds.model_dump()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - defensive
+            raw_mapping = {}
+    result: Dict[str, Dict[str, float]] = {}
+    for metric, payload in raw_mapping.items():
+        if not isinstance(payload, Mapping):
+            continue
+        degraded = float(payload.get("degraded", 0.0) or 0.0)
+        down = float(payload.get("down", degraded) or degraded)
+        if down < degraded:
+            down = degraded
+        result[str(metric)] = {"degraded": degraded, "down": down}
+    return result
+
+
 def _bootstrap_runtime() -> RuntimeState:
     config_path = _resolve_config_path()
     loaded = load_app_config(config_path)
@@ -741,6 +775,18 @@ def _bootstrap_runtime() -> RuntimeState:
     metrics = MetricsState()
     derivatives = bootstrap_derivatives(loaded, safe_mode=safe_mode)
     market_data = MarketDataAggregator(stale_after=1.5)
+
+    watchdog_cfg = getattr(loaded.data, "watchdog", None)
+    thresholds = _extract_watchdog_thresholds(watchdog_cfg)
+    configure_broker_watchdog(
+        clock=time.time,
+        thresholds=thresholds,
+        error_budget_window_s=float(getattr(watchdog_cfg, "error_budget_window_s", 600) or 600),
+        auto_hold_on_down=bool(getattr(watchdog_cfg, "auto_hold_on_down", True)),
+        block_on_down=bool(getattr(watchdog_cfg, "block_on_down", True)),
+        on_throttle_change=_broker_watchdog_throttle_change,
+        on_auto_hold=_broker_watchdog_auto_hold,
+    )
     if derivatives and derivatives.venues:
         for venue_id, venue_rt in derivatives.venues.items():
             symbol_map: Dict[str, str] = {}
@@ -1278,6 +1324,43 @@ def update_clock_skew(skew_seconds: float | None, *, source: str = "clock_skew_c
         _persist_safety_snapshot(persist_snapshot)
 
 
+def update_risk_throttle(
+    active: bool,
+    *,
+    reason: str | None = None,
+    source: str = "broker_watchdog",
+) -> None:
+    """Expose the current risk throttle flag to the runtime snapshot."""
+
+    persist_snapshot: Dict[str, object] | None = None
+    changed = False
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        previous_active = safety.risk_throttled
+        previous_reason = safety.risk_throttle_reason
+        safety.risk_throttled = bool(active)
+        safety.risk_throttle_reason = reason if active else None
+        changed = (
+            previous_active != safety.risk_throttled
+            or previous_reason != safety.risk_throttle_reason
+        )
+        if changed:
+            persist_snapshot = safety.as_dict()
+    if changed and persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
+        log_operator_action(
+            "system",
+            "system",
+            "RISK_THROTTLE",
+            details={
+                "active": bool(active),
+                "reason": reason or "",
+                "source": source,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+
 def update_risk_snapshot(snapshot: Mapping[str, object]) -> None:
     persist_snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
@@ -1286,6 +1369,38 @@ def update_risk_snapshot(snapshot: Mapping[str, object]) -> None:
         persist_snapshot = safety.as_dict()
     if persist_snapshot is not None:
         _persist_safety_snapshot(persist_snapshot)
+
+
+def _broker_watchdog_throttle_change(active: bool, reason: str | None) -> None:
+    updated = False
+    try:
+        from .. import risk_governor as _risk_governor_module
+
+        _risk_governor_module.set_throttle(active, reason=reason)
+        updated = True
+    except Exception:  # pragma: no cover - defensive
+        updated = False
+    if not updated:
+        update_risk_throttle(active, reason=reason, source="broker_watchdog")
+
+
+def _broker_watchdog_auto_hold(venue: str, state: str, detail: str) -> None:
+    canonical_venue = (venue or "unknown").upper()
+    state_label = (state or STATE_DOWN).upper()
+    hold_reason = f"EXCHANGE_WATCHDOG::{canonical_venue}::{state_label}"
+    engaged = engage_safety_hold(hold_reason, source=f"broker_watchdog:{canonical_venue.lower()}")
+    if engaged:
+        log_operator_action(
+            "system",
+            "system",
+            "AUTO_HOLD_EXCHANGE_WATCHDOG",
+            details={
+                "venue": canonical_venue,
+                "state": state_label,
+                "detail": detail or "",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
 
 def update_liquidity_snapshot(
