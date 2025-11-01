@@ -17,6 +17,7 @@ from .routers import (
     risk,
     ui,
     ui_config,
+    recon,
     ui_ops_report,
     ui_partial_hedge,
     ui_recon,
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_partial_hedge.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_pnl_attrib.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_recon.router, prefix="/api/ui/recon", tags=["ui"])
+    app.include_router(recon.router)
     app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_status.router, prefix="/api/ui/status")
