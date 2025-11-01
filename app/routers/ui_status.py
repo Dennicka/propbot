@@ -4,21 +4,34 @@ import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..services.status import get_status_overview, get_status_components, get_status_slo
+from ..services.cache import get_or_set
+from ..services.status import get_status_components, get_status_overview, get_status_slo
 
 router = APIRouter()
 
 @router.get("/overview")
-def overview() -> dict:
-    return get_status_overview()
+async def overview() -> dict:
+    return await get_or_set(
+        "/api/ui/status/overview",
+        1.0,
+        get_status_overview,
+    )
 
 @router.get("/components")
-def components() -> dict:
-    return get_status_components()
+async def components() -> dict:
+    return await get_or_set(
+        "/api/ui/status/components",
+        1.0,
+        get_status_components,
+    )
 
 @router.get("/slo")
-def slo() -> dict:
-    return get_status_slo()
+async def slo() -> dict:
+    return await get_or_set(
+        "/api/ui/status/slo",
+        1.0,
+        get_status_slo,
+    )
 
 
 @router.websocket("/stream/status")

@@ -1298,10 +1298,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     chaos_selected_profile = str(chaos_info.get("selected_profile") or chaos_profile)
     chaos_enabled = bool(chaos_info.get("enabled"))
 
+    asset_version = str(context.get("build_version") or APP_VERSION)
+    asset_version_attr = escape(asset_version, quote=True)
+
     parts: list[str] = []
     parts.append(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
         "<title>Operator Dashboard</title>"
+        f"<link rel=\"stylesheet\" href=\"/static/dashboard.css?v={asset_version}\" />"
         "<style>body{font-family:Arial,sans-serif;margin:2rem;background:#f8f9fb;color:#222;}"
         "h1,h2{color:#14365d;}table{border-collapse:collapse;width:100%;margin-bottom:2rem;background:#fff;}"
         "th,td{border:1px solid #d0d5dd;padding:0.5rem 0.75rem;text-align:left;vertical-align:top;}"
@@ -1442,7 +1446,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".auto-hold-banner .reason{font-weight:600;font-size:0.95rem;}"
         "button:disabled{background:#9ca3af;cursor:not-allowed;}"
         "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
-        "</style></head><body>"
+        f"</style></head><body data-dashboard-build=\"{asset_version_attr}\">"
     )
     parts.append(
         f"<h1>Operator Dashboard</h1><p>Build Version: <strong>{_fmt(context.get('build_version'))}</strong></p>"

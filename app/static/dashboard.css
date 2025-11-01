@@ -1,0 +1,5 @@
+/* PropBot operator dashboard base overrides. */
+body[data-dashboard-build] {
+    min-height: 100vh;
+    background-color: #f8f9fb;
+}
