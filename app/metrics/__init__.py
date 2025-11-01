@@ -42,6 +42,14 @@ from .observability import (
     set_watchdog_health,
     set_watchdog_state_metric,
 )
+from .orders import (
+    IDEMPOTENCY_HIT_TOTAL,
+    OPEN_INTENTS_GAUGE,
+    ORDER_INTENT_TOTAL,
+    ORDER_SUBMIT_LATENCY,
+    observe_replace_chain,
+    record_open_intents,
+)
 from .risk_governor import (
     increment_window as increment_risk_window,
     set_error_rate as set_risk_error_rate,
@@ -67,6 +75,12 @@ __all__ = [
     "ORDER_ERRORS_COUNTER",
     "WATCHDOG_STATE_GAUGE",
     "METRICS_SLO_ENABLED",
+    "ORDER_INTENT_TOTAL",
+    "IDEMPOTENCY_HIT_TOTAL",
+    "OPEN_INTENTS_GAUGE",
+    "ORDER_SUBMIT_LATENCY",
+    "observe_replace_chain",
+    "record_open_intents",
     "record_trade_execution",
     "record_risk_breach",
     "set_auto_trade_state",

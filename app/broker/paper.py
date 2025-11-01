@@ -28,6 +28,8 @@ class PaperBroker(Broker):
         qty: float,
         price: float | None = None,
         type: str = "LIMIT",
+        tif: str | None = None,
+        strategy: str | None = None,
         post_only: bool = True,
         reduce_only: bool = False,
         fee: float = 0.0,
