@@ -44,9 +44,10 @@ def test_smoke_health_metrics_watchdog(client):
     assert metrics.status_code == 200
     body = metrics.text
     for metric in (
-        "propbot_order_cycle_ms",
-        "propbot_watchdog_ok",
-        "propbot_daily_loss_breached",
+        "api_latency_seconds",
+        "market_data_staleness_seconds",
+        "order_errors_total",
+        "watchdog_state",
     ):
         assert metric in body
 

@@ -23,9 +23,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    strategy:
-      matrix:
-        python-version: ['3.11']
     env:
       PYTHONPATH: .
       CHAOS_ENABLED: ${{ vars.CHAOS_ENABLED || secrets.CHAOS_ENABLED || 'false' }}
@@ -33,25 +30,45 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.11'
           cache: 'pip'
       - run: pip install -r requirements.txt
-      - name: Smoke acceptance suite
-        run: make smoke
-      - name: Full acceptance suite
-        run: make acceptance
-      - name: Chaos acceptance suite
-        if: env.CHAOS_ENABLED == 'true' || env.CHAOS_ENABLED == '1'
-        env:
-          CHAOS_ENABLED: 'true'
-        run: python -m pytest -q tests/acceptance/test_chaos_flows.py
-      - name: Upload acceptance artifacts
+      - name: Acceptance smoke suite
+        run: make acceptance_smoke
+      - name: Upload smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: acceptance-${{ matrix.python-version }}-artifacts
+          name: acceptance-smoke-logs
           path: |
-            logs
-            artifacts/ops-report/**/*.json
-            artifacts/ops-report/**/*.csv
+            logs/*.log
+            reports/ops_report*.json
+            reports/ops_report*.csv
+          if-no-files-found: ignore
+      - name: Acceptance trading suite
+        run: make acceptance_trading
+      - name: Upload trading artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-trading-logs
+          path: |
+            logs/*.log
+            reports/ops_report*.json
+            reports/ops_report*.csv
+          if-no-files-found: ignore
+      - name: Acceptance chaos suite
+        if: env.CHAOS_ENABLED == 'true' || env.CHAOS_ENABLED == '1'
+        env:
+          CHAOS_ENABLED: 'true'
+        run: make acceptance_chaos
+      - name: Upload chaos artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-chaos-logs
+          path: |
+            logs/*.log
+            reports/ops_report*.json
+            reports/ops_report*.csv
           if-no-files-found: ignore

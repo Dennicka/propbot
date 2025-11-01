@@ -37,7 +37,7 @@ from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
 from .telemetry import observe_ui_latency, setup_slo_monitor
-from .metrics.observability import observe_api_request, register_slo_metrics
+from .metrics.observability import observe_api_latency, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
 from .startup_resume import perform_resume as perform_startup_resume
@@ -114,12 +114,12 @@ def create_app() -> FastAPI:
             response = await call_next(request)
         except Exception:
             duration_s = max(time.perf_counter() - start, 0.0)
-            observe_api_request(route, method, 500, duration_s)
+            observe_api_latency(route, method, 500, duration_s)
             if path.startswith("/api/ui"):
                 observe_ui_latency(path, duration_s * 1000.0, status_code=500, error=True)
             raise
         duration_s = max(time.perf_counter() - start, 0.0)
-        observe_api_request(route, method, response.status_code, duration_s)
+        observe_api_latency(route, method, response.status_code, duration_s)
         if path.startswith("/api/ui"):
             observe_ui_latency(path, duration_s * 1000.0, status_code=response.status_code)
         return response

@@ -1,7 +1,8 @@
 .PHONY: venv fmt lint typecheck test run kill \
-	alembic-init alembic-rev alembic-up dryrun.once dryrun.loop \
-	docker-login docker-build docker-push docker-run-image docker-release \
-	up down logs curl-health release
+        alembic-init alembic-rev alembic-up dryrun.once dryrun.loop \
+        docker-login docker-build docker-push docker-run-image docker-release \
+        up down logs curl-health release \
+        acceptance_smoke acceptance_trading acceptance_chaos
 
 VENV=.venv
 PY=$(VENV)/bin/python
@@ -31,11 +32,18 @@ typecheck:
 test:
 	$(PYTEST) -q --maxfail=1
 
-acceptance:
-	$(PYTEST) -q -m acceptance tests/acceptance
-
-smoke:
+acceptance_smoke:
 	$(PYTEST) -q tests/acceptance/test_smoke.py
+
+acceptance_trading:
+	$(PYTEST) -q tests/acceptance/test_acceptance_trading.py
+
+acceptance_chaos:
+	$(PYTEST) -q tests/acceptance/test_chaos_flows.py
+
+acceptance: acceptance_smoke acceptance_trading acceptance_chaos
+
+smoke: acceptance_smoke
 
 run:
 	$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
