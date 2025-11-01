@@ -192,6 +192,43 @@ def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
             },
         },
     )
+    async def fake_pnl_attribution() -> dict[str, object]:
+        return {
+            "generated_at": "2024-01-01T00:00:00+00:00",
+            "by_strategy": {
+                "cross_exchange_arb": {
+                    "realized": 12.0,
+                    "unrealized": 1.5,
+                    "fees": 0.4,
+                    "rebates": 0.1,
+                    "funding": 0.2,
+                    "net": 13.4,
+                }
+            },
+            "by_venue": {
+                "binance": {
+                    "realized": 8.0,
+                    "unrealized": 1.0,
+                    "fees": 0.3,
+                    "rebates": 0.05,
+                    "funding": 0.1,
+                    "net": 8.85,
+                }
+            },
+            "totals": {
+                "realized": 12.0,
+                "unrealized": 1.5,
+                "fees": 0.4,
+                "rebates": 0.1,
+                "funding": 0.2,
+                "net": 13.4,
+            },
+            "meta": {"exclude_simulated": True},
+        }
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.build_pnl_attribution", fake_pnl_attribution
+    )
 
     secrets_payload = {
         "operator_tokens": {"viewer": {"token": "VVV", "role": "viewer"}},
@@ -212,6 +249,7 @@ def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
     assert response.status_code == 200
     html = response.text
     assert "PnL / Risk" in html
+    assert "PnL Attribution" in html
     assert "headroom" in html.lower()
     assert "Daily Strategy Budgets" in html
     assert "Автосброс в 00:00 UTC" in html

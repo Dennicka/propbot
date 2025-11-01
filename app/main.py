@@ -16,6 +16,7 @@ from .routers import ui_strategy
 from .routers import ui_status
 from .routers import ui_trades
 from .routers import ui_risk
+from .routers import ui_pnl_attrib
 from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_config.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_universe.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_ops_report.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(ui_pnl_attrib.router, prefix="/api/ui", tags=["ui"])
     app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_status.router, prefix="/api/ui/status")

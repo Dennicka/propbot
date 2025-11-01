@@ -280,6 +280,13 @@ notional'а, например:
 - Симуляционные записи (DRY_RUN) исключаются из агрегаций по умолчанию
   (`EXCLUDE_DRY_RUN_FROM_PNL=true`). Установите переменную окружения в `false`,
   чтобы увидеть комбинированный PnL c тестовыми сделками.
+- Новый эндпоинт `GET /api/ui/pnl_attrib` возвращает разложение PnL по стратегиям и
+  биржам, включая компоненты реализованного/нереализованного дохода, комиссий,
+  ребейтов и funding. По умолчанию используются текущие TCA tiers (maker/taker
+  ставки, VIP-ребейты), а funding-платежи подтягиваются из адаптеров/ledger.
+- `/ui/dashboard` расширен блоком «PnL Attribution»: две таблицы (по стратегиям и
+  по биржам) и агрегированные тоталы. Отдельный бейдж подсказывает, исключены ли
+  симуляционные записи из расчёта.
 
 ### Strategy status API & Dashboard
 
@@ -385,6 +392,8 @@ notional'а, например:
   - текущие позиции/экспозицию и частично закрытые хеджи,
   - журнал операторских действий и аудит событий,
   - `autopilot` с полями `last_decision`, `armed`, причиной последнего решения,
+  - `pnl_attribution` — разложение по стратегиям и площадкам с компонентами
+    realised/unrealised/fees/rebates/funding и агрегированными тоталами,
   - агрегированные метрики верхнего уровня: `open_trades_count`,
     `max_open_trades_limit`, `badges`, `last_audit_actions`, а также список
     бюджетов `budgets` (по стратегии).
@@ -407,14 +416,15 @@ notional'а, например:
 }
 ```
 
-CSV-экспорт теперь плоский и содержит минимум следующие столбцы: `timestamp`,
-`open_trades_count`, `max_open_trades_limit`, `daily_loss_status`,
-`watchdog_status`, `auto_trade`, `strategy`, `budget_usdt`, `used_usdt`,
-`remaining_usdt`. Пример строки:
+CSV-экспорт плоский и теперь дополняется колонками `attrib_scope`,
+`attrib_name`, `attrib_realized`, `attrib_unrealized`, `attrib_fees`,
+`attrib_rebates`, `attrib_funding`, `attrib_net`. Бюджетные строки оставляют их
+пустыми, а следом добавляются записи по PnL attribution. Пример:
 
 ```csv
-timestamp,open_trades_count,max_open_trades_limit,daily_loss_status,watchdog_status,auto_trade,strategy,budget_usdt,used_usdt,remaining_usdt
-2024-01-01T00:00:00+00:00,1,6,OK,OK,OFF,alpha,900.0,300.0,600.0
+timestamp,open_trades_count,max_open_trades_limit,daily_loss_status,watchdog_status,auto_trade,strategy,budget_usdt,used_usdt,remaining_usdt,attrib_scope,attrib_name,attrib_realized,attrib_unrealized,attrib_fees,attrib_rebates,attrib_funding,attrib_net
+2024-01-01T00:00:00+00:00,1,6,OK,OK,OFF,alpha,900.0,300.0,600.0,,,,,,,
+2024-01-01T00:00:00+00:00,1,6,OK,OK,OFF,,,,,totals,totals,45.6,3.0,0.5,0.1,1.0,49.2
 ```
 
 ### Exchange watchdog

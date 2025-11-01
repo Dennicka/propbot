@@ -48,6 +48,14 @@ def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeyp
         "budget_usdt",
         "used_usdt",
         "remaining_usdt",
+        "attrib_scope",
+        "attrib_name",
+        "attrib_realized",
+        "attrib_unrealized",
+        "attrib_fees",
+        "attrib_rebates",
+        "attrib_funding",
+        "attrib_net",
     ]
     assert any(row["strategy"] == "alpha" for row in rows)
     assert any(row["strategy"] == "gamma" for row in rows)
@@ -62,3 +70,6 @@ def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeyp
     assert float(alpha_row["budget_usdt"]) == pytest.approx(900.0)
     assert float(alpha_row["used_usdt"]) == pytest.approx(300.0)
     assert float(alpha_row["remaining_usdt"]) == pytest.approx(600.0)
+
+    totals_row = next((row for row in rows if row.get("attrib_scope") == "totals"), None)
+    assert totals_row is not None

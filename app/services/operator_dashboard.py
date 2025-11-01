@@ -35,6 +35,7 @@ from .runtime import (
 from .runtime_badges import get_runtime_badges
 from .status import get_partial_rebalance_summary
 from .positions_view import build_positions_snapshot
+from .pnl_attribution import build_pnl_attribution
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
 from services import adaptive_risk_advisor
@@ -296,6 +297,17 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     positions_snapshot_source = list_positions()
     positions_payload = await build_positions_snapshot(state, positions_snapshot_source)
     pnl_snapshot = build_pnl_snapshot(positions_payload)
+    try:
+        pnl_attribution_payload = await build_pnl_attribution()
+    except Exception:  # pragma: no cover - dashboard should degrade gracefully
+        logger.exception("failed to build pnl attribution snapshot")
+        pnl_attribution_payload = {
+            "generated_at": _fmt(datetime.now(timezone.utc)),
+            "by_strategy": {},
+            "by_venue": {},
+            "totals": {"realized": 0.0, "unrealized": 0.0, "fees": 0.0, "rebates": 0.0, "funding": 0.0, "net": 0.0},
+            "meta": {"error": "unavailable"},
+        }
     risk_snapshot = await build_risk_snapshot()
     risk_accounting_snapshot = get_risk_accounting_snapshot()
     if not isinstance(risk_accounting_snapshot, Mapping):
@@ -669,6 +681,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
         "pnl_snapshot": pnl_snapshot,
+        "pnl_attribution": pnl_attribution_payload,
         "risk_advice": risk_advice,
         "execution_quality": execution_quality,
         "daily_report": daily_report or {},
@@ -1566,6 +1579,89 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         strategy_pnl_html.append("</tbody></table>")
     strategy_pnl_html.append("</div>")
     parts.append("".join(strategy_pnl_html))
+
+    pnl_attribution = context.get("pnl_attribution") or {}
+    if not isinstance(pnl_attribution, Mapping):
+        pnl_attribution = {}
+
+    def _render_attribution_table(title: str, payload: Mapping[str, Any]) -> str:
+        table_parts = [f"<div class=\"pnl-attrib-table\"><h3>{_fmt(title)}</h3>"]
+        if not isinstance(payload, Mapping) or not payload:
+            table_parts.append("<p class=\"note\">No data available.</p>")
+        else:
+            table_parts.append(
+                "<table><thead><tr><th>Name</th><th>Realised</th><th>Unrealised</th>"
+                "<th>Fees</th><th>Rebates</th><th>Funding</th><th>Net</th></tr></thead><tbody>"
+            )
+            sorted_rows = sorted(
+                ((name, entry) for name, entry in payload.items() if isinstance(entry, Mapping)),
+                key=lambda item: _coerce_float(item[1].get("net")),
+                reverse=True,
+            )
+            for name, entry in sorted_rows:
+                table_parts.append(
+                    "<tr><td>{name}</td><td>{realized}</td><td>{unrealized}</td><td>{fees}</td>"
+                    "<td>{rebates}</td><td>{funding}</td><td>{net}</td></tr>".format(
+                        name=_fmt(name),
+                        realized=_fmt(entry.get("realized")),
+                        unrealized=_fmt(entry.get("unrealized")),
+                        fees=_fmt(entry.get("fees")),
+                        rebates=_fmt(entry.get("rebates")),
+                        funding=_fmt(entry.get("funding")),
+                        net=_fmt(entry.get("net")),
+                    )
+                )
+            table_parts.append("</tbody></table>")
+        table_parts.append("</div>")
+        return "".join(table_parts)
+
+    attribution_html = ["<div class=\"pnl-attribution\"><h2>PnL Attribution</h2>"]
+    generated_at = pnl_attribution.get("generated_at")
+    meta = pnl_attribution.get("meta") if isinstance(pnl_attribution.get("meta"), Mapping) else {}
+    if generated_at:
+        counts: list[str] = []
+        for key, label in (
+            ("trades_count", "trades"),
+            ("funding_events_count", "funding events"),
+            ("fees_event_count", "fee adjustments"),
+            ("rebate_event_count", "rebate adjustments"),
+        ):
+            value = meta.get(key)
+            if value:
+                counts.append(f"{int(value)} {label}")
+        counts_text = f" ({', '.join(counts)})" if counts else ""
+        attribution_html.append(
+            f"<p class=\"note\">Snapshot at {_fmt(generated_at)}{counts_text}</p>"
+        )
+    exclude_simulated = meta.get("exclude_simulated")
+    if exclude_simulated is False:
+        attribution_html.append("<p class=\"note\">Includes simulated (DRY_RUN) entries.</p>")
+    elif exclude_simulated:
+        attribution_html.append("<p class=\"note\">Simulated (DRY_RUN) entries excluded.</p>")
+
+    attribution_html.append(
+        _render_attribution_table("By strategy", pnl_attribution.get("by_strategy", {}))
+    )
+    attribution_html.append(
+        _render_attribution_table("By venue", pnl_attribution.get("by_venue", {}))
+    )
+    totals = pnl_attribution.get("totals") if isinstance(pnl_attribution.get("totals"), Mapping) else {}
+    if totals:
+        attribution_html.append(
+            "<div class=\"pnl-attrib-totals\"><table><thead><tr><th>Total realised</th><th>Total unrealised</th>"
+            "<th>Total fees</th><th>Total rebates</th><th>Total funding</th><th>Net</th></tr></thead><tbody>"
+            "<tr><td>{realized}</td><td>{unrealized}</td><td>{fees}</td><td>{rebates}</td><td>{funding}</td><td>{net}</td></tr>"
+            "</tbody></table></div>".format(
+                realized=_fmt(totals.get("realized")),
+                unrealized=_fmt(totals.get("unrealized")),
+                fees=_fmt(totals.get("fees")),
+                rebates=_fmt(totals.get("rebates")),
+                funding=_fmt(totals.get("funding")),
+                net=_fmt(totals.get("net")),
+            )
+        )
+    attribution_html.append("</div>")
+    parts.append("".join(attribution_html))
 
     strategy_status_snapshot = context.get("strategy_status_snapshot", {}) or {}
     if not isinstance(strategy_status_snapshot, Mapping):
