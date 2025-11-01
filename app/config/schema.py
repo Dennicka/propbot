@@ -77,11 +77,29 @@ class RunawayRiskConfig(BaseModel):
     cooldown_sec: int = Field(0, ge=0)
 
 
+class RiskGovernorConfig(BaseModel):
+    window_sec: int = Field(3600, ge=60)
+    min_success_rate: float = Field(0.985, ge=0.0, le=1.0)
+    max_order_error_rate: float = Field(0.01, ge=0.0, le=1.0)
+    min_broker_state: str = Field("UP")
+    hold_after_windows: int = Field(2, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_state(self) -> "RiskGovernorConfig":
+        allowed = {"UP", "DEGRADED", "DOWN"}
+        state = (self.min_broker_state or "").upper()
+        if state not in allowed:
+            raise ValueError("min_broker_state must be one of UP, DEGRADED, DOWN")
+        object.__setattr__(self, "min_broker_state", state)
+        return self
+
+
 class RiskConfig(BaseModel):
     notional_caps: NotionalCapsConfig
     max_day_drawdown_bps: int | None = None
     cross_venue_delta_abs_max_usd: float | None = None
     runaway: RunawayRiskConfig | None = None
+    governor: RiskGovernorConfig | None = None
 
 
 class DerivRoutingConfig(BaseModel):
@@ -263,6 +281,8 @@ __all__ = [
     "BrokerWatchdogConfig",
     "GuardsConfig",
     "NotionalCapsConfig",
+    "RunawayRiskConfig",
+    "RiskGovernorConfig",
     "RiskConfig",
     "DerivRoutingConfig",
     "DerivVenueConfig",

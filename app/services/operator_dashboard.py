@@ -547,6 +547,20 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     safety_payload["risk_throttle_reason"] = throttle_reason
     safety_payload["risk_throttled"] = risk_throttled
     safety_payload["hold_reason_display"] = hold_reason_display
+    risk_section = safety_payload.get("risk") if isinstance(safety_payload.get("risk"), Mapping) else {}
+    governor_snapshot = risk_section.get("governor") if isinstance(risk_section, Mapping) else None
+    success_rate_1h: float | None = None
+    if isinstance(governor_snapshot, Mapping):
+        try:
+            success_rate_1h = float(governor_snapshot.get("success_rate_1h"))
+        except (TypeError, ValueError):
+            success_rate_1h = None
+    risk_reason = throttle_reason or str(risk_section.get("reason") or "")
+    risk_governor_context = {
+        "throttled": risk_throttled,
+        "reason": risk_reason,
+        "success_rate_1h": success_rate_1h,
+    }
 
     pnl_history = list_recent_snapshots(limit=5)
     pnl_trend = _trend_summary(pnl_history)
@@ -846,6 +860,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "runtime_snapshot": runtime_snapshot_payload,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": throttle_reason,
+        "risk_governor": risk_governor_context,
         "edge_guard": {
             "allowed": guard_allowed,
             "reason": guard_reason,
@@ -1076,6 +1091,17 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     flash_messages = context.get("flash_messages", []) or []
     risk_throttled = bool(context.get("risk_throttled"))
     throttle_reason = context.get("risk_throttle_reason") or ""
+    risk_governor = context.get("risk_governor", {}) or {}
+    if not isinstance(risk_governor, Mapping):
+        risk_governor = {}
+    governor_reason = risk_governor.get("reason") or throttle_reason
+    success_rate_display: str | None = None
+    success_rate_value = risk_governor.get("success_rate_1h")
+    if success_rate_value is not None:
+        try:
+            success_rate_display = f"{float(success_rate_value) * 100:.2f}%"
+        except (TypeError, ValueError):
+            success_rate_display = None
     active_alerts = context.get("active_alerts", []) or []
     recent_audit = context.get("recent_audit", []) or []
     recent_operator_actions = context.get("recent_operator_actions", []) or []
@@ -2438,9 +2464,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append("</div>")
 
     if risk_throttled:
-        reason_clause = (
-            f" Trigger: {_fmt(throttle_reason)}." if throttle_reason else ""
-        )
+        display_reason = governor_reason or throttle_reason
+        reason_clause = f" Trigger: {_fmt(display_reason)}." if display_reason else ""
+        if success_rate_display:
+            reason_clause += f" Success rate (1h): {success_rate_display}."
         parts.append(
             "<div class=\"flash\" style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;\">"
             "<strong>RISK_THROTTLED</strong> — automatic risk guard hold active. "

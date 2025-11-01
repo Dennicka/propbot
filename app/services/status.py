@@ -692,6 +692,28 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
             "v2": dict(runaway_guard_v2),
         },
     }
+    snapshot["risk_throttled"] = bool(safety_snapshot.get("risk_throttled"))
+    snapshot["risk_throttle_reason"] = safety_snapshot.get("risk_throttle_reason")
+    risk_payload = safety_snapshot.get("risk")
+    if isinstance(risk_payload, Mapping):
+        governor_snapshot = risk_payload.get("governor") if isinstance(risk_payload, Mapping) else None
+        success_rate = None
+        if isinstance(governor_snapshot, Mapping):
+            try:
+                success_rate = float(governor_snapshot.get("success_rate_1h"))
+            except (TypeError, ValueError):
+                success_rate = None
+        snapshot["risk"] = {
+            "throttled": bool(risk_payload.get("throttled", safety_snapshot.get("risk_throttled"))),
+            "reason": risk_payload.get("reason"),
+            "success_rate_1h": success_rate,
+        }
+    else:
+        snapshot["risk"] = {
+            "throttled": bool(safety_snapshot.get("risk_throttled")),
+            "reason": safety_snapshot.get("risk_throttle_reason"),
+            "success_rate_1h": None,
+        }
     snapshot["partial_rebalance"] = _partial_rebalance_summary()
     snapshot["partial_hedge"] = get_partial_hedge_status()
     snapshot["autopilot"] = state.autopilot.as_dict()

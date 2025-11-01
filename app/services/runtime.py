@@ -23,6 +23,7 @@ from ..watchdog.broker_watchdog import (
     STATE_DOWN,
 )
 from ..metrics import set_auto_trade_state, slo
+from ..risk.risk_governor import configure_risk_governor
 from ..persistence import state_store
 from ..runtime import leader_lock
 from ..runtime_state_store import (
@@ -600,6 +601,13 @@ class SafetyState:
         snapshot.setdefault("auto_hold", False)
         payload["reconciliation"] = snapshot
         payload["runaway_guard"] = self.runaway_guard.as_dict()
+        risk_snapshot = self.risk_snapshot if isinstance(self.risk_snapshot, Mapping) else {}
+        governor_snapshot = risk_snapshot.get("governor") if isinstance(risk_snapshot, Mapping) else None
+        payload["risk"] = {
+            "throttled": self.risk_throttled,
+            "reason": self.risk_throttle_reason,
+            "governor": governor_snapshot if isinstance(governor_snapshot, Mapping) else None,
+        }
         return payload
 
     def status_payload(self) -> Dict[str, object | None]:
@@ -828,7 +836,8 @@ def _bootstrap_runtime() -> RuntimeState:
         max_orders_per_min=_env_int("MAX_ORDERS_PER_MIN", 300),
         max_cancels_per_min=_env_int("MAX_CANCELS_PER_MIN", 600),
     )
-    runaway_cfg = getattr(getattr(loaded.data, "risk", None), "runaway", None)
+    risk_cfg = getattr(loaded.data, "risk", None)
+    runaway_cfg = getattr(risk_cfg, "runaway", None)
     runaway_guard_config = {
         "max_cancels_per_min": getattr(runaway_cfg, "max_cancels_per_min", 0) if runaway_cfg else 0,
         "cooldown_sec": getattr(runaway_cfg, "cooldown_sec", 0) if runaway_cfg else 0,
@@ -838,6 +847,18 @@ def _bootstrap_runtime() -> RuntimeState:
         max_cancels_per_min=runaway_guard_config["max_cancels_per_min"],
         cooldown_sec=runaway_guard_config["cooldown_sec"],
     )
+    governor_cfg = getattr(risk_cfg, "governor", None)
+    if governor_cfg is not None:
+        if isinstance(governor_cfg, Mapping):
+            governor_payload = dict(governor_cfg)
+        else:
+            try:
+                governor_payload = governor_cfg.model_dump()
+            except AttributeError:
+                governor_payload = governor_cfg.__dict__ if hasattr(governor_cfg, "__dict__") else None
+    else:
+        governor_payload = None
+    configure_risk_governor(clock=time.time, config=governor_payload)
     runaway_guard_state = RunawayGuardV2State(
         max_cancels_per_min=runaway_guard_config["max_cancels_per_min"],
         cooldown_sec=runaway_guard_config["cooldown_sec"],
@@ -1365,7 +1386,9 @@ def update_risk_snapshot(snapshot: Mapping[str, object]) -> None:
     persist_snapshot: Dict[str, object] | None = None
     with _STATE_LOCK:
         safety = _STATE.safety
-        safety.risk_snapshot = dict(snapshot)
+        current = dict(safety.risk_snapshot)
+        current.update(snapshot)
+        safety.risk_snapshot = current
         persist_snapshot = safety.as_dict()
     if persist_snapshot is not None:
         _persist_safety_snapshot(persist_snapshot)
@@ -2203,6 +2226,22 @@ def _runtime_status_snapshot() -> Dict[str, Any]:
             "operational_flags": control.flags,
         }
         status["autopilot"] = _STATE.autopilot.as_dict()
+        status["risk_throttled"] = bool(safety.risk_throttled)
+        status["risk_throttle_reason"] = safety.risk_throttle_reason
+        risk_snapshot = safety.risk_snapshot if isinstance(safety.risk_snapshot, Mapping) else {}
+        governor_snapshot = risk_snapshot.get("governor") if isinstance(risk_snapshot, Mapping) else None
+        success_rate = None
+        if isinstance(governor_snapshot, Mapping):
+            success_rate_value = governor_snapshot.get("success_rate_1h")
+            try:
+                success_rate = float(success_rate_value)
+            except (TypeError, ValueError):
+                success_rate = None
+        status["risk"] = {
+            "throttled": bool(safety.risk_throttled),
+            "reason": safety.risk_throttle_reason,
+            "success_rate_1h": success_rate,
+        }
         return status
 
 

@@ -44,6 +44,12 @@ risk:
   runaway:
     max_cancels_per_min: 600
     cooldown_sec: 60
+  governor:
+    window_sec: 3600
+    min_success_rate: 0.985
+    max_order_error_rate: 0.01
+    min_broker_state: UP
+    hold_after_windows: 2
 status_thresholds_file: status_thresholds.yaml
 derivatives:
   venues:

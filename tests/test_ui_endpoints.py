@@ -11,6 +11,8 @@ from app.services import runtime
 from app.services.runtime import get_state
 from app.secrets_store import reset_secrets_store_cache
 from app.risk import accounting as risk_accounting, core as risk_core
+from app.risk import risk_governor as risk_gov
+from app.runtime.pre_trade_gate import PreTradeThrottled, enforce_pre_trade
 
 
 def test_ui_state_and_controls(client, monkeypatch):
@@ -562,3 +564,38 @@ def test_status_includes_watchdog_reason(client):
     assert venue_snapshot
     assert venue_snapshot["state"] == STATE_DOWN
     assert venue_snapshot["ws_lag_ms_p95"] >= 1500.0
+
+
+def test_pre_trade_gate_blocks_when_throttled(monkeypatch):
+    runtime.reset_for_tests()
+    risk_gov.reset_risk_governor_for_tests()
+
+    clock_values = {"now": 0.0}
+
+    def fake_clock() -> float:
+        return clock_values["now"]
+
+    risk_gov.configure_risk_governor(
+        clock=fake_clock,
+        config={
+            "window_sec": 300,
+            "min_success_rate": 0.8,
+            "max_order_error_rate": 0.0,
+            "min_broker_state": "UP",
+            "hold_after_windows": 2,
+        },
+    )
+    for _ in range(5):
+        risk_gov.record_order_success(venue="binance-um")
+    risk_gov.record_order_error(venue="binance-um", category="reject")
+
+    with pytest.raises(PreTradeThrottled) as excinfo:
+        enforce_pre_trade("binance-um")
+
+    assert "HIGH_ORDER_ERRORS" in str(excinfo.value)
+    state = runtime.get_state()
+    assert state.safety.risk_throttled is True
+    governor_snapshot = state.safety.risk_snapshot.get("governor")
+    assert isinstance(governor_snapshot, dict)
+    assert governor_snapshot.get("throttled") is True
+    assert governor_snapshot.get("reason") == "HIGH_ORDER_ERRORS"

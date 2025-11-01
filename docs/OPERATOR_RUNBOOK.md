@@ -83,6 +83,28 @@ Runtime публикует отдельный блок «Reconciliation status»
 алертинга: `watchdog_state{state="DOWN"}` — страница SRE, `auto_hold_total`
 используется для postmortem отчётов.
 
+## Risk Throttling & Auto-HOLD
+
+Параллельно с вотчдогом работает risk governor, который считает rolling-окно
+успешности размещения ордеров (`window_sec` по умолчанию 1 час) и состояние
+бирж. В `/ui/dashboard` отображается баннер **RISK_THROTTLED** когда:
+
+* `success_rate_1h < min_success_rate` (по дефолту 98.5%) — слишком много
+  отказов/отклонений;
+* `order_error_rate > max_order_error_rate` (1% по дефолту);
+* или вотчдог опустился ниже `min_broker_state` (например, DEGRADED).
+
+Баннер содержит человекочитаемую причину и текущий success rate (с округлением
+до двух знаков). В API `/api/ui/status` и `/api/ui/status/overview` добавлен
+блок `risk`, где UI и алерты считывают состояние троттлинга.
+
+Если несколько окон подряд (`hold_after_windows`, по умолчанию 2) остаются в
+состоянии throttle, governor инициирует авто-HOLD c причиной `RISK::<reason>`.
+После двух стабильных окон (success rate выше порога, ошибок ниже порога)
+троттлинг снимается автоматически. Метрики доступны в Prometheus под
+префиксом `propbot_risk_*` (`risk_success_rate_1h`, `risk_order_error_rate_1h`,
+`risk_throttled{reason=...}` и счётчик окон `risk_windows_total`).
+
 ## Операционные сценарии
 
 ### Включить автоторговлю

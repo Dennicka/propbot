@@ -23,6 +23,11 @@ from ..services.runtime import (
     register_order_attempt,
     set_open_orders,
 )
+from ..runtime.pre_trade_gate import enforce_pre_trade
+from ..risk.risk_governor import (
+    record_order_error as record_risk_order_error,
+    record_order_success as record_risk_order_success,
+)
 from ..watchdog.broker_watchdog import get_broker_watchdog
 from ..util.venues import VENUE_ALIASES
 
@@ -238,6 +243,7 @@ class ExecutionRouter:
                     venue=venue, symbol=symbol, side=side, original=price_to_use
                 )
             try:
+                enforce_pre_trade(venue)
                 if self._watchdog.should_block_orders(venue):
                     raise HoldActiveError("WATCHDOG_DOWN")
                 self._watchdog.record_order_submit(venue)
@@ -258,13 +264,19 @@ class ExecutionRouter:
                     idemp_key=attempt_key,
                 )
                 order = await asyncio.wait_for(create_task, timeout=ORDER_TIMEOUT_SEC)
+                record_risk_order_success(venue=venue, category="accepted")
                 return order
             except HoldActiveError:
                 raise
             except asyncio.TimeoutError as exc:
                 last_error = exc
+                record_risk_order_error(venue=venue, category="timeout")
             except Exception as exc:  # pragma: no cover - defensive logging
                 last_error = exc
+                record_risk_order_error(
+                    venue=venue,
+                    category=getattr(exc, "__class__", type(exc)).__name__,
+                )
             attempt += 1
             if attempt < MAX_ORDER_ATTEMPTS:
                 await asyncio.sleep(min(0.2 * (2**attempt), 1.0))
