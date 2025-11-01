@@ -36,7 +36,7 @@ from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
 from .telemetry import observe_ui_latency, setup_slo_monitor
-from .metrics.observability import observe_api_request
+from .metrics.observability import observe_api_request, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
 from .startup_resume import perform_resume as perform_startup_resume
@@ -90,6 +90,7 @@ def create_app() -> FastAPI:
 
     @app.get("/metrics")
     def metrics() -> Response:
+        register_slo_metrics()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     def _route_label(request: Request) -> str:

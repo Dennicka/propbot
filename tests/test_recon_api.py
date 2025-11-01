@@ -55,7 +55,7 @@ def test_recon_status_endpoint_returns_snapshot(monkeypatch, client) -> None:
     payload = response.json()
 
     assert payload == {
-        "status": "DEGRADED",
+        "status": "DRIFT",
         "mismatches_count": 1,
         "auto_hold": False,
         "last_run_iso": timestamp,

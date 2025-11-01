@@ -13,6 +13,27 @@ breach occurs.
 | Order success rate | `order_errors_total` increase ≤ 3 per minute | More than 3 errors/min triggers a trading pause and investigation. |
 | Watchdog coverage | `watchdog_health{venue}` == 1 | Gauge must remain 1; zero indicates degraded or auto-hold state. |
 
+## Instrumentation defaults
+
+* Broker implementations inherit optional SLO hooks (`emit_order_error`,
+  `emit_order_latency`, `emit_marketdata_staleness`, `metrics_tags`). Each
+  method is a safe no-op in :mod:`app.broker.base`, so existing brokers and unit
+  tests do not need to override them unless they opt in to telemetry.
+* SLO collectors are guarded behind the ``METRICS_SLO_ENABLED`` feature flag.
+  Keep it unset (or ``0``/``false``) during development to avoid importing
+  Prometheus collectors in tests. Set ``METRICS_SLO_ENABLED=1`` in production to
+  activate registration and exposure on ``/metrics``.
+
+## Metric reference
+
+The following Prometheus series back the alerts and dashboards described in
+this document:
+
+* ``api_request_latency_seconds{route,method,status}``
+* ``market_data_staleness_seconds{venue,symbol}``
+* ``order_errors_total{venue,reason}``
+* ``watchdog_health{venue}``
+
 ## Operator Response
 
 ### API latency warning

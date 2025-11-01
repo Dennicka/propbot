@@ -67,6 +67,12 @@ class TestnetBroker(Broker):
         self._max_retries = _MAX_RETRIES
         self._retry_backoff = _RETRY_BACKOFF
 
+    def metrics_tags(self) -> Dict[str, str]:  # pragma: no cover - simple mapping
+        return {"broker": getattr(self, "venue", getattr(self, "name", "testnet"))}
+
+    def emit_order_error(self, venue: str | None, reason: str | None) -> None:
+        record_order_error(venue or self.venue, reason)
+
     def _ensure_credentials(self) -> None:
         missing = [name for name in self.required_env if not os.getenv(name)]
         if missing:
@@ -182,7 +188,7 @@ class TestnetBroker(Broker):
             await self._invoke_with_retries(client.place_order, **params)
             await asyncio.to_thread(ledger.update_order_status, order_id, "open")
         except Exception as exc:
-            record_order_error(venue or self.venue, exc.__class__.__name__)
+            self.emit_order_error(venue or self.venue, exc.__class__.__name__)
             await asyncio.to_thread(ledger.update_order_status, order_id, "failed")
             ledger.record_event(
                 level="ERROR",

@@ -3,8 +3,10 @@ from fastapi.testclient import TestClient
 from app.metrics import observability
 
 
-def test_metrics_exposed_and_incremented(client: TestClient) -> None:
+def test_metrics_exposed_and_incremented(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(observability, "METRICS_SLO_ENABLED", True, raising=False)
     observability.reset_for_tests()
+    observability.register_slo_metrics()
 
     observability.observe_api_request("/health", "GET", 200, 0.1)
     observability.set_market_data_staleness("binance", "BTCUSDT", 1.5)
