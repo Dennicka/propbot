@@ -58,6 +58,7 @@ from ..services.backtest_reports import load_latest_summary as load_latest_backt
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
 from ..security import is_auth_enabled, require_token
+from ..risk.runaway_guard import RunawayGuardCooldownError
 from positions import list_open_positions, list_positions
 from ..risk_snapshot import build_risk_snapshot
 from ..risk.daily_loss import get_daily_loss_cap_state
@@ -1333,6 +1334,10 @@ async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
         safety = get_safety_status()
         detail = {"error": exc.reason, "reason": safety.get("hold_reason")}
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail) from exc
+    except RunawayGuardCooldownError as exc:
+        detail = dict(getattr(exc, "details", {}) or {})
+        detail.setdefault("error", "runaway_guard_cooldown")
+        raise HTTPException(status_code=403, detail=detail) from exc
     event_payload = dict(result)
     if venue:
         event_payload["venue"] = venue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import inspect
 import logging
 from dataclasses import dataclass
@@ -17,16 +18,24 @@ from .dryrun import compute_metrics, select_cycle_symbol
 from .runtime import (
     HoldActiveError,
     LoopState,
+    engage_safety_hold,
     get_loop_state,
     get_safety_status,
     get_state,
     is_hold_active,
     register_cancel_attempt,
+    send_notifier_alert,
     set_last_execution,
     set_last_plan,
     set_loop_config,
     set_open_orders,
     update_loop_summary,
+    update_runaway_guard_snapshot,
+)
+from ..risk.runaway_guard import (
+    RUNAWAY_GUARD_V2_SOURCE,
+    RunawayGuardCooldownError,
+    get_guard as get_runaway_guard,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -382,6 +391,8 @@ async def cancel_all_orders(
     if is_hold_active():
         safety = get_safety_status()
         raise HoldActiveError(safety.get("hold_reason") or "hold_active")
+    guard = get_runaway_guard()
+    guard_enabled = guard.feature_enabled()
     cancelled = 0
     failed = 0
     orders_snapshot = [
@@ -395,23 +406,79 @@ async def cancel_all_orders(
         }
         for order in orders
     ]
+    grouped_orders: Dict[str, Dict[str, Any]] = {}
     for order in orders:
-        venue = str(order.get("venue") or "")
-        order_id = int(order.get("id", 0))
-        broker = router.broker_for_venue(venue)
-        try:
-            register_cancel_attempt(reason="runaway_cancels_per_min", source=f"cancel_all:{venue}")
-            await broker.cancel(venue=venue, order_id=order_id)
-            cancelled += 1
-        except HoldActiveError:
-            raise
-        except Exception as exc:  # pragma: no cover - defensive logging
-            failed += 1
-            ledger.record_event(
-                level="ERROR",
-                code="cancel_failed",
-                payload={"venue": venue, "order_id": order_id, "error": str(exc)},
-            )
+        venue_value = str(order.get("venue") or "")
+        venue_key = venue_value.lower()
+        bucket = grouped_orders.setdefault(venue_key, {"display": venue_value, "orders": []})
+        bucket["orders"].append(order)
+
+    for venue_key, bucket in grouped_orders.items():
+        venue_display = bucket["display"]
+        venue_orders = bucket["orders"]
+        if guard_enabled and guard.feature_enabled():
+            symbol_counts = Counter()
+            for entry in venue_orders:
+                symbol_value = str(entry.get("symbol") or "")
+                symbol_counts[symbol_value.upper()] += 1
+            for symbol_key, planned in symbol_counts.items():
+                if not guard.allow_cancel(venue_key, symbol_key, planned=planned):
+                    block_details = guard.last_block() or {}
+                    snapshot = guard.snapshot()
+                    update_runaway_guard_snapshot(snapshot)
+                    payload = {
+                        "venue": venue_display,
+                        "venue_key": venue_key,
+                        "symbol": symbol_key,
+                        "planned_cancels": planned,
+                        "orders_in_venue": len(venue_orders),
+                        "block": dict(block_details),
+                        "max_cancels_per_min": snapshot.get("max_cancels_per_min"),
+                        "cooldown_sec": snapshot.get("cooldown_sec"),
+                    }
+                    ledger.record_event(
+                        level="WARNING",
+                        code="cancel_all_blocked_runaway",
+                        payload=payload,
+                    )
+                    reason = str(block_details.get("reason") or "")
+                    if reason == "limit_exceeded":
+                        reason_text = f"{RUNAWAY_GUARD_V2_SOURCE}:{venue_key}:{symbol_key}"
+                        payload["reason"] = reason_text
+                        send_notifier_alert(
+                            "runaway_guard_v2_limit",
+                            "Runaway guard engaged: cancel-all blocked",
+                            payload,
+                        )
+                        engage_safety_hold(reason_text, source=RUNAWAY_GUARD_V2_SOURCE)
+                        raise HoldActiveError(reason_text)
+                    send_notifier_alert(
+                        "runaway_guard_v2_cooldown",
+                        "Runaway guard cooldown active",
+                        payload,
+                    )
+                    raise RunawayGuardCooldownError(block_details or payload)
+        for order in venue_orders:
+            venue_value = str(order.get("venue") or "")
+            order_id = int(order.get("id", 0))
+            broker = router.broker_for_venue(venue_value)
+            try:
+                register_cancel_attempt(reason="runaway_cancels_per_min", source=f"cancel_all:{venue_value}")
+                await broker.cancel(venue=venue_value, order_id=order_id)
+                cancelled += 1
+                if guard_enabled and guard.feature_enabled():
+                    guard.register_cancel(venue_key, str(order.get("symbol") or "").upper())
+            except HoldActiveError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive logging
+                failed += 1
+                ledger.record_event(
+                    level="ERROR",
+                    code="cancel_failed",
+                    payload={"venue": venue_value, "order_id": order_id, "error": str(exc)},
+                )
+        if guard_enabled and guard.feature_enabled():
+            update_runaway_guard_snapshot(guard.snapshot())
     remaining = await asyncio.to_thread(ledger.fetch_open_orders)
     set_open_orders(remaining)
     result = {"cancelled": cancelled, "failed": failed}

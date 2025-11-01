@@ -58,6 +58,11 @@ curl -s http://127.0.0.1:8000/api/arb/preview | jq
 - После устранения причины установить соответствующий гард в `OK` через UI/админку.
 - Перезапустить preflight (`POST /api/arb/preview`), убедиться что overview=OK.
 - Если включён live-режим → собрать approvals заново.
+- При срабатывании `runaway_guard_v2`:
+  - Проверить блок "Runaway guard v2" на `/ui/dashboard` — он показывает текущие счётчики по venue/символу, лимит `max_cancels_per_min`, активный cooldown и метку `last_trigger_ts`.
+  - На `/api/ui/status/overview` поле `runaway_guard.v2.last_block` содержит причину блокировки и детали (venue, символ, текущий счётчик).
+  - Дождаться окончания cooldown (`cooldown_remaining=0`) и убедиться, что счётчики в окне 60 секунд сброшены.
+  - Зафиксировать ручное вмешательство в журнале, создать `resume_request` с причиной (например, "runaway guard cleared") и подтвердить его, чтобы снять HOLD.
 
 ## 8. Strategy orchestrator
 - Центральный переключатель стратегий доступен через API `/api/ui/strategy/*` и управляет списком активных стратегий.
