@@ -163,6 +163,28 @@ class ExchangeWatchdog:
                 record_risk_breach("watchdog")
             return transition
 
+    def restore_snapshot(self, snapshot: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Replace the watchdog state with ``snapshot``."""
+
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("watchdog_snapshot_invalid")
+        with self._lock:
+            state: Dict[str, Dict[str, Any]] = {}
+            for name, entry in snapshot.items():
+                if not isinstance(entry, Mapping):
+                    continue
+                state[str(name)] = dict(entry)
+            self._state = state
+            self._recent_transitions.clear()
+            for exchange, entry in self._state.items():
+                ok = bool(entry.get("ok", True))
+                slo.set_watchdog_ok(exchange, ok)
+                status = str(entry.get("status") or ("OK" if ok else "DEGRADED")).upper()
+                entry["status"] = status
+                set_watchdog_state(exchange, status)
+            snapshot_copy = {name: dict(payload) for name, payload in self._state.items()}
+        return snapshot_copy
+
     def get_state(self) -> Dict[str, Dict[str, Any]]:
         """Return a shallow copy of the watchdog state."""
 
