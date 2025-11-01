@@ -19,3 +19,39 @@ jobs:
       - env:
           PYTHONPATH: .
         run: python -m pytest -q
+  acceptance:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      matrix:
+        python-version: ['3.11']
+    env:
+      PYTHONPATH: .
+      CHAOS_ENABLED: ${{ vars.CHAOS_ENABLED || secrets.CHAOS_ENABLED || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Smoke acceptance suite
+        run: make smoke
+      - name: Full acceptance suite
+        run: make acceptance
+      - name: Chaos acceptance suite
+        if: env.CHAOS_ENABLED == 'true' || env.CHAOS_ENABLED == '1'
+        env:
+          CHAOS_ENABLED: 'true'
+        run: python -m pytest -q tests/acceptance/test_chaos_flows.py
+      - name: Upload acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ matrix.python-version }}-artifacts
+          path: |
+            logs
+            artifacts/ops-report/**/*.json
+            artifacts/ops-report/**/*.csv
+          if-no-files-found: ignore

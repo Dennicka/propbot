@@ -1,61 +1,58 @@
 from __future__ import annotations
 
-import os
-import threading
-import time
-from pathlib import Path
-import subprocess
-
-import httpx
 import pytest
-import uvicorn
 
-ROOT = Path(__file__).resolve().parents[2]
-SMOKE_SCRIPT = ROOT / "scripts" / "smoke.sh"
+from app.services import runtime
+from app.watchdog.exchange_watchdog import (
+    get_exchange_watchdog,
+    reset_exchange_watchdog_for_tests,
+)
 
 
-@pytest.mark.skipif(not SMOKE_SCRIPT.exists(), reason="smoke script missing")
-def test_smoke_script(tmp_path, unused_tcp_port: int) -> None:
-    os.environ.setdefault("AUTH_ENABLED", "false")
-    os.environ.setdefault("API_TOKEN", "smoke-token")
-    port = unused_tcp_port
-    config = uvicorn.Config("app.main:app", host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
+@pytest.mark.acceptance
+def test_smoke_health_metrics_watchdog(client):
+    runtime.reset_for_tests()
+    app = client.app
+    app.state.resume_ok = True
+    app.state.opportunity_scanner = None
+    app.state.auto_hedge_daemon = None
 
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    reset_exchange_watchdog_for_tests()
+    watchdog = get_exchange_watchdog()
+    watchdog.check_once(
+        lambda: {
+            "binance": {"ok": True},
+            "okx": {"ok": True},
+        }
+    )
+    assert watchdog.overall_ok() is True
 
-    try:
-        deadline = time.time() + 10.0
-        with httpx.Client() as client:
-            while time.time() < deadline:
-                try:
-                    response = client.get(f"http://127.0.0.1:{port}/healthz", timeout=1.0)
-                    if response.status_code == 200:
-                        break
-                except httpx.HTTPError:
-                    time.sleep(0.1)
-            else:
-                pytest.fail("smoke server did not start")
+    health = client.get("/healthz")
+    assert health.status_code == 200, health.text
+    payload = health.json()
+    assert payload["ok"] is True
+    assert payload["journal_ok"] is True
+    assert payload["config_ok"] is True
 
-        env = os.environ.copy()
-        env.update({
-            "SMOKE_HOST": f"http://127.0.0.1:{port}",
-            "SMOKE_TIMEOUT": "2",
-            "SMOKE_TOKEN": env.get("API_TOKEN", ""),
-        })
-        result = subprocess.run(
-            [str(SMOKE_SCRIPT)],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        output = result.stdout
-        assert "✅" in output
-        assert result.returncode == 0
-    finally:
-        server.should_exit = True
-        thread.join(timeout=5.0)
-        if thread.is_alive():
-            pytest.fail("uvicorn server did not stop")
+    readiness = client.get("/live-readiness")
+    assert readiness.status_code == 200
+    readiness_payload = readiness.json()
+    assert readiness_payload["ready"] is True
+    assert readiness_payload["leader"] is True
+
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    body = metrics.text
+    for metric in (
+        "propbot_order_cycle_ms",
+        "propbot_watchdog_ok",
+        "propbot_daily_loss_breached",
+    ):
+        assert metric in body
+
+    badges = client.get("/api/ui/runtime_badges")
+    assert badges.status_code == 200
+    badges_payload = badges.json()
+    assert badges_payload["watchdog"] == "OK"
+    assert badges_payload["risk_checks"] in {"ON", "AUTO", "OFF"}
+    assert badges_payload["daily_loss"] in {"OK", "WARN", "OFF"}

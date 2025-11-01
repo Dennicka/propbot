@@ -7,7 +7,7 @@ VENV=.venv
 PY=$(VENV)/bin/python
 PIP=$(VENV)/bin/pip
 UVICORN=$(VENV)/bin/uvicorn
-PYTEST=$(VENV)/bin/pytest
+PYTEST=python -m pytest
 REMOTE ?= origin
 TAG ?= 0.1.2
 export TAG
@@ -32,44 +32,10 @@ test:
 	$(PYTEST) -q --maxfail=1
 
 acceptance:
-	$(PYTEST) -m acceptance -q
+        $(PYTEST) -q -m acceptance tests/acceptance
 
 smoke:
-	pytest -q -k "ui or recon or runtime"
-	@bash -eu -o pipefail -c '\
-set -eu; \
-STATE_DIR=/tmp/propbot-smoke; \
-mkdir -p "$$STATE_DIR"; \
-RUNTIME_STATE_PATH="$$STATE_DIR/runtime_state.json"; \
-POSITIONS_STORE_PATH="$$STATE_DIR/positions_store.json"; \
-PNL_HISTORY_PATH="$$STATE_DIR/pnl_history.json"; \
-HEDGE_LOG_PATH="$$STATE_DIR/hedge_log.json"; \
-OPS_ALERTS_FILE="$$STATE_DIR/ops_alerts.json"; \
-: > "$$RUNTIME_STATE_PATH"; \
-: > "$$POSITIONS_STORE_PATH"; \
-: > "$$PNL_HISTORY_PATH"; \
-: > "$$HEDGE_LOG_PATH"; \
-: > "$$OPS_ALERTS_FILE"; \
-AUTH_ENABLED=false API_TOKEN=smoke-token APPROVE_TOKEN=smoke-approve \
-  RUNTIME_STATE_PATH="$$RUNTIME_STATE_PATH" POSITIONS_STORE_PATH="$$POSITIONS_STORE_PATH" \
-  PNL_HISTORY_PATH="$$PNL_HISTORY_PATH" HEDGE_LOG_PATH="$$HEDGE_LOG_PATH" \
-  OPS_ALERTS_FILE="$$OPS_ALERTS_FILE" python -m uvicorn app.main:app --host 127.0.0.1 --port 8765 --log-level warning >/dev/null 2>&1 & \
-uv_pid=$$!; \
-cleanup() { \
-  kill "$$uv_pid" 2>/dev/null || true; \
-  wait "$$uv_pid" 2>/dev/null || true; \
-}; \
-trap cleanup EXIT; \
-for attempt in $$(seq 1 30); do \
-  if curl -sf http://127.0.0.1:8765/ui/dashboard >/dev/null; then \
-    echo "dashboard smoke passed"; \
-    exit 0; \
-  fi; \
-  sleep 1; \
-done; \
-echo "dashboard smoke failed" >&2; \
-exit 1 \
-'
+        $(PYTEST) -q tests/acceptance/test_smoke.py
 
 run:
 	$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
