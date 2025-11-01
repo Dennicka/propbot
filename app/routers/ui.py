@@ -53,6 +53,7 @@ from ..services.runtime import (
     set_open_orders,
 )
 from ..services.runtime_badges import get_runtime_badges
+from ..chaos import injector as chaos_injector
 from ..services import approvals_store, portfolio, risk, risk_guard
 from ..services.backtest_reports import load_latest_summary as load_latest_backtest_summary
 from ..services.audit_log import list_recent_events as list_audit_log_events
@@ -114,6 +115,37 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_CHAOS_ALLOWED_ENVS = {"paper", "testnet"}
+
+
+def _chaos_api_enabled() -> bool:
+    flag = os.getenv("CHAOS_ENABLED")
+    if flag is None or flag.strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    environment = (
+        os.getenv("ENVIRONMENT")
+        or os.getenv("ENV")
+        or os.getenv("MODE")
+        or ""
+    )
+    return environment.strip().lower() in _CHAOS_ALLOWED_ENVS
+
+
+class ChaosInjectionRequest(BaseModel):
+    """Schema describing the supported manual chaos injections."""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = Field(..., description="Injection kind identifier")
+    venue: str | None = Field(None, description="Target venue identifier")
+    endpoint: str | None = Field(None, description="Optional endpoint label")
+    reason: str | None = Field(None, description="Optional reason override")
+    ms: conint(gt=0) | None = Field(
+        None,
+        description="Latency spike in milliseconds (required for latency_spike_ms)",
+    )
 
 
 @router.get("/capital")
@@ -257,6 +289,25 @@ def chaos_profile(request: Request) -> dict[str, object]:
         "rest_timeout_p": settings.rest_timeout_p,
         "order_delay_ms": settings.order_delay_ms,
     }
+
+
+@router.post("/chaos")
+def apply_chaos_injection(
+    request: Request, payload: ChaosInjectionRequest
+) -> dict[str, object]:
+    """Trigger a manual chaos fault when enabled for the environment."""
+
+    require_token(request)
+    if not _chaos_api_enabled():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="chaos api disabled")
+
+    params = payload.model_dump(exclude_none=True)
+    params.pop("kind", None)
+    try:
+        result = chaos_injector.inject(payload.kind, params)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return result
 
 
 @router.get("/strategy_budget")
