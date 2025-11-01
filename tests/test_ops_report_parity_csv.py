@@ -73,3 +73,19 @@ def test_ops_report_csv_flat_budget_rows(client, ops_report_environment, monkeyp
 
     totals_row = next((row for row in rows if row.get("attrib_scope") == "totals"), None)
     assert totals_row is not None
+
+    json_response = client.get(
+        "/api/ui/ops_report",
+        headers=ops_report_environment["viewer"],
+    )
+    assert json_response.status_code == 200
+    json_payload = json_response.json()
+    attrib_totals = json_payload["pnl_attribution"]["totals"]
+
+    assert float(totals_row["attrib_realized"]) == pytest.approx(attrib_totals["realized"])
+    assert float(totals_row["attrib_unrealized"]) == pytest.approx(attrib_totals["unrealized"])
+    assert float(totals_row["attrib_fees"]) == pytest.approx(attrib_totals["fees"])
+    assert float(totals_row["attrib_rebates"]) == pytest.approx(attrib_totals["rebates"])
+    assert float(totals_row["attrib_funding"]) == pytest.approx(attrib_totals["funding"])
+    assert float(totals_row["attrib_net"]) == pytest.approx(attrib_totals["net"])
+    assert json_payload["pnl_attribution"]["simulated_excluded"] is True

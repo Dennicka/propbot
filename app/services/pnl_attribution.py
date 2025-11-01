@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping
@@ -9,6 +10,7 @@ from positions import list_positions
 
 from ..analytics import calc_attribution
 from ..ledger import fetch_events
+from ..risk.core import FeatureFlags
 from ..services import runtime
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from ..strategy.pnl_tracker import get_strategy_pnl_tracker
@@ -47,24 +49,34 @@ def _build_trade_events(positions: Iterable[Mapping[str, Any]]) -> List[Dict[str
                     legs_iterable.append(leg)
         if not legs_iterable:
             continue
-        realized_total = _coerce_float(position.get("pnl_usdt") or position.get("realized_pnl_usdt"))
+        realized_total = _coerce_float(
+            position.get("pnl_usdt") or position.get("realized_pnl_usdt")
+        )
         realized_share = realized_total / len(legs_iterable) if legs_iterable else 0.0
         for leg in legs_iterable:
-            venue = _normalise_name(leg.get("venue") or position.get("long_venue") or position.get("short_venue"), "unknown")
+            venue = _normalise_name(
+                leg.get("venue") or position.get("long_venue") or position.get("short_venue"),
+                "unknown",
+            )
             if not venue:
                 continue
             unrealized = _coerce_float(leg.get("unrealized_pnl_usdt"))
             notional = abs(_coerce_float(leg.get("notional_usdt") or position.get("notional_usdt")))
-            liquidity = str(leg.get("liquidity") or leg.get("role") or leg.get("side") or "taker").lower()
+            liquidity = str(
+                leg.get("liquidity") or leg.get("role") or leg.get("side") or "taker"
+            ).lower()
             event = {
                 "strategy": strategy,
                 "venue": venue,
-                "realized": realized_share if status in {"closed", "closing", "closed_partial"} else 0.0,
+                "realized": (
+                    realized_share if status in {"closed", "closing", "closed_partial"} else 0.0
+                ),
                 "unrealized": unrealized,
                 "notional": notional,
                 "liquidity": liquidity,
                 "simulated": simulated,
-                "rolling_30d_notional": leg.get("rolling_30d_notional") or position.get("rolling_30d_notional"),
+                "rolling_30d_notional": leg.get("rolling_30d_notional")
+                or position.get("rolling_30d_notional"),
             }
             events.append(event)
     return events
@@ -89,8 +101,12 @@ def _load_funding_events(limit: int = 200) -> List[Dict[str, Any]]:
         amount = _coerce_float(payload.get("amount") or payload.get("pnl") or event.get("amount"))
         if amount == 0.0:
             continue
-        strategy = _normalise_name(payload.get("strategy") or payload.get("strategy_name"), "unknown")
-        venue = _normalise_name(payload.get("venue") or payload.get("exchange") or event.get("venue"), "unknown")
+        strategy = _normalise_name(
+            payload.get("strategy") or payload.get("strategy_name"), "unknown"
+        )
+        venue = _normalise_name(
+            payload.get("venue") or payload.get("exchange") or event.get("venue"), "unknown"
+        )
         simulated = bool(payload.get("simulated") or payload.get("dry_run"))
         funding_rows.append(
             {
@@ -110,9 +126,22 @@ async def build_pnl_attribution() -> Dict[str, Any]:
     state = runtime.get_state()
     positions = list_positions()
     positions_snapshot = await build_positions_snapshot(state, positions)
-    trades = _build_trade_events(positions_snapshot.get("positions", []))
+    trades_raw = _build_trade_events(positions_snapshot.get("positions", []))
 
-    tracker_snapshot = get_strategy_pnl_tracker().snapshot()
+    exclude_sim = FeatureFlags.exclude_dry_run_from_pnl()
+
+    def _effective(items: Iterable[Mapping[str, Any]] | None) -> List[Dict[str, Any]]:
+        effective: List[Dict[str, Any]] = []
+        for entry in items or []:
+            if not isinstance(entry, Mapping):
+                continue
+            if exclude_sim and entry.get("simulated"):
+                continue
+            effective.append(dict(entry))
+        return effective
+
+    trades = _effective(trades_raw)
+    tracker_snapshot = get_strategy_pnl_tracker().snapshot(exclude_simulated=exclude_sim)
     strategy_totals = snapshot_strategy_pnl()
 
     # Provide per-strategy realised adjustments from tracker/state when positions do not include them yet.
@@ -120,11 +149,15 @@ async def build_pnl_attribution() -> Dict[str, Any]:
     for name, entry in tracker_snapshot.items():
         if not isinstance(entry, Mapping):
             continue
-        realized_by_strategy[_normalise_name(name, "unknown")] += _coerce_float(entry.get("realized_7d"))
+        realized_by_strategy[_normalise_name(name, "unknown")] += _coerce_float(
+            entry.get("realized_7d")
+        )
     for name, entry in strategy_totals.items():
         if not isinstance(entry, Mapping):
             continue
-        realized_by_strategy[_normalise_name(name, "unknown")] += _coerce_float(entry.get("realized_pnl_today"))
+        realized_by_strategy[_normalise_name(name, "unknown")] += _coerce_float(
+            entry.get("realized_pnl_today")
+        )
 
     if realized_by_strategy:
         by_strategy_realized = defaultdict(float)
@@ -132,7 +165,7 @@ async def build_pnl_attribution() -> Dict[str, Any]:
             by_strategy_realized[trade["strategy"]] += _coerce_float(trade.get("realized"))
         for strategy, tracker_realized in realized_by_strategy.items():
             delta = tracker_realized - by_strategy_realized.get(strategy, 0.0)
-            if abs(delta) <= 1e-9:
+            if math.isclose(delta, 0.0, abs_tol=1e-9):
                 continue
             trades.append(
                 {
@@ -146,9 +179,13 @@ async def build_pnl_attribution() -> Dict[str, Any]:
                 }
             )
 
-    fees_events: List[Dict[str, Any]] = []
-    rebates_events: List[Dict[str, Any]] = []
-    funding_events = _load_funding_events()
+    fees_raw: List[Dict[str, Any]] = []
+    rebates_raw: List[Dict[str, Any]] = []
+    funding_raw = _load_funding_events()
+
+    fees_events = _effective(fees_raw)
+    rebates_events = _effective(rebates_raw)
+    funding_events = _effective(funding_raw)
 
     attribution = calc_attribution(trades, fees_events, rebates_events, funding_events)
     meta = dict(attribution.get("meta") or {})
@@ -167,6 +204,7 @@ async def build_pnl_attribution() -> Dict[str, Any]:
         "by_venue": attribution.get("by_venue", {}),
         "totals": attribution.get("totals", {}),
         "meta": meta,
+        "simulated_excluded": exclude_sim,
     }
 
 

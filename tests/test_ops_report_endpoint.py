@@ -112,9 +112,7 @@ def ops_report_environment(monkeypatch, tmp_path):
     reset_exchange_watchdog_for_tests()
     watchdog = get_exchange_watchdog()
     watchdog.check_once(lambda: {"binance": {"ok": False, "reason": "timeout"}})
-    monkeypatch.setattr(
-        "app.services.ops_report.get_exchange_watchdog", lambda: watchdog
-    )
+    monkeypatch.setattr("app.services.ops_report.get_exchange_watchdog", lambda: watchdog)
 
     dummy_state = SimpleNamespace(
         control=SimpleNamespace(
@@ -184,6 +182,7 @@ def ops_report_environment(monkeypatch, tmp_path):
             }
         ],
     )
+
     async def fake_pnl_attribution() -> dict[str, object]:
         return {
             "generated_at": "2024-01-01T02:00:00+00:00",
@@ -216,6 +215,7 @@ def ops_report_environment(monkeypatch, tmp_path):
                 "net": 45.6,
             },
             "meta": {"exclude_simulated": True},
+            "simulated_excluded": True,
         }
 
     monkeypatch.setattr("app.services.ops_report.build_pnl_attribution", fake_pnl_attribution)
@@ -257,9 +257,7 @@ def test_ops_report_requires_token_when_auth_enabled(monkeypatch, client) -> Non
     assert response.status_code == 401
 
 
-def test_ops_report_json_accessible_for_roles(
-    client, ops_report_environment
-) -> None:
+def test_ops_report_json_accessible_for_roles(client, ops_report_environment) -> None:
     response = client.get("/api/ui/ops_report", headers=ops_report_environment["viewer"])
     assert response.status_code == 200
     payload = response.json()
