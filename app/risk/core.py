@@ -226,6 +226,13 @@ class FeatureFlags:
     def auto_hold_daily_loss_cap(cls) -> bool:
         return cls._flag("DAILY_LOSS_CAP_AUTO_HOLD")
 
+    @classmethod
+    def exclude_dry_run_from_pnl(cls) -> bool:
+        raw = os.getenv("EXCLUDE_DRY_RUN_FROM_PNL")
+        if raw is None:
+            return True
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
 
 @dataclass(frozen=True)
 class _RiskMetrics:

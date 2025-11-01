@@ -75,20 +75,19 @@ class StrategyPnlTracker:
     def exclude_simulated_entries(self) -> bool:
         return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
 
-    def snapshot(self) -> dict[str, dict[str, float]]:
+    def snapshot(self, *, exclude_simulated: bool | None = None) -> dict[str, dict[str, float]]:
         """Return per-strategy aggregates for today/7d realised PnL."""
 
         now = time.time()
         today_cutoff = now - _ONE_DAY
         window_cutoff = now - _ROLLING_WINDOW
-        exclude_simulated = self.exclude_simulated_entries()
+        if exclude_simulated is None:
+            exclude_simulated = self.exclude_simulated_entries()
+        else:
+            exclude_simulated = bool(exclude_simulated)
 
         with self._lock:
-            data = {
-                name: list(events)
-                for name, events in self._events.items()
-                if events
-            }
+            data = {name: list(events) for name, events in self._events.items() if events}
 
         result: dict[str, dict[str, float]] = {}
         for name, events in data.items():
@@ -101,12 +100,8 @@ class StrategyPnlTracker:
             if exclude_simulated and not filtered_list:
                 continue
 
-            realized_today = sum(
-                event.pnl for event in filtered_list if event.ts >= today_cutoff
-            )
-            realized_7d = sum(
-                event.pnl for event in filtered_list if event.ts >= window_cutoff
-            )
+            realized_today = sum(event.pnl for event in filtered_list if event.ts >= today_cutoff)
+            realized_7d = sum(event.pnl for event in filtered_list if event.ts >= window_cutoff)
             drawdown = self._max_drawdown(filtered_list, window_cutoff)
             result[name] = {
                 "realized_today": float(realized_today),

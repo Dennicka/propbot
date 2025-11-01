@@ -17,6 +17,7 @@ from .routers import (
     ui_recon,
     ui_exec,
     ui_pnl,
+    ui_pnl_attrib,
     ui_exposure,
     ui_control_state,
     live,
@@ -53,6 +54,7 @@ app.include_router(ui_stream.router, prefix="/api/ui")
 app.include_router(ui_status.router, prefix="/api/ui/status")
 app.include_router(ui_exec.router, prefix="/api/ui")
 app.include_router(ui_pnl.router, prefix="/api/ui")
+app.include_router(ui_pnl_attrib.router, prefix="/api/ui")
 app.include_router(ui_exposure.router, prefix="/api/ui")
 app.include_router(ui_control_state.router, prefix="/api/ui")
 app.include_router(ui_approvals.router, prefix="/api/ui")

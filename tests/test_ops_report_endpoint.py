@@ -112,9 +112,7 @@ def ops_report_environment(monkeypatch, tmp_path):
     reset_exchange_watchdog_for_tests()
     watchdog = get_exchange_watchdog()
     watchdog.check_once(lambda: {"binance": {"ok": False, "reason": "timeout"}})
-    monkeypatch.setattr(
-        "app.services.ops_report.get_exchange_watchdog", lambda: watchdog
-    )
+    monkeypatch.setattr("app.services.ops_report.get_exchange_watchdog", lambda: watchdog)
 
     dummy_state = SimpleNamespace(
         control=SimpleNamespace(
@@ -184,6 +182,43 @@ def ops_report_environment(monkeypatch, tmp_path):
             }
         ],
     )
+
+    async def fake_pnl_attribution() -> dict[str, object]:
+        return {
+            "generated_at": "2024-01-01T02:00:00+00:00",
+            "by_strategy": {
+                "alpha": {
+                    "realized": 42.0,
+                    "unrealized": 3.0,
+                    "fees": 0.5,
+                    "rebates": 0.1,
+                    "funding": 1.0,
+                    "net": 45.6,
+                }
+            },
+            "by_venue": {
+                "binance": {
+                    "realized": 40.0,
+                    "unrealized": 2.5,
+                    "fees": 0.4,
+                    "rebates": 0.05,
+                    "funding": 0.5,
+                    "net": 42.65,
+                }
+            },
+            "totals": {
+                "realized": 42.0,
+                "unrealized": 3.0,
+                "fees": 0.5,
+                "rebates": 0.1,
+                "funding": 1.0,
+                "net": 45.6,
+            },
+            "meta": {"exclude_simulated": True},
+            "simulated_excluded": True,
+        }
+
+    monkeypatch.setattr("app.services.ops_report.build_pnl_attribution", fake_pnl_attribution)
     monkeypatch.setattr(
         "app.services.ops_report.get_risk_accounting_snapshot",
         lambda: {
@@ -222,9 +257,7 @@ def test_ops_report_requires_token_when_auth_enabled(monkeypatch, client) -> Non
     assert response.status_code == 401
 
 
-def test_ops_report_json_accessible_for_roles(
-    client, ops_report_environment
-) -> None:
+def test_ops_report_json_accessible_for_roles(client, ops_report_environment) -> None:
     response = client.get("/api/ui/ops_report", headers=ops_report_environment["viewer"])
     assert response.status_code == 200
     payload = response.json()
@@ -235,6 +268,8 @@ def test_ops_report_json_accessible_for_roles(
     assert payload["runtime"]["safety"]["hold_reason"] == "maintenance"
     assert payload["autopilot"]["last_decision"] == "ready"
     assert payload["pnl"]["unrealized_pnl_usdt"] == 42.0
+    assert payload["pnl_attribution"]["totals"]["realized"] == pytest.approx(42.0)
+    assert payload["pnl_attribution"]["by_strategy"]["alpha"]["fees"] == pytest.approx(0.5)
     assert payload["positions_snapshot"]["exposure"]["binance"]["net_usdt"] == 50.0
     assert payload["audit"]["operator_actions"][0]["action"] == "TRIGGER_HOLD"
     assert payload["last_audit_actions"][0]["action"] == "TRIGGER_HOLD"
@@ -293,6 +328,8 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
     assert "timestamp" in header
     assert "open_trades_count" in header
     assert "strategy" in header
+    assert "attrib_scope" in header
+    assert "attrib_net" in header
     first_row = rows[0]
     assert first_row["open_trades_count"] == "1"
     assert first_row["max_open_trades_limit"] == "5"
@@ -303,3 +340,8 @@ def test_ops_report_csv_export(client, ops_report_environment) -> None:
     assert first_row["daily_loss_status"]
     assert first_row["watchdog_status"]
     assert first_row["auto_trade"]
+
+    totals_row = next((row for row in rows if row.get("attrib_scope") == "totals"), None)
+    assert totals_row is not None
+    assert totals_row["attrib_name"] == "totals"
+    assert totals_row["attrib_realized"] == "42.0"

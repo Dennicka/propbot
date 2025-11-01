@@ -115,8 +115,9 @@ python -m app.tools.replay_runner --file data/replay/sample.jsonl
 
 ### `/api/ui/ops_report` (JSON)
 
-Основной снимок для смены. В payload входят агрегаты runtime и отчётность по
-стратегиям:
+Основной снимок для смены. В payload входят агрегаты runtime, PnL и отчётность по
+стратегиям, включая блок `pnl_attribution` с разложением по стратегиям и
+биржам:
 
 ```json
 {
@@ -125,6 +126,9 @@ python -m app.tools.replay_runner --file data/replay/sample.jsonl
   "runtime": {"mode": "HOLD", "safety": {"hold_reason": "maintenance"}},
   "autopilot": {"last_decision": "ready"},
   "pnl": {"unrealized_pnl_usdt": 42.0},
+  "pnl_attribution": {
+    "totals": {"realized": 42.0, "unrealized": 3.0, "fees": 0.5, "rebates": 0.1, "funding": 1.0, "net": 45.6}
+  },
   "budgets": [{"strategy": "alpha", "budget_usdt": 1000.0, "used_usdt": 250.0}],
   "watchdog": {"overall_ok": false, "degraded_reasons": {"binance": "timeout"}},
   "daily_loss_cap": {"max_daily_loss_usdt": 200.0, "losses_usdt": 80.0, "breached": false},
@@ -137,12 +141,14 @@ python -m app.tools.replay_runner --file data/replay/sample.jsonl
 
 ### `/api/ui/ops_report.csv`
 
-CSV-вариант опирается на те же данные и добавляет табличную строку по каждой
-стратегии. Заголовок и пример первой строки:
+CSV-вариант опирается на те же данные и для каждой стратегии добавляет строку с
+пустыми колонками атрибуции, за которыми следуют записи `pnl_attribution`. Заголовок и
+пример:
 
 ```
-timestamp,open_trades_count,max_open_trades_limit,daily_loss_status,watchdog_status,auto_trade,strategy,budget_usdt,used_usdt,remaining_usdt
-2024-01-01T00:00:00+00:00,1,5,OK,DEGRADED,OFF,alpha,1000.0,250.0,750.0
+timestamp,open_trades_count,max_open_trades_limit,daily_loss_status,watchdog_status,auto_trade,strategy,budget_usdt,used_usdt,remaining_usdt,attrib_scope,attrib_name,attrib_realized,attrib_unrealized,attrib_fees,attrib_rebates,attrib_funding,attrib_net
+2024-01-01T00:00:00+00:00,1,5,OK,DEGRADED,OFF,alpha,1000.0,250.0,750.0,,,,,,,
+2024-01-01T00:00:00+00:00,1,5,OK,DEGRADED,OFF,,,,,totals,totals,45.6,3.0,0.5,0.1,1.0,49.2
 ```
 
 Файл пригоден для Excel/Sheets и поставляется с контент-тайпом `text/csv`.
@@ -162,8 +168,26 @@ JSON-отчёт по стратегиям содержит `realized_today`, `re
   ]
 }
 ```
+
+### `/api/ui/pnl_attrib`
+
+Отдельный срез PnL attribution. Требует тот же bearer-токен, что и остальные
+`/api/ui` ручки, и возвращает агрегаты по стратегиям и биржам, разбитые на
+компоненты (`realized`, `unrealized`, `fees`, `rebates`, `funding`, `net`).
+Комиссии и ребейты вычисляются через текущие TCA tiers (см. конфиг `tca.tiers`),
+а funding-платежи подтягиваются из событий ledger/адаптеров. Все слагаемые
+суммируются на единой базе после фильтрации DRY-RUN: `net = realized +
+unrealized + fees + rebates + funding`, при этом комиссии публикуются со знаком
+«минус», а ребейты — со знаком «плюс». Поле `meta` подсказывает, исключены ли
+симуляционные сделки, и сколько сырых событий попало в срез. Используйте этот
+эндпоинт, чтобы сверять суммарные комиссии/фандинг с биржевыми отчётами.
 Измените `EXCLUDE_DRY_RUN_FROM_PNL=false`, чтобы видеть симулированные сделки в
-агрегатах. 【F:tests/test_strategy_pnl_endpoint.py†L9-L49】
+агрегатах. Текущее состояние флага возвращается отдельно в поле
+`simulated_excluded`, которое также попадает в `/ui/dashboard`, `/api/ui/ops_report`
+и CSV-экспорт (`attrib_simulated_excluded`). Если суммы из runtime расходятся с
+`StrategyPnlTracker`, сервис добавит строку `tracker-adjustment`; она считается на
+том же отфильтрованном наборе сделок, поэтому dry-run PnL не вычитается повторно и
+виден только при отключённом флаге. 【F:tests/test_pnl_attrib_endpoint.py†L1-L41】
 
 ### `/api/ui/open-trades.csv`
 

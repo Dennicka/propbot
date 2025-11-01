@@ -24,6 +24,7 @@ from .runtime_badges import get_runtime_badges
 from .audit_log import list_recent_events
 from .positions_view import build_positions_snapshot
 from .strategy_status import build_strategy_status
+from .pnl_attribution import build_pnl_attribution
 from ..risk.daily_loss import get_daily_loss_cap_state
 from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 
@@ -75,7 +76,11 @@ def _count_open_trades(positions_snapshot: Mapping[str, Any]) -> int:
             continue
         legs = entry.get("legs")
         if isinstance(legs, Sequence):
-            if any(str(leg.get("status") or "").strip().lower() in {"open", "partial"} for leg in legs if isinstance(leg, Mapping)):
+            if any(
+                str(leg.get("status") or "").strip().lower() in {"open", "partial"}
+                for leg in legs
+                if isinstance(leg, Mapping)
+            ):
                 count += 1
     return count
 
@@ -172,7 +177,9 @@ def _iter_budget_rows(report: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
     yield {}
 
 
-def _normalise_strategy_controls(raw_snapshot: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+def _normalise_strategy_controls(
+    raw_snapshot: Mapping[str, Any] | None
+) -> dict[str, dict[str, Any]]:
     if not isinstance(raw_snapshot, Mapping):
         return {}
     strategies = raw_snapshot.get("strategies")
@@ -223,8 +230,16 @@ def _build_per_strategy_pnl(
         else:
             state = {}
             frozen = False
-        pnl_entry = strategy_pnl_snapshot.get(name) if isinstance(strategy_pnl_snapshot.get(name), Mapping) else {}
-        budget_entry = strategy_budget_snapshot.get(name) if isinstance(strategy_budget_snapshot.get(name), Mapping) else {}
+        pnl_entry = (
+            strategy_pnl_snapshot.get(name)
+            if isinstance(strategy_pnl_snapshot.get(name), Mapping)
+            else {}
+        )
+        budget_entry = (
+            strategy_budget_snapshot.get(name)
+            if isinstance(strategy_budget_snapshot.get(name), Mapping)
+            else {}
+        )
         result[name] = {
             "realized_pnl_today": pnl_entry.get("realized_pnl_today", 0.0),
             "realized_pnl_total": pnl_entry.get("realized_pnl_total", 0.0),
@@ -243,10 +258,28 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
     positions = list_positions()
     positions_snapshot = await build_positions_snapshot(state, positions)
     pnl_snapshot = build_pnl_snapshot(positions_snapshot)
+    pnl_tracker = get_strategy_pnl_tracker()
+    try:
+        pnl_attribution_payload = await build_pnl_attribution()
+    except Exception:  # pragma: no cover - ops report should not crash on attribution failure
+        pnl_attribution_payload = {
+            "generated_at": _iso_now(),
+            "by_strategy": {},
+            "by_venue": {},
+            "totals": {
+                "realized": 0.0,
+                "unrealized": 0.0,
+                "fees": 0.0,
+                "rebates": 0.0,
+                "funding": 0.0,
+                "net": 0.0,
+            },
+            "meta": {"error": "unavailable"},
+            "simulated_excluded": pnl_tracker.exclude_simulated_entries(),
+        }
     strategy_snapshot = get_strategy_risk_manager().full_snapshot()
     strategy_budget_snapshot = get_strategy_budget_manager().snapshot()
     strategy_pnl_snapshot = snapshot_strategy_pnl()
-    pnl_tracker = get_strategy_pnl_tracker()
     tracker_snapshot = pnl_tracker.snapshot()
     tracker_rows = [
         {
@@ -291,9 +324,7 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
     accounting_mapping = accounting_snapshot if isinstance(accounting_snapshot, Mapping) else {}
     budgets_payload = _extract_budget_rows(accounting_mapping)
     normalised_actions = [
-        _normalise_audit_action(entry)
-        for entry in operator_actions
-        if isinstance(entry, Mapping)
+        _normalise_audit_action(entry) for entry in operator_actions if isinstance(entry, Mapping)
     ]
     universe_enforced = is_universe_enforced()
     unknown_pairs = runtime.get_universe_unknown_pairs()
@@ -324,11 +355,16 @@ async def build_ops_report(*, actions_limit: int = 10, events_limit: int = 10) -
         "badges": get_runtime_badges(),
         "autopilot": autopilot,
         "pnl": pnl_snapshot,
+        "pnl_attribution": pnl_attribution_payload,
         "daily_loss_cap": daily_loss_cap_snapshot,
         "positions_snapshot": {
             "positions": list(positions_snapshot.get("positions", [])),
-            "exposure": {str(k): v for k, v in _coerce_mapping(positions_snapshot.get("exposure")).items()},
-            "totals": {str(k): v for k, v in _coerce_mapping(positions_snapshot.get("totals")).items()},
+            "exposure": {
+                str(k): v for k, v in _coerce_mapping(positions_snapshot.get("exposure")).items()
+            },
+            "totals": {
+                str(k): v for k, v in _coerce_mapping(positions_snapshot.get("totals")).items()
+            },
         },
         "strategy_controls": _normalise_strategy_controls(strategy_snapshot),
         "per_strategy_pnl": _build_per_strategy_pnl(
@@ -381,7 +417,9 @@ def _iter_strategy_rows(strategies: Mapping[str, Mapping[str, Any]]) -> Iterable
                 }
 
 
-def _iter_strategy_budget_rows(budgets: Mapping[str, Mapping[str, Any]]) -> Iterable[dict[str, str]]:
+def _iter_strategy_budget_rows(
+    budgets: Mapping[str, Mapping[str, Any]]
+) -> Iterable[dict[str, str]]:
     for name in sorted(budgets):
         entry = _coerce_mapping(budgets.get(name))
         section = f"strategy_budget:{name}"
@@ -400,7 +438,9 @@ def _iter_strategy_budget_rows(budgets: Mapping[str, Mapping[str, Any]]) -> Iter
                 }
 
 
-def _iter_strategy_status_rows(statuses: Mapping[str, Mapping[str, Any]]) -> Iterable[dict[str, str]]:
+def _iter_strategy_status_rows(
+    statuses: Mapping[str, Mapping[str, Any]]
+) -> Iterable[dict[str, str]]:
     for name in sorted(statuses):
         entry = _coerce_mapping(statuses.get(name))
         section = f"strategy_status:{name}"
@@ -467,6 +507,42 @@ def _iter_strategy_pnl_tracker_rows(payload: Mapping[str, Any]) -> Iterable[dict
                         "key": key,
                         "value": _stringify(entry.get(key)),
                     }
+
+
+def _iter_pnl_attribution_rows(payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
+    data = payload if isinstance(payload, Mapping) else {}
+    simulated_flag = data.get("simulated_excluded")
+    for scope in ("by_strategy", "by_venue"):
+        entries = data.get(scope)
+        if not isinstance(entries, Mapping):
+            continue
+        scope_name = scope.replace("by_", "")
+        for name in sorted(entries):
+            entry = _coerce_mapping(entries.get(name))
+            yield {
+                "attrib_scope": scope_name,
+                "attrib_name": str(name),
+                "attrib_realized": _stringify(entry.get("realized")),
+                "attrib_unrealized": _stringify(entry.get("unrealized")),
+                "attrib_fees": _stringify(entry.get("fees")),
+                "attrib_rebates": _stringify(entry.get("rebates")),
+                "attrib_funding": _stringify(entry.get("funding")),
+                "attrib_net": _stringify(entry.get("net")),
+                "attrib_simulated_excluded": _stringify(simulated_flag),
+            }
+    totals = _coerce_mapping(data.get("totals"))
+    if totals:
+        yield {
+            "attrib_scope": "totals",
+            "attrib_name": "totals",
+            "attrib_realized": _stringify(totals.get("realized")),
+            "attrib_unrealized": _stringify(totals.get("unrealized")),
+            "attrib_fees": _stringify(totals.get("fees")),
+            "attrib_rebates": _stringify(totals.get("rebates")),
+            "attrib_funding": _stringify(totals.get("funding")),
+            "attrib_net": _stringify(totals.get("net")),
+            "attrib_simulated_excluded": _stringify(simulated_flag),
+        }
 
 
 def _iter_pnl_rows(pnl_payload: Mapping[str, Any]) -> Iterable[dict[str, str]]:
@@ -598,6 +674,15 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
         "budget_usdt",
         "used_usdt",
         "remaining_usdt",
+        "attrib_scope",
+        "attrib_name",
+        "attrib_realized",
+        "attrib_unrealized",
+        "attrib_fees",
+        "attrib_rebates",
+        "attrib_funding",
+        "attrib_net",
+        "attrib_simulated_excluded",
     ]
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
@@ -623,9 +708,43 @@ def build_ops_report_csv(report: Mapping[str, Any]) -> str:
                 "watchdog_status": watchdog_status,
                 "auto_trade": auto_trade_status,
                 "strategy": strategy,
-                "budget_usdt": budget_usdt,
-                "used_usdt": used_usdt,
-                "remaining_usdt": remaining_usdt,
+                "budget_usdt": _stringify(budget_usdt),
+                "used_usdt": _stringify(used_usdt),
+                "remaining_usdt": _stringify(remaining_usdt),
+                "attrib_scope": "",
+                "attrib_name": "",
+                "attrib_realized": "",
+                "attrib_unrealized": "",
+                "attrib_fees": "",
+                "attrib_rebates": "",
+                "attrib_funding": "",
+                "attrib_net": "",
+                "attrib_simulated_excluded": "",
+            }
+        )
+
+    for attrib in _iter_pnl_attribution_rows(report.get("pnl_attribution", {})):
+        writer.writerow(
+            {
+                "timestamp": timestamp,
+                "open_trades_count": open_trades_count,
+                "max_open_trades_limit": max_open_trades_limit,
+                "daily_loss_status": daily_loss_status,
+                "watchdog_status": watchdog_status,
+                "auto_trade": auto_trade_status,
+                "strategy": "",
+                "budget_usdt": "",
+                "used_usdt": "",
+                "remaining_usdt": "",
+                "attrib_scope": attrib.get("attrib_scope", ""),
+                "attrib_name": attrib.get("attrib_name", ""),
+                "attrib_realized": attrib.get("attrib_realized", ""),
+                "attrib_unrealized": attrib.get("attrib_unrealized", ""),
+                "attrib_fees": attrib.get("attrib_fees", ""),
+                "attrib_rebates": attrib.get("attrib_rebates", ""),
+                "attrib_funding": attrib.get("attrib_funding", ""),
+                "attrib_net": attrib.get("attrib_net", ""),
+                "attrib_simulated_excluded": attrib.get("attrib_simulated_excluded", ""),
             }
         )
 

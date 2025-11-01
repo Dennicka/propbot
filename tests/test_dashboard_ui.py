@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 
-from positions import create_position
-
-from app.risk import accounting as risk_accounting, core as risk_core
+from app.risk import accounting as risk_accounting
 from app.risk import auto_hold
+from app.risk import core as risk_core
 from app.services import approvals_store, live_readiness, risk_guard, runtime
 from app.services.pnl_history import record_snapshot
 from app.services.runtime import is_hold_active
@@ -15,6 +14,7 @@ from app.watchdog.exchange_watchdog import (
     get_exchange_watchdog,
     reset_exchange_watchdog_for_tests,
 )
+from positions import create_position
 
 
 def test_dashboard_requires_token(monkeypatch, client) -> None:
@@ -72,13 +72,16 @@ def test_dashboard_strategy_orchestrator_plan(monkeypatch, tmp_path, client) -> 
     assert response.status_code == 200
     html = response.text
     assert "Strategy Orchestrator" in html
-    assert "Orchestrator alerts for skip/risk_limit/hold_active and cooldown/fail are forwarded to ops Telegram/audit." in html
+    assert (
+        "Orchestrator alerts for skip/risk_limit/hold_active and cooldown/fail are forwarded to ops Telegram/audit."
+        in html
+    )
     assert "cross_exchange_arb" in html
-    assert "decision-skip-critical\">skip" in html
+    assert 'decision-skip-critical">skip' in html
     assert "hold_active" in html
-    assert "decision-cooldown\">cooldown" in html
+    assert 'decision-cooldown">cooldown' in html
     assert "recent_fail" in html
-    assert "strategy-orchestrator-readonly\">READ ONLY" in html
+    assert 'strategy-orchestrator-readonly">READ ONLY' in html
 
 
 def test_dashboard_leader_and_readiness_labels(monkeypatch, tmp_path, client) -> None:
@@ -142,7 +145,7 @@ def test_dashboard_viewer_read_only(monkeypatch, tmp_path, client) -> None:
     html = response.text
     assert "READ ONLY: you cannot change HOLD/RESUME/KILL." in html
     assert "role-badge role-viewer" in html
-    assert "form method=\"post\"" not in html
+    assert 'form method="post"' not in html
 
 
 def test_dashboard_auditor_read_only(monkeypatch, tmp_path, client) -> None:
@@ -169,7 +172,7 @@ def test_dashboard_auditor_read_only(monkeypatch, tmp_path, client) -> None:
     html = response.text
     assert "Auditor role: read only" in html
     assert "role-badge role-auditor" in html
-    assert "form method=\"post\"" not in html
+    assert 'form method="post"' not in html
 
 
 def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
@@ -179,18 +182,51 @@ def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
             "unrealized_pnl_usdt": 123.45,
             "realised_pnl_today_usdt": 0.0,
             "total_exposure_usdt": 6789.0,
-            "capital_headroom_per_strategy": {
-                "cross_exchange_arb": {"headroom_notional": 1000.0}
-            },
+            "capital_headroom_per_strategy": {"cross_exchange_arb": {"headroom_notional": 1000.0}},
             "capital_snapshot": {
-                "per_strategy_limits": {
-                    "cross_exchange_arb": {"max_notional": 5000.0}
-                },
-                "current_usage": {
-                    "cross_exchange_arb": {"open_notional": 4000.0}
-                },
+                "per_strategy_limits": {"cross_exchange_arb": {"max_notional": 5000.0}},
+                "current_usage": {"cross_exchange_arb": {"open_notional": 4000.0}},
             },
         },
+    )
+
+    async def fake_pnl_attribution() -> dict[str, object]:
+        return {
+            "generated_at": "2024-01-01T00:00:00+00:00",
+            "by_strategy": {
+                "cross_exchange_arb": {
+                    "realized": 12.0,
+                    "unrealized": 1.5,
+                    "fees": 0.4,
+                    "rebates": 0.1,
+                    "funding": 0.2,
+                    "net": 13.4,
+                }
+            },
+            "by_venue": {
+                "binance": {
+                    "realized": 8.0,
+                    "unrealized": 1.0,
+                    "fees": 0.3,
+                    "rebates": 0.05,
+                    "funding": 0.1,
+                    "net": 8.85,
+                }
+            },
+            "totals": {
+                "realized": 12.0,
+                "unrealized": 1.5,
+                "fees": 0.4,
+                "rebates": 0.1,
+                "funding": 0.2,
+                "net": 13.4,
+            },
+            "meta": {"exclude_simulated": True},
+            "simulated_excluded": True,
+        }
+
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.build_pnl_attribution", fake_pnl_attribution
     )
 
     secrets_payload = {
@@ -212,6 +248,8 @@ def test_dashboard_pnl_snapshot_visible(monkeypatch, tmp_path, client) -> None:
     assert response.status_code == 200
     html = response.text
     assert "PnL / Risk" in html
+    assert "PnL Attribution" in html
+    assert "Simulated (DRY_RUN) entries excluded." in html
     assert "headroom" in html.lower()
     assert "Daily Strategy Budgets" in html
     assert "Автосброс в 00:00 UTC" in html
@@ -345,10 +383,10 @@ def test_dashboard_strategy_risk_states(monkeypatch, tmp_path, client) -> None:
 
     assert response.status_code == 200
     html = response.text
-    assert "risk-state risk-state-frozen\">frozen_by_risk" in html
-    assert "risk-state risk-state-active\">active" in html
-    assert "risk-state risk-state-blocked\">blocked_by_risk" in html
-    assert "failure-count failure-count-alert\">4</span> / 3" in html
+    assert 'risk-state risk-state-frozen">frozen_by_risk' in html
+    assert 'risk-state risk-state-active">active' in html
+    assert 'risk-state risk-state-blocked">blocked_by_risk' in html
+    assert 'failure-count failure-count-alert">4</span> / 3' in html
     assert "blocked reason" in html
     assert "enabled: yes" in html
     assert "enabled: no" in html
@@ -516,11 +554,11 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "alice" in html
     assert "reason" in html
 
-    assert "form method=\"post\" action=\"/api/ui/dashboard-hold\"" in html
-    assert "form method=\"post\" action=\"/api/ui/dashboard-resume-request\"" in html
-    assert "form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"" in html
-    assert "form method=\"post\" action=\"/api/ui/dashboard-kill\"" in html
-    assert "button type=\"submit\" disabled" not in html
+    assert 'form method="post" action="/api/ui/dashboard-hold"' in html
+    assert 'form method="post" action="/api/ui/dashboard-resume-request"' in html
+    assert 'form method="post" action="/api/ui/dashboard-unfreeze-strategy"' in html
+    assert 'form method="post" action="/api/ui/dashboard-kill"' in html
+    assert 'button type="submit" disabled' not in html
 
     assert "Risk &amp; PnL trend" in html
     assert "Unrealised PnL" in html
@@ -570,9 +608,7 @@ def test_dashboard_recent_ops_status_badges(monkeypatch, client) -> None:
             },
         ][:limit]
 
-    monkeypatch.setattr(
-        "app.services.operator_dashboard.list_recent_events", fake_recent_events
-    )
+    monkeypatch.setattr("app.services.operator_dashboard.list_recent_events", fake_recent_events)
 
     response = client.get(
         "/ui/dashboard",
