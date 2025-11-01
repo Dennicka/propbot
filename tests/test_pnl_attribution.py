@@ -114,6 +114,7 @@ def test_calc_attribution_with_fees_rebates_and_funding(tca_config: Path) -> Non
 
     result = calc_attribution(trades, fees, rebates, funding_events)
 
+    assert result["simulated_excluded"] is True
     assert result["meta"]["exclude_simulated"] is True
     assert result["meta"]["tier_table_loaded"] is True
 
@@ -121,7 +122,7 @@ def test_calc_attribution_with_fees_rebates_and_funding(tca_config: Path) -> Non
     venue_binance = result["by_venue"]["binance-um"]
 
     # Fees from TCA: 1000 * 2bps = 0.2; 500 * 0.7bps = 0.035; plus explicit fee 0.5
-    expected_fees_value = 0.2 + 0.035 + 0.5
+    expected_fees_value = -(0.2 + 0.035 + 0.5)
     assert strategy_alpha["fees"] == pytest.approx(expected_fees_value, abs=1e-9)
     # Rebates: maker leg rebate 500 * 0.02bps = 0.01 plus explicit 0.1
     assert strategy_alpha["rebates"] == pytest.approx(0.01 + 0.1, abs=1e-9)
@@ -133,13 +134,13 @@ def test_calc_attribution_with_fees_rebates_and_funding(tca_config: Path) -> Non
     assert venue_binance["realized"] == pytest.approx(100.0, abs=1e-9)
     assert venue_binance["unrealized"] == pytest.approx(10.0, abs=1e-9)
     assert venue_binance["funding"] == pytest.approx(5.0, abs=1e-9)
-    assert venue_binance["fees"] == pytest.approx(0.2 + 0.5, abs=1e-9)
+    assert venue_binance["fees"] == pytest.approx(-(0.2 + 0.5), abs=1e-9)
 
     totals = result["totals"]
     assert totals["realized"] == pytest.approx(80.0, abs=1e-9)
     assert totals["unrealized"] == pytest.approx(5.0, abs=1e-9)
     assert totals["funding"] == pytest.approx(5.0, abs=1e-9)
-    net_expected = 80.0 + 5.0 - expected_fees_value + (0.01 + 0.1) + 5.0
+    net_expected = 80.0 + 5.0 + expected_fees_value + (0.01 + 0.1) + 5.0
     assert totals["net"] == pytest.approx(net_expected, abs=1e-9)
 
 
@@ -187,10 +188,11 @@ def test_calc_attribution_includes_simulated_when_flag_false(
     assert totals["realized"] == pytest.approx(130.0, abs=1e-9)
     assert totals["unrealized"] == pytest.approx(5.0, abs=1e-9)
     assert totals["funding"] == pytest.approx(2.0, abs=1e-9)
-    assert totals["fees"] == pytest.approx(0.875, abs=1e-9)
+    assert totals["fees"] == pytest.approx(-0.875, abs=1e-9)
     assert totals["rebates"] == pytest.approx(0.11, abs=1e-9)
     expected_net = 130.0 + 5.0 - 0.875 + 0.11 + 2.0
     assert totals["net"] == pytest.approx(expected_net, abs=1e-9)
+    assert result["simulated_excluded"] is False
     assert result["meta"]["exclude_simulated"] is False
 
 

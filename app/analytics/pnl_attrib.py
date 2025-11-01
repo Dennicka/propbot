@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, MutableMapping
+from decimal import Decimal, InvalidOperation, getcontext
 from functools import lru_cache
-from typing import Any, Iterable, Mapping, MutableMapping
+from typing import Any
 
 from ..config import load_app_config
+from ..risk.core import FeatureFlags
 from ..tca.cost_model import TierInfo, TierTable
 
 _DEFAULT_CONFIG_PATHS = {
@@ -13,6 +17,11 @@ _DEFAULT_CONFIG_PATHS = {
     "testnet": "configs/config.testnet.yaml",
     "live": "configs/config.live.yaml",
 }
+
+
+getcontext().prec = 28
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
@@ -36,9 +45,8 @@ def _resolve_config_path() -> str | None:
     return _DEFAULT_CONFIG_PATHS.get(profile.lower(), _DEFAULT_CONFIG_PATHS["paper"])
 
 
-@lru_cache(maxsize=1)
-def _load_tier_table() -> TierTable | None:
-    config_path = _resolve_config_path()
+@lru_cache(maxsize=None)
+def _load_tier_table_for_path(config_path: str | None) -> TierTable | None:
     if not config_path:
         return None
     try:
@@ -74,6 +82,11 @@ def _load_tier_table() -> TierTable | None:
     return TierTable.from_mapping(serialised)
 
 
+def _load_tier_table() -> TierTable | None:
+    config_path = _resolve_config_path()
+    return _load_tier_table_for_path(config_path)
+
+
 def _coerce_float(value: Any) -> float:
     try:
         return float(value)
@@ -81,19 +94,23 @@ def _coerce_float(value: Any) -> float:
         return 0.0
 
 
+def _to_decimal(value: Any) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        try:
+            return Decimal(str(float(value)))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("0")
+
+
 def _normalise_name(value: object, fallback: str) -> str:
     name = str(value or "").strip()
     return name or fallback
-
-
-def _ensure_bucket(target: MutableMapping[str, float]) -> MutableMapping[str, float]:
-    target.setdefault("realized", 0.0)
-    target.setdefault("unrealized", 0.0)
-    target.setdefault("fees", 0.0)
-    target.setdefault("rebates", 0.0)
-    target.setdefault("funding", 0.0)
-    target.setdefault("net", 0.0)
-    return target
 
 
 def _pick_tier(table: TierTable | None, venue: str, rolling: float | None) -> TierInfo | None:
@@ -146,9 +163,13 @@ def _iter_event_entries(payload: object) -> Iterable[Mapping[str, Any]]:
         return []
     if isinstance(payload, Mapping):
         if all(isinstance(value, Mapping) for value in payload.values()):
-            return [dict(value, name=key) for key, value in payload.items() if isinstance(value, Mapping)]
+            return [
+                dict(value, name=key)
+                for key, value in payload.items()
+                if isinstance(value, Mapping)
+            ]
         return [dict(payload)]
-    if isinstance(payload, (list, tuple, set)):
+    if isinstance(payload, list | tuple | set):
         entries: list[Mapping[str, Any]] = []
         for item in payload:
             if isinstance(item, Mapping):
@@ -157,63 +178,126 @@ def _iter_event_entries(payload: object) -> Iterable[Mapping[str, Any]]:
     return []
 
 
+def _filter_sim(entries: Iterable[Mapping[str, Any]] | None, exclude: bool) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    if entries is None:
+        return filtered
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        simulated = bool(entry.get("simulated")) or bool(entry.get("dry_run"))
+        if exclude and simulated:
+            continue
+        filtered.append(dict(entry))
+    return filtered
+
+
+def _initial_bucket() -> dict[str, Decimal]:
+    return {
+        "realized": Decimal("0"),
+        "unrealized": Decimal("0"),
+        "fees": Decimal("0"),
+        "rebates": Decimal("0"),
+        "funding": Decimal("0"),
+        "net": Decimal("0"),
+    }
+
+
+def _format_decimal(value: Decimal) -> float:
+    as_float = float(value)
+    if abs(as_float) <= 1e-12:
+        return 0.0
+    return float(round(as_float, 12))
+
+
+def _finalise_bucket(bucket: MutableMapping[str, Decimal]) -> None:
+    bucket["net"] = (
+        bucket["realized"]
+        + bucket["unrealized"]
+        + bucket["fees"]
+        + bucket["rebates"]
+        + bucket["funding"]
+    )
+
+
+def _serialise(
+    container: Mapping[str, MutableMapping[str, Decimal]]
+) -> dict[str, dict[str, float]]:
+    serialised: dict[str, dict[str, float]] = {}
+    for key in sorted(container):
+        bucket = container[key]
+        _finalise_bucket(bucket)
+        serialised[key] = {
+            "realized": _format_decimal(bucket["realized"]),
+            "unrealized": _format_decimal(bucket["unrealized"]),
+            "fees": _format_decimal(bucket["fees"]),
+            "rebates": _format_decimal(bucket["rebates"]),
+            "funding": _format_decimal(bucket["funding"]),
+            "net": _format_decimal(bucket["net"]),
+        }
+    return serialised
+
+
 def calc_attribution(
     trades: Iterable[Mapping[str, Any]] | None,
     fees: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None,
     rebates: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None,
     funding_events: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None,
+    *,
+    exclude_sim: bool | None = None,
 ) -> dict[str, Any]:
     """Aggregate realised/unrealised PnL with fees, rebates and funding adjustments."""
 
-    exclude_simulated = _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
+    if exclude_sim is None:
+        try:
+            exclude_sim = FeatureFlags.exclude_dry_run_from_pnl()
+        except Exception:
+            exclude_sim = _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
+    exclude_simulated = bool(exclude_sim)
     tier_table = _load_tier_table()
 
-    strategy_buckets: dict[str, MutableMapping[str, float]] = defaultdict(dict)
-    venue_buckets: dict[str, MutableMapping[str, float]] = defaultdict(dict)
-    totals: MutableMapping[str, float] = {}
-    _ensure_bucket(totals)
+    trades_filtered = _filter_sim(
+        (dict(entry) for entry in trades or [] if isinstance(entry, Mapping)), exclude_simulated
+    )
+    fees_filtered = _filter_sim(list(_iter_event_entries(fees)), exclude_simulated)
+    rebates_filtered = _filter_sim(list(_iter_event_entries(rebates)), exclude_simulated)
+    funding_filtered = _filter_sim(list(_iter_event_entries(funding_events)), exclude_simulated)
+
+    strategy_buckets = defaultdict(_initial_bucket)
+    venue_buckets = defaultdict(_initial_bucket)
+    totals: MutableMapping[str, Decimal] = _initial_bucket()
 
     def apply(
         strategy: str,
         venue: str,
         *,
-        realized: float = 0.0,
-        unrealized: float = 0.0,
-        fee: float = 0.0,
-        rebate: float = 0.0,
-        funding: float = 0.0,
+        realized: Decimal = Decimal("0"),
+        unrealized: Decimal = Decimal("0"),
+        fees_value: Decimal = Decimal("0"),
+        rebate_value: Decimal = Decimal("0"),
+        funding_value: Decimal = Decimal("0"),
     ) -> None:
-        strategy_bucket = _ensure_bucket(strategy_buckets[strategy])
-        venue_bucket = _ensure_bucket(venue_buckets[venue])
+        strategy_bucket = strategy_buckets[strategy]
+        venue_bucket = venue_buckets[venue]
         for bucket in (strategy_bucket, venue_bucket, totals):
             bucket["realized"] += realized
             bucket["unrealized"] += unrealized
-            bucket["fees"] += fee
-            bucket["rebates"] += rebate
-            bucket["funding"] += funding
-            bucket["net"] = (
-                bucket["realized"]
-                + bucket["unrealized"]
-                - bucket["fees"]
-                + bucket["rebates"]
-                + bucket["funding"]
-            )
+            bucket["fees"] += fees_value
+            bucket["rebates"] += rebate_value
+            bucket["funding"] += funding_value
 
-    for trade in trades or []:
+    for trade in trades_filtered:
         if not isinstance(trade, Mapping):
-            continue
-        simulated = bool(trade.get("simulated")) or bool(trade.get("dry_run"))
-        if exclude_simulated and simulated:
             continue
         strategy = _normalise_name(trade.get("strategy"), "unknown")
         venue = _normalise_name(trade.get("venue"), "unknown")
-        realized = _coerce_float(
+        realized = _to_decimal(
             trade.get("realized")
             or trade.get("realized_pnl")
             or trade.get("realized_pnl_usd")
             or trade.get("realized_pnl_usdt")
         )
-        unrealized = _coerce_float(
+        unrealized = _to_decimal(
             trade.get("unrealized")
             or trade.get("unrealized_pnl")
             or trade.get("unrealized_pnl_usd")
@@ -229,7 +313,12 @@ def calc_attribution(
         )
         fee_override = trade.get("fee")
         rebate_override = trade.get("rebate")
-        role = trade.get("liquidity") or trade.get("role") or trade.get("execution") or trade.get("side")
+        role = (
+            trade.get("liquidity")
+            or trade.get("role")
+            or trade.get("execution")
+            or trade.get("side")
+        )
         rolling = trade.get("rolling_30d_notional")
         fee_amount, rebate_amount = _compute_fee_components(
             tier_table=tier_table,
@@ -249,71 +338,66 @@ def calc_attribution(
             venue,
             realized=realized,
             unrealized=unrealized,
-            fee=fee_amount,
-            rebate=rebate_amount,
+            fees_value=-_to_decimal(fee_amount),
+            rebate_value=_to_decimal(rebate_amount),
         )
 
-    for entry in _iter_event_entries(fees):
-        simulated = bool(entry.get("simulated")) or bool(entry.get("dry_run"))
-        if exclude_simulated and simulated:
-            continue
+    for entry in fees_filtered:
         amount = _coerce_float(entry.get("amount"))
         if amount == 0.0:
             continue
         strategy = _normalise_name(entry.get("strategy"), "unknown")
         venue = _normalise_name(entry.get("venue"), "unknown")
         if amount >= 0.0:
-            apply(strategy, venue, fee=amount)
+            apply(strategy, venue, fees_value=-_to_decimal(amount))
         else:
-            apply(strategy, venue, rebate=-amount)
+            apply(strategy, venue, rebate_value=_to_decimal(-amount))
 
-    for entry in _iter_event_entries(rebates):
-        simulated = bool(entry.get("simulated")) or bool(entry.get("dry_run"))
-        if exclude_simulated and simulated:
-            continue
+    for entry in rebates_filtered:
         amount = _coerce_float(entry.get("amount"))
         if amount == 0.0:
             continue
         strategy = _normalise_name(entry.get("strategy"), "unknown")
         venue = _normalise_name(entry.get("venue"), "unknown")
         if amount >= 0.0:
-            apply(strategy, venue, rebate=amount)
+            apply(strategy, venue, rebate_value=_to_decimal(amount))
         else:
-            apply(strategy, venue, fee=-amount)
+            apply(strategy, venue, fees_value=-_to_decimal(-amount))
 
-    for entry in _iter_event_entries(funding_events):
-        simulated = bool(entry.get("simulated")) or bool(entry.get("dry_run"))
-        if exclude_simulated and simulated:
-            continue
+    for entry in funding_filtered:
         amount = _coerce_float(entry.get("amount"))
         if amount == 0.0:
             continue
         strategy = _normalise_name(entry.get("strategy"), "unknown")
         venue = _normalise_name(entry.get("venue"), "unknown")
-        apply(strategy, venue, funding=amount)
+        apply(strategy, venue, funding_value=_to_decimal(amount))
 
-    def _sorted_payload(source: Mapping[str, Mapping[str, float]]) -> dict[str, dict[str, float]]:
-        serialised: dict[str, dict[str, float]] = {}
-        for key in sorted(source):
-            bucket = source[key]
-            serialised[key] = {
-                "realized": float(bucket.get("realized", 0.0)),
-                "unrealized": float(bucket.get("unrealized", 0.0)),
-                "fees": float(bucket.get("fees", 0.0)),
-                "rebates": float(bucket.get("rebates", 0.0)),
-                "funding": float(bucket.get("funding", 0.0)),
-                "net": float(bucket.get("net", 0.0)),
-            }
-        return serialised
+    _finalise_bucket(totals)
 
+    by_strategy = _serialise(strategy_buckets)
+    by_venue = _serialise(venue_buckets)
     result_totals = {
-        "realized": float(totals.get("realized", 0.0)),
-        "unrealized": float(totals.get("unrealized", 0.0)),
-        "fees": float(totals.get("fees", 0.0)),
-        "rebates": float(totals.get("rebates", 0.0)),
-        "funding": float(totals.get("funding", 0.0)),
-        "net": float(totals.get("net", 0.0)),
+        "realized": _format_decimal(totals["realized"]),
+        "unrealized": _format_decimal(totals["unrealized"]),
+        "fees": _format_decimal(totals["fees"]),
+        "rebates": _format_decimal(totals["rebates"]),
+        "funding": _format_decimal(totals["funding"]),
+        "net": _format_decimal(totals["net"]),
     }
+
+    if _env_flag("PNL_ATTRIB_DEBUG", False) and by_strategy:
+        sample_name = next(iter(sorted(by_strategy)))
+        sample_bucket = by_strategy[sample_name]
+        _LOGGER.info(
+            "PnL attribution debug sample=%s realized=%s unrealized=%s fees=%s rebates=%s funding=%s net=%s",
+            sample_name,
+            sample_bucket["realized"],
+            sample_bucket["unrealized"],
+            sample_bucket["fees"],
+            sample_bucket["rebates"],
+            sample_bucket["funding"],
+            sample_bucket["net"],
+        )
 
     meta = {
         "exclude_simulated": exclude_simulated,
@@ -321,10 +405,11 @@ def calc_attribution(
     }
 
     return {
-        "by_strategy": _sorted_payload(strategy_buckets),
-        "by_venue": _sorted_payload(venue_buckets),
+        "by_strategy": by_strategy,
+        "by_venue": by_venue,
         "totals": result_totals,
         "meta": meta,
+        "simulated_excluded": exclude_simulated,
     }
 
 

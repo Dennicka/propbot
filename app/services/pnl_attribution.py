@@ -222,7 +222,13 @@ async def build_pnl_attribution() -> dict[str, Any]:
     rebates_events = _filtered_items(rebates_raw, exclude_simulated=exclude_sim)
     funding_events = _filtered_items(funding_raw, exclude_simulated=exclude_sim)
 
-    attribution = calc_attribution(trades, fees_events, rebates_events, funding_events)
+    attribution = calc_attribution(
+        trades,
+        fees_events,
+        rebates_events,
+        funding_events,
+        exclude_sim=exclude_sim,
+    )
     meta = dict(attribution.get("meta") or {})
     meta.update(
         {
@@ -232,6 +238,8 @@ async def build_pnl_attribution() -> dict[str, Any]:
             "rebate_event_count": len(rebates_events),
         }
     )
+    if "exclude_simulated" not in meta:
+        meta["exclude_simulated"] = exclude_sim
 
     return {
         "generated_at": _iso_now(),
@@ -239,7 +247,7 @@ async def build_pnl_attribution() -> dict[str, Any]:
         "by_venue": attribution.get("by_venue", {}),
         "totals": attribution.get("totals", {}),
         "meta": meta,
-        "simulated_excluded": exclude_sim,
+        "simulated_excluded": attribution.get("simulated_excluded", exclude_sim),
     }
 
 

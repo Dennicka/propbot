@@ -1633,7 +1633,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         attribution_html.append(
             f"<p class=\"note\">Snapshot at {_fmt(generated_at)}{counts_text}</p>"
         )
-    exclude_simulated = meta.get("exclude_simulated")
+    exclude_simulated = pnl_attribution.get("simulated_excluded")
+    if exclude_simulated is None:
+        exclude_simulated = meta.get("exclude_simulated")
     if exclude_simulated is False:
         attribution_html.append("<p class=\"note\">Includes simulated (DRY_RUN) entries.</p>")
     elif exclude_simulated:
