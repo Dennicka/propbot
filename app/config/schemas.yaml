@@ -15,3 +15,7 @@ slo_guard:
   order_error_rate_critical:
     env: SLO_ORDER_ERROR_RATE_CRITICAL
     default: 0.05
+incident:
+  restore_on_start:
+    env: INCIDENT_RESTORE_ON_START
+    default: true
