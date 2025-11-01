@@ -55,7 +55,7 @@ from ..services.runtime import (
 from ..services.runtime_badges import get_runtime_badges
 from ..chaos import injector as chaos_injector
 from ..services import approvals_store, portfolio, risk, risk_guard
-from ..services.cache import get_or_set
+from ..utils.ttl_cache import cache_response
 from ..services.backtest_reports import load_latest_summary as load_latest_backtest_summary
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
@@ -358,41 +358,46 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     return {"strategies": rows, "snapshot": snapshot}
 
 
+def _strategy_pnl_cache_vary(request: Request, _args, _kwargs) -> tuple[bool]:
+    tracker = get_strategy_pnl_tracker()
+    flag = bool(tracker.exclude_simulated_entries())
+    setattr(request.state, "_strategy_pnl_exclude_simulated", flag)
+    return (flag,)
+
+
 @router.get("/strategy_pnl")
+@cache_response(2.0, vary=_strategy_pnl_cache_vary)
 async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
     """Expose rolling realised PnL aggregates per strategy."""
 
     require_token(request)
 
     tracker = get_strategy_pnl_tracker()
-    exclude_simulated = tracker.exclude_simulated_entries()
+    stored_flag = getattr(request.state, "_strategy_pnl_exclude_simulated", None)
+    if stored_flag is None:
+        exclude_simulated = tracker.exclude_simulated_entries()
+    else:
+        exclude_simulated = bool(stored_flag)
 
-    def _load() -> dict[str, Any]:
-        snapshot = tracker.snapshot(exclude_simulated=exclude_simulated)
-        strategies: list[dict[str, object]] = []
-        for name, entry in snapshot.items():
-            realized_today = float(entry.get("realized_today", 0.0))
-            realized_7d = float(entry.get("realized_7d", 0.0))
-            max_drawdown_7d = float(entry.get("max_drawdown_7d", 0.0))
-            strategies.append(
-                {
-                    "name": name,
-                    "realized_today": realized_today,
-                    "realized_7d": realized_7d,
-                    "max_drawdown_7d": max_drawdown_7d,
-                }
-            )
-        strategies.sort(key=lambda item: item["realized_today"])
-        return {
-            "strategies": strategies,
-            "simulated_excluded": exclude_simulated,
-        }
-
-    return await get_or_set(
-        ("/api/ui/strategy_pnl", exclude_simulated),
-        2.0,
-        _load,
-    )
+    snapshot = tracker.snapshot(exclude_simulated=exclude_simulated)
+    strategies: list[dict[str, object]] = []
+    for name, entry in snapshot.items():
+        realized_today = float(entry.get("realized_today", 0.0))
+        realized_7d = float(entry.get("realized_7d", 0.0))
+        max_drawdown_7d = float(entry.get("max_drawdown_7d", 0.0))
+        strategies.append(
+            {
+                "name": name,
+                "realized_today": realized_today,
+                "realized_7d": realized_7d,
+                "max_drawdown_7d": max_drawdown_7d,
+            }
+        )
+    strategies.sort(key=lambda item: item["realized_today"])
+    return {
+        "strategies": strategies,
+        "simulated_excluded": bool(exclude_simulated),
+    }
 
 
 @router.get("/backtest/last")
@@ -414,23 +419,16 @@ def backtest_last_summary(request: Request) -> dict[str, Any]:
 
 
 @router.get("/risk_snapshot")
+@cache_response(2.0)
 async def risk_snapshot(request: Request) -> dict[str, Any]:
     """Return combined portfolio and execution risk telemetry."""
 
     require_token(request)
-
-    async def _load() -> dict[str, Any]:
-        accounting_snapshot = get_risk_accounting_snapshot()
-        base_snapshot = await build_risk_snapshot()
-        payload = dict(base_snapshot)
-        payload["accounting"] = accounting_snapshot
-        return payload
-
-    return await get_or_set(
-        "/api/ui/risk_snapshot",
-        2.0,
-        _load,
-    )
+    accounting_snapshot = get_risk_accounting_snapshot()
+    base_snapshot = await build_risk_snapshot()
+    payload = dict(base_snapshot)
+    payload["accounting"] = accounting_snapshot
+    return payload
 
 
 @router.get("/daily_loss_status")
