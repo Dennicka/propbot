@@ -364,9 +364,11 @@ async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
 
     require_token(request)
 
+    tracker = get_strategy_pnl_tracker()
+    exclude_simulated = tracker.exclude_simulated_entries()
+
     def _load() -> dict[str, Any]:
-        tracker = get_strategy_pnl_tracker()
-        snapshot = tracker.snapshot()
+        snapshot = tracker.snapshot(exclude_simulated=exclude_simulated)
         strategies: list[dict[str, object]] = []
         for name, entry in snapshot.items():
             realized_today = float(entry.get("realized_today", 0.0))
@@ -383,11 +385,11 @@ async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
         strategies.sort(key=lambda item: item["realized_today"])
         return {
             "strategies": strategies,
-            "simulated_excluded": tracker.exclude_simulated_entries(),
+            "simulated_excluded": exclude_simulated,
         }
 
     return await get_or_set(
-        "/api/ui/strategy_pnl",
+        ("/api/ui/strategy_pnl", exclude_simulated),
         2.0,
         _load,
     )
