@@ -11,6 +11,7 @@ from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple
 
 from ..metrics import slo
 from ..metrics.runtime import record_risk_breach, set_watchdog_state
+from ..metrics.observability import set_watchdog_health
 
 RECENT_TRANSITION_LIMIT = 50
 
@@ -111,6 +112,7 @@ class ExchangeWatchdog:
                 self._state[exchange] = entry
                 slo.set_watchdog_ok(exchange, ok)
                 set_watchdog_state(exchange, status)
+                set_watchdog_health(exchange, status == "OK")
                 if previous_status != status:
                     transition = WatchdogStateTransition(
                         previous=previous_status,
@@ -151,6 +153,7 @@ class ExchangeWatchdog:
             self._state[exchange] = entry
             slo.set_watchdog_ok(exchange, False)
             set_watchdog_state(exchange, "AUTO_HOLD")
+            set_watchdog_health(exchange, False)
             transition = WatchdogStateTransition(
                 previous=previous_status,
                 current="AUTO_HOLD",
@@ -182,6 +185,7 @@ class ExchangeWatchdog:
                 status = str(entry.get("status") or ("OK" if ok else "DEGRADED")).upper()
                 entry["status"] = status
                 set_watchdog_state(exchange, status)
+                set_watchdog_health(exchange, status == "OK")
             snapshot_copy = {name: dict(payload) for name, payload in self._state.items()}
         return snapshot_copy
 

@@ -36,6 +36,7 @@ from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
 from .telemetry import observe_ui_latency, setup_slo_monitor
+from .metrics.observability import observe_api_request, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
 from .startup_resume import perform_resume as perform_startup_resume
@@ -89,22 +90,36 @@ def create_app() -> FastAPI:
 
     @app.get("/metrics")
     def metrics() -> Response:
+        register_slo_metrics()
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    def _route_label(request: Request) -> str:
+        route = request.scope.get("route")
+        if route is not None:
+            for attr in ("path", "path_format", "path_regex"):
+                candidate = getattr(route, attr, None)
+                if isinstance(candidate, str) and candidate:
+                    return candidate
+        return request.url.path
 
     @app.middleware("http")
     async def _telemetry_middleware(request: Request, call_next):
         start = time.perf_counter()
         path = request.url.path
+        method = request.method
+        route = _route_label(request)
         try:
             response = await call_next(request)
         except Exception:
-            duration = (time.perf_counter() - start) * 1000.0
+            duration_s = max(time.perf_counter() - start, 0.0)
+            observe_api_request(route, method, 500, duration_s)
             if path.startswith("/api/ui"):
-                observe_ui_latency(path, duration, status_code=500, error=True)
+                observe_ui_latency(path, duration_s * 1000.0, status_code=500, error=True)
             raise
-        duration = (time.perf_counter() - start) * 1000.0
+        duration_s = max(time.perf_counter() - start, 0.0)
+        observe_api_request(route, method, response.status_code, duration_s)
         if path.startswith("/api/ui"):
-            observe_ui_latency(path, duration, status_code=response.status_code)
+            observe_ui_latency(path, duration_s * 1000.0, status_code=response.status_code)
         return response
     app.include_router(health.router)
     app.include_router(live.router)

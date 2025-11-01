@@ -44,3 +44,18 @@ class Broker(ABC):
     @abstractmethod
     async def get_fills(self, since: datetime | None = None) -> List[Dict[str, object]]:
         """Return fills executed on the broker since the optional timestamp."""
+
+    # ------------------------------------------------------------------
+    # Optional telemetry hooks (safe no-ops by default)
+    # ------------------------------------------------------------------
+    def emit_order_error(self, *_, **__) -> None:  # pragma: no cover - default hook
+        return None
+
+    def emit_order_latency(self, *_, **__) -> None:  # pragma: no cover - default hook
+        return None
+
+    def emit_marketdata_staleness(self, *_, **__) -> None:  # pragma: no cover - default hook
+        return None
+
+    def metrics_tags(self) -> dict[str, str]:  # pragma: no cover - default hook
+        return {"broker": getattr(self, "name", "unknown")}

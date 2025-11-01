@@ -15,6 +15,7 @@ import httpx
 
 from .base import Broker
 from .. import ledger
+from ..metrics.observability import record_order_error
 
 
 LOGGER = logging.getLogger(__name__)
@@ -56,6 +57,19 @@ def _iso_ts_from_ms(value: Any) -> str:
     return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
 
 
+def _order_error_reason(exc: Exception) -> str:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status is not None:
+        try:
+            return f"http_{int(status)}"
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            pass
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code.lower()
+    return exc.__class__.__name__.lower()
+
+
 @dataclass(frozen=True)
 class _Credentials:
     api_key: str
@@ -91,6 +105,15 @@ class _BaseBinanceBroker(Broker):
         self.credentials = credentials
         self._recent_symbol_limit = 25
         self._symbol_cache: set[str] = set()
+
+    # ------------------------------------------------------------------
+    # Optional telemetry hooks
+    # ------------------------------------------------------------------
+    def metrics_tags(self) -> Dict[str, str]:  # pragma: no cover - simple mapping
+        return {"broker": getattr(self, "venue", getattr(self, "name", "binance"))}
+
+    def emit_order_error(self, venue: str | None, reason: str | None) -> None:
+        record_order_error(venue or self.venue, reason)
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -344,6 +367,7 @@ class _BaseBinanceBroker(Broker):
         try:
             response = await self._request("POST", "/fapi/v1/order", params=params, signed=True)
         except Exception as exc:  # pragma: no cover - defensive logging
+            self.emit_order_error(venue or self.venue, _order_error_reason(exc))
             await asyncio.to_thread(ledger.update_order_status, order_id, "failed")
             ledger.record_event(
                 level="ERROR",

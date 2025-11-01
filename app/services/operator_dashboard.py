@@ -190,8 +190,20 @@ def build_reconciliation_summary(snapshot: object | None = None) -> dict[str, ob
     issues = normalized.get("issues") if isinstance(normalized.get("issues"), Sequence) else []
     issue_count = _coerce_int(normalized.get("issue_count"), len(issues))
     mismatch_total = diff_count if diff_count >= issue_count else issue_count
+    status_raw = str(normalized.get("status") or "").strip()
+    status_token = status_raw.replace("-", "_").upper()
+    if normalized.get("auto_hold"):
+        status = "AUTO_HOLD"
+    elif status_token == "OK":
+        status = "OK"
+    elif status_token in {"DRIFT", "DEGRADED", "DEGRADED_DRIFT"}:
+        status = "DRIFT"
+    elif status_token in {"AUTO_HOLD", "AUTO HOLD"}:
+        status = "AUTO_HOLD"
+    else:
+        status = "DRIFT" if mismatch_total else "OK"
     return {
-        "status": str(normalized.get("status") or "DEGRADED"),
+        "status": status,
         "mismatches_count": _coerce_int(normalized.get("mismatches_count"), mismatch_total),
         "auto_hold": bool(normalized.get("auto_hold")),
         "last_run_iso": normalized.get("last_run_iso"),
@@ -1450,7 +1462,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         status_display = _fmt(str(recon_widget_status or "DEGRADED"))
         parts.append("<!-- Reconciliation widget -->")
         parts.append("<section id=\"reconciliation\">")
-        parts.append("<h3>Reconciliation status</h3>")
+        parts.append("<h3>Reconciliation status:</h3>")
         parts.append(f"<p>Status: {status_display}</p>")
         parts.append(
             f"<p>Last run: {_fmt(recon_widget_last_run_display) if recon_widget_last_run_display else '-'}</p>"
