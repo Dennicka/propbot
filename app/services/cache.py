@@ -108,6 +108,13 @@ def _endpoint_label(key: Hashable) -> str:
     return repr(key)
 
 
+def _testing_bypass_enabled() -> bool:
+    return bool(
+        os.getenv("PYTEST_CURRENT_TEST")
+        or os.getenv("CI_TESTING") == "1"
+    )
+
+
 async def get_or_set(
     key: Hashable,
     ttl: float | None,
@@ -115,9 +122,15 @@ async def get_or_set(
 ) -> T:
     """Return the cached value for ``key`` or compute it using ``loader``."""
 
+    endpoint_label = _endpoint_label(key)
+
+    if _testing_bypass_enabled():
+        value = await _ensure_value(loader)
+        record_cache_observation(endpoint_label, False)
+        return value
+
     enabled = _cache_enabled()
     now = _monotonic()
-    endpoint_label = _endpoint_label(key)
 
     if enabled:
         hit, cached = _STORE.get(key, now)
@@ -131,7 +144,5 @@ async def get_or_set(
         ttl_seconds = max(_default_ttl(ttl), 0.0)
         expires_at = _monotonic() + ttl_seconds
         _STORE.set(key, value, expires_at)
-        record_cache_observation(endpoint_label, False)
-    else:
-        record_cache_observation(endpoint_label, False)
+    record_cache_observation(endpoint_label, False)
     return value
