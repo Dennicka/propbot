@@ -1,0 +1,17 @@
+# Runtime configuration schema extensions for SLO auto-hold.
+#
+# These defaults are referenced by the SLO guard to determine when to
+# automatically place the runtime into HOLD and when to release it again.
+slo_guard:
+  auto_hold_on_slo:
+    env: AUTO_HOLD_ON_SLO
+    default: true
+  latency_p95_critical:
+    env: SLO_LATENCY_P95_CRITICAL_MS
+    default: 1000.0
+  md_staleness_critical:
+    env: SLO_MD_STALENESS_CRITICAL_S
+    default: 5.0
+  order_error_rate_critical:
+    env: SLO_ORDER_ERROR_RATE_CRITICAL
+    default: 0.05
