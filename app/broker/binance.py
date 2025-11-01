@@ -431,7 +431,12 @@ class _BaseBinanceBroker(Broker):
             )
             raise
 
-    async def cancel_all(self, symbol: str | None = None) -> Dict[str, Any]:
+    async def cancel_all(
+        self,
+        symbol: str | None = None,
+        *,
+        batch_id: str | None = None,
+    ) -> Dict[str, Any]:
         if not self._allow_trading:
             return {"cancelled": 0, "failed": 0, "skipped": True}
         if not self._credentials_ready():
@@ -439,6 +444,8 @@ class _BaseBinanceBroker(Broker):
         params: Dict[str, Any] = {}
         if symbol:
             params["symbol"] = symbol.upper()
+        if batch_id:
+            params["batchId"] = str(batch_id)
         try:
             await self._request("DELETE", "/fapi/v1/allOpenOrders", params=params, signed=True)
         except Exception as exc:  # pragma: no cover - defensive logging

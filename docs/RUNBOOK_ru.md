@@ -8,6 +8,13 @@
 5. Проверить `/api/health`, `/live-readiness`, `/api/ui/status/overview`, `/api/deriv/status`.
 6. Зафиксировать `/api/ui/state` → блок `flags` показывает `MODE`, `SAFE_MODE`, `POST_ONLY`, `REDUCE_ONLY`, `ENV`.
 
+## Безопасный рестарт/обновление
+- Перед остановкой сервиса убедитесь, что нет активного исполнения (UI показывает `loop.status=HOLD`).
+- `SIGTERM`/`SIGINT` переводит рантайм в HOLD, останавливает фоновые раннеры и выполняет `cancel-all` на всех биржах с батч-ID (timestamp+hash).
+- Для systemd-релизов используйте `systemctl restart propbot.service` — unit отправляет `SIGTERM`, дожидается грациозного завершения и только затем перезапускает процесс.
+- Журнал (`order_journal`) фиксирует батч-ID отмены — повторные сигналы не приведут к дублирующим заявкам.
+- После рестарта проверяем `/api/ui/status/overview` и `/api/ui/status/components`; убедившись, что HOLD активен, собираем approvals перед переводом в RUN.
+
 ## 2. Smoke-check
 ```bash
 pytest -q tests/test_smoke.py

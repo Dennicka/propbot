@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
-from typing import TYPE_CHECKING, Dict, List
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Dict, Iterable, List, Mapping, Sequence
 
 from .base import Broker
 from .binance import BinanceLiveBroker, BinanceTestnetBroker
@@ -32,6 +34,33 @@ MAX_ORDER_ATTEMPTS = 3
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _batch_id_for_orders(orders: Iterable[Mapping[str, object]]) -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    hasher = hashlib.sha256()
+    for entry in sorted(
+        (
+            (
+                str(order.get("venue") or "").lower(),
+                int(order.get("id", 0)),
+                str(order.get("symbol") or "").upper(),
+                str(order.get("idemp_key") or ""),
+            )
+            for order in orders
+        ),
+        key=lambda item: (item[0], item[1]),
+    ):
+        venue, order_id, symbol, idemp_key = entry
+        hasher.update(str(order_id).encode("utf-8"))
+        if venue:
+            hasher.update(venue.encode("utf-8"))
+        if symbol:
+            hasher.update(symbol.encode("utf-8"))
+        if idemp_key:
+            hasher.update(idemp_key.encode("utf-8"))
+    digest = hasher.hexdigest()[:12]
+    return f"cancel-{timestamp}-{digest}"
 
 
 class ExecutionRouter:
@@ -85,6 +114,81 @@ class ExecutionRouter:
 
     def brokers(self) -> Dict[str, Broker]:
         return dict(self._brokers)
+
+    async def cancel_all(
+        self,
+        *,
+        venue: str,
+        orders: Sequence[Mapping[str, object]] | None = None,
+        batch_id: str | None = None,
+    ) -> Dict[str, object]:
+        canonical = VENUE_ALIASES.get(venue.lower(), venue.lower())
+        broker = self.broker_for_venue(canonical)
+        if orders is None:
+            fetched = await asyncio.to_thread(ledger.fetch_open_orders)
+            venue_orders = [
+                order
+                for order in fetched
+                if str(order.get("venue") or "").lower() == canonical
+            ]
+        else:
+            venue_orders = [dict(order) for order in orders]
+        if not venue_orders:
+            return {
+                "venue": canonical,
+                "batch_id": batch_id,
+                "cancelled": 0,
+                "failed": 0,
+                "skipped": True,
+            }
+        batch = batch_id or _batch_id_for_orders(venue_orders)
+        cancelled = 0
+        failed = 0
+        cancel_method = getattr(broker, "cancel_all", None)
+        bulk_success = False
+        if callable(cancel_method):
+            try:
+                maybe = cancel_method(symbol=None, batch_id=batch)
+            except TypeError:
+                try:
+                    maybe = cancel_method(venue=canonical, batch_id=batch)
+                except TypeError:
+                    maybe = cancel_method()
+            result = await maybe if inspect.isawaitable(maybe) else maybe
+            if isinstance(result, Mapping):
+                cancelled = int(result.get("cancelled", 0) or 0)
+                failed = int(result.get("failed", 0) or 0)
+                bulk_success = cancelled >= len(venue_orders)
+            else:
+                cancelled = len(venue_orders)
+                failed = 0
+                bulk_success = True
+        if not bulk_success:
+            cancelled = 0
+            failed = 0
+            for order in venue_orders:
+                order_id = int(order.get("id", 0))
+                try:
+                    await broker.cancel(venue=order.get("venue") or canonical, order_id=order_id)
+                    cancelled += 1
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    failed += 1
+                    LOGGER.debug(
+                        "cancel failed", extra={"venue": canonical, "order_id": order_id, "error": str(exc)}
+                    )
+        if cancelled:
+            await asyncio.gather(
+                *(
+                    asyncio.to_thread(ledger.update_order_status, int(order.get("id", 0)), "cancelled")
+                    for order in venue_orders
+                )
+            )
+        return {
+            "venue": canonical,
+            "batch_id": batch,
+            "cancelled": cancelled,
+            "failed": failed,
+        }
 
     def _nudge_price(
         self, *, venue: str, symbol: str, side: str, original: float
