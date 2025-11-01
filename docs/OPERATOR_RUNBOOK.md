@@ -182,7 +182,10 @@ JSON-отчёт по стратегиям содержит `realized_today`, `re
 Измените `EXCLUDE_DRY_RUN_FROM_PNL=false`, чтобы видеть симулированные сделки в
 агрегатах. Текущее состояние флага возвращается отдельно в поле
 `simulated_excluded`, которое также попадает в `/ui/dashboard`, `/api/ui/ops_report`
-и CSV-экспорт (`attrib_simulated_excluded`). 【F:tests/test_pnl_attrib_endpoint.py†L1-L41】
+и CSV-экспорт (`attrib_simulated_excluded`). Если суммы из runtime расходятся с
+`StrategyPnlTracker`, сервис добавит строку `tracker-adjustment`; она считается на
+том же отфильтрованном наборе сделок, поэтому dry-run PnL не вычитается повторно и
+виден только при отключённом флаге. 【F:tests/test_pnl_attrib_endpoint.py†L1-L41】
 
 ### `/api/ui/open-trades.csv`
 

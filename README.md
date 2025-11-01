@@ -289,7 +289,10 @@ notional'а, например:
   симуляционные записи из расчёта.
 - Флаг `EXCLUDE_DRY_RUN_FROM_PNL` применяется единообразно: API, UI, ops-report
   (JSON и CSV) используют одну и ту же фильтрацию и возвращают признак
-  `simulated_excluded` (в CSV — колонка `attrib_simulated_excluded`).
+  `simulated_excluded` (в CSV — колонка `attrib_simulated_excluded`). При
+  расхождении с `StrategyPnlTracker` добавляется виртуальная строка
+  `tracker-adjustment`, и её расчёт также уважает dry-run-фильтр, поэтому
+  симуляционные сделки никогда не вычитаются повторно.
 
 ### Strategy status API & Dashboard
 

@@ -12,6 +12,7 @@ from positions import list_positions
 
 from ..analytics import calc_attribution
 from ..ledger import fetch_events
+from ..risk.core import FeatureFlags
 from ..services import runtime
 from ..strategy.pnl_tracker import get_strategy_pnl_tracker
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
@@ -26,6 +27,26 @@ def _env_flag(name: str, default: bool = True) -> bool:
     if not value:
         return default
     return value in {"1", "true", "yes", "on"}
+
+
+def _exclude_simulated() -> bool:
+    try:
+        return FeatureFlags.exclude_dry_run_from_pnl()
+    except Exception:
+        return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
+
+
+def _filtered_items(
+    items: Iterable[Mapping[str, Any]] | None, *, exclude_simulated: bool
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for entry in items or []:
+        if not isinstance(entry, Mapping):
+            continue
+        if exclude_simulated and entry.get("simulated"):
+            continue
+        filtered.append(dict(entry))
+    return filtered
 
 
 def _iso_now() -> str:
@@ -139,19 +160,9 @@ async def build_pnl_attribution() -> dict[str, Any]:
     positions_snapshot = await build_positions_snapshot(state, positions)
     trades_raw = _build_trade_events(positions_snapshot.get("positions", []))
 
-    exclude_sim = _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
+    exclude_sim = _exclude_simulated()
 
-    def _effective(items: Iterable[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
-        effective: list[dict[str, Any]] = []
-        for entry in items or []:
-            if not isinstance(entry, Mapping):
-                continue
-            if exclude_sim and entry.get("simulated"):
-                continue
-            effective.append(dict(entry))
-        return effective
-
-    trades_basis = _effective(trades_raw)
+    trades_basis = _filtered_items(trades_raw, exclude_simulated=exclude_sim)
     tracker_snapshot = get_strategy_pnl_tracker().snapshot(exclude_simulated=exclude_sim)
     strategy_totals = snapshot_strategy_pnl()
 
@@ -186,7 +197,7 @@ async def build_pnl_attribution() -> dict[str, Any]:
         for strategy, tracker_realized in target_realized.items():
             basis_value = by_strategy_realized.get(strategy, 0.0)
             delta = tracker_realized - basis_value
-            if math.isclose(delta, 0.0, abs_tol=1e-8):
+            if math.isclose(delta, 0.0, abs_tol=1e-9):
                 continue
             adjustments.append(
                 {
@@ -207,9 +218,9 @@ async def build_pnl_attribution() -> dict[str, Any]:
     rebates_raw: list[dict[str, Any]] = []
     funding_raw = _load_funding_events()
 
-    fees_events = _effective(fees_raw)
-    rebates_events = _effective(rebates_raw)
-    funding_events = _effective(funding_raw)
+    fees_events = _filtered_items(fees_raw, exclude_simulated=exclude_sim)
+    rebates_events = _filtered_items(rebates_raw, exclude_simulated=exclude_sim)
+    funding_events = _filtered_items(funding_raw, exclude_simulated=exclude_sim)
 
     attribution = calc_attribution(trades, fees_events, rebates_events, funding_events)
     meta = dict(attribution.get("meta") or {})
