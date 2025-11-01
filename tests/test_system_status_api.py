@@ -1,9 +1,9 @@
 import json
 
 from app.version import APP_VERSION
-from datetime import datetime, timedelta, timezone
 
 from app.services import runtime
+from app.telemetry import metrics
 
 
 def test_status_overview_contract(client):
@@ -94,7 +94,7 @@ def test_status_stream_websocket_smoke(client):
         assert payload.get("build_version") == APP_VERSION
 
 
-def test_critical_slo_triggers_auto_hold(client):
+def test_critical_slo_triggers_auto_hold(client, monkeypatch):
     runtime.reset_for_tests()
     state = runtime.get_state()
     state.control.mode = "RUN"
@@ -102,18 +102,68 @@ def test_critical_slo_triggers_auto_hold(client):
     state.control.auto_loop = True
     state.loop.running = True
     state.loop.status = "RUN"
-    state.metrics.slo["ws_gap_ms_p95"] = 5_000.0
-    breach_started = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    state.metrics.slo_breach_started_at["ws_gap_ms_p95"] = breach_started
+    metrics.reset_for_tests()
+
+    snapshots = [
+        {
+            "ui": {"p95_ms": 1500.0, "count": 25, "errors": 0, "error_rate": 0.0},
+            "core": {"executor": {"p95_ms": 1200.0, "count": 25, "errors": 0, "error_rate": 0.0}},
+            "overall": {"total": 50, "errors": 0, "error_rate": 0.0},
+            "md_staleness_s": 10.0,
+        },
+        {
+            "ui": {"p95_ms": 220.0, "count": 30, "errors": 0, "error_rate": 0.0},
+            "core": {"executor": {"p95_ms": 180.0, "count": 30, "errors": 0, "error_rate": 0.0}},
+            "overall": {"total": 60, "errors": 0, "error_rate": 0.0},
+            "md_staleness_s": 1.0,
+        },
+        {
+            "ui": {"p95_ms": 190.0, "count": 35, "errors": 0, "error_rate": 0.0},
+            "core": {"executor": {"p95_ms": 170.0, "count": 35, "errors": 0, "error_rate": 0.0}},
+            "overall": {"total": 70, "errors": 0, "error_rate": 0.0},
+            "md_staleness_s": 1.0,
+        },
+    ]
+    iterator = iter(snapshots)
+
+    def _fake_snapshot() -> dict:
+        try:
+            return next(iterator)
+        except StopIteration:
+            return snapshots[-1]
+
+    monkeypatch.setenv("AUTO_HOLD_ON_SLO", "1")
+    monkeypatch.setenv("SLO_LATENCY_P95_CRITICAL_MS", "1000")
+    monkeypatch.setenv("SLO_MD_STALENESS_CRITICAL_S", "5")
+    monkeypatch.setenv("SLO_ORDER_ERROR_RATE_CRITICAL", "0.25")
+    monkeypatch.setattr("app.routers.ui_status.slo_snapshot", _fake_snapshot)
 
     resp = client.get("/api/ui/status/overview")
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["overall"] == "HOLD"
+    assert payload["hold_reason"] == "SLO_CRITICAL::LATENCY_P95_MS"
     assert state.control.mode == "HOLD"
     assert state.control.safe_mode is True
     assert state.control.auto_loop is False
     assert state.loop.status == "HOLD"
     assert state.loop.running is False
+
+    second = client.get("/api/ui/status/overview")
+    assert second.status_code == 200
+    follow_up = second.json()
+    assert follow_up["overall"] == "HOLD"
+    assert follow_up["hold_reason"] == "SLO_CRITICAL::LATENCY_P95_MS"
+
+    third = client.get("/api/ui/status/overview")
+    assert third.status_code == 200
+    cleared = third.json()
+    assert cleared["hold_active"] is False
+    assert cleared["overall"] != "HOLD"
+    assert state.control.mode == "RUN"
+    assert state.control.safe_mode is False
+    assert state.control.auto_loop is True
+    assert state.loop.status == "RUN"
+    assert state.loop.running is True
 
     runtime.reset_for_tests()

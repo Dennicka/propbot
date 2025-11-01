@@ -55,6 +55,7 @@ from ..services.runtime import (
 from ..services.runtime_badges import get_runtime_badges
 from ..chaos import injector as chaos_injector
 from ..services import approvals_store, portfolio, risk, risk_guard
+from ..utils.ttl_cache import cache_response
 from ..services.backtest_reports import load_latest_summary as load_latest_backtest_summary
 from ..services.audit_log import list_recent_events as list_audit_log_events
 from ..services.hedge_log import read_entries
@@ -357,13 +358,41 @@ def strategy_status_summary(request: Request) -> dict[str, Any]:
     return {"strategies": rows, "snapshot": snapshot}
 
 
+def _auth_cache_vary(request: Request, _args, _kwargs) -> tuple[str, ...]:
+    auth = request.headers.get("authorization", "")
+    marker = os.getenv("PYTEST_CURRENT_TEST", "")
+    parts = []
+    if auth:
+        parts.append(auth)
+    if marker:
+        parts.append(marker)
+    return tuple(parts)
+
+
+def _strategy_pnl_cache_vary(request: Request, _args, _kwargs) -> tuple[object, ...]:
+    tracker = get_strategy_pnl_tracker()
+    flag = bool(tracker.exclude_simulated_entries())
+    setattr(request.state, "_strategy_pnl_exclude_simulated", flag)
+    parts = list(_auth_cache_vary(request, _args, _kwargs))
+    parts.append(flag)
+    return tuple(parts)
+
+
 @router.get("/strategy_pnl")
-def strategy_pnl_overview(request: Request) -> dict[str, Any]:
+@cache_response(2.0, vary=_strategy_pnl_cache_vary)
+async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
     """Expose rolling realised PnL aggregates per strategy."""
 
     require_token(request)
+
     tracker = get_strategy_pnl_tracker()
-    snapshot = tracker.snapshot()
+    stored_flag = getattr(request.state, "_strategy_pnl_exclude_simulated", None)
+    if stored_flag is None:
+        exclude_simulated = tracker.exclude_simulated_entries()
+    else:
+        exclude_simulated = bool(stored_flag)
+
+    snapshot = tracker.snapshot(exclude_simulated=exclude_simulated)
     strategies: list[dict[str, object]] = []
     for name, entry in snapshot.items():
         realized_today = float(entry.get("realized_today", 0.0))
@@ -380,7 +409,7 @@ def strategy_pnl_overview(request: Request) -> dict[str, Any]:
     strategies.sort(key=lambda item: item["realized_today"])
     return {
         "strategies": strategies,
-        "simulated_excluded": tracker.exclude_simulated_entries(),
+        "simulated_excluded": bool(exclude_simulated),
     }
 
 
@@ -403,6 +432,7 @@ def backtest_last_summary(request: Request) -> dict[str, Any]:
 
 
 @router.get("/risk_snapshot")
+@cache_response(2.0, vary=_auth_cache_vary)
 async def risk_snapshot(request: Request) -> dict[str, Any]:
     """Return combined portfolio and execution risk telemetry."""
 

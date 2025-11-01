@@ -1,38 +1,59 @@
 from __future__ import annotations
 
 import os
-import secrets
 from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
-from ..dashboard_helpers import render_dashboard_response, resolve_operator
+from ..dashboard_helpers import resolve_operator
 from ..security import require_token
+from ..services.cache import get_or_set
 from ..services.operator_dashboard import build_dashboard_context, render_dashboard_html
+from ..utils.ttl_cache import cache_response
 from .ui import (
     dashboard_hold_action,
     dashboard_kill_request_action,
     dashboard_resume_request_action,
 )
 
-
 router = APIRouter()
 
+
+def _dashboard_cache_vary(request: Request, _args, _kwargs) -> tuple[str, ...]:
+    auth = request.headers.get("authorization", "")
+    marker = os.getenv("PYTEST_CURRENT_TEST", "")
+    parts = []
+    if auth:
+        parts.append(auth)
+    if marker:
+        parts.append(marker)
+    return tuple(parts)
 
 async def _require_token(request: Request) -> str | None:
     return require_token(request)
 
 
 @router.get("/ui/dashboard", response_class=HTMLResponse)
+@cache_response(ttl_s=2.0, allow_in_tests=True, vary=_dashboard_cache_vary)
 async def operator_dashboard(
     request: Request, token: str | None = Depends(_require_token)
-) -> HTMLResponse:
-    context: dict[str, Any] = await build_dashboard_context(request)
+) -> Response:
+    async def _load_context() -> dict[str, Any]:
+        return await build_dashboard_context(request)
+
+    base_context = await get_or_set(
+        "/ui/dashboard/context",
+        1.0,
+        _load_context,
+    )
+    context: dict[str, Any] = dict(base_context)
     context["operator"] = resolve_operator(request, token)
     html = render_dashboard_html(context)
-    return HTMLResponse(content=html)
+    response = HTMLResponse(content=html)
+    response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 
 def _parse_form_payload(raw: bytes) -> dict[str, str]:

@@ -55,3 +55,5 @@ def test_strategy_pnl_endpoint_simulated_exclusion(client, monkeypatch):
     names_include = {row["name"] for row in payload_include["strategies"]}
     assert payload_include["simulated_excluded"] is False
     assert "simulated" in names_include
+    simulated_row = next(row for row in payload_include["strategies"] if row["name"] == "simulated")
+    assert simulated_row["realized_today"] == pytest.approx(25.0)

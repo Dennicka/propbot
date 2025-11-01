@@ -4,10 +4,11 @@ import asyncio
 import logging
 import os
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import ledger
 from .version import APP_VERSION
@@ -34,6 +35,7 @@ from .routers import ui_pnl_attrib
 from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
+from .utils.static import CachedStaticFiles
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
 from .telemetry import observe_ui_latency, setup_slo_monitor
@@ -72,6 +74,9 @@ def create_app() -> FastAPI:
         APP_VERSION,
     )
     app = FastAPI(title="PropBot API")
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", CachedStaticFiles(directory=str(static_dir)), name="static")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

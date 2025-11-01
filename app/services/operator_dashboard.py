@@ -67,6 +67,41 @@ from ..utils.symbols import normalise_symbol
 
 logger = logging.getLogger(__name__)
 
+_RUNBOOK_URL = os.getenv("DASHBOARD_RUNBOOK_URL", "/docs/OPERATOR_RUNBOOK.md")
+_DASHBOARD_STARTED_AT = datetime.now(timezone.utc)
+
+
+def _normalize_rfc3339_value(value: object | None) -> str:
+    if isinstance(value, datetime):
+        dt = value
+    elif value is None:
+        dt = _DASHBOARD_STARTED_AT
+    else:
+        text = str(value).strip()
+        if not text:
+            dt = _DASHBOARD_STARTED_AT
+        else:
+            normalised = text.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(normalised)
+            except ValueError:
+                return text
+    dt = dt.astimezone(timezone.utc).replace(microsecond=0)
+    rendered = dt.isoformat()
+    if rendered.endswith("+00:00"):
+        rendered = rendered[:-6] + "Z"
+    return rendered
+
+
+_DEFAULT_BUILD_TS = _normalize_rfc3339_value(_DASHBOARD_STARTED_AT)
+
+
+def _build_timestamp_value() -> str:
+    raw = os.getenv("APP_BUILD_TS")
+    if raw:
+        return _normalize_rfc3339_value(raw)
+    return _DEFAULT_BUILD_TS
+
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -846,6 +881,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "env": {"SHOW_RECON_STATUS": show_recon_status},
         "smart_router_preview": smart_router_preview,
         "smart_router_error": smart_router_error,
+        "build_timestamp": _build_timestamp_value(),
+        "runbook_url": _RUNBOOK_URL,
     }
 
 
@@ -871,6 +908,17 @@ def _format_hold_reason(reason: str) -> str:
         if not detail:
             detail = "exchange issue"
         return f"exchange watchdog — {detail}"
+    if lowered.startswith("slo_critical::"):
+        metric = cleaned.split("::", 1)[1].strip() if "::" in cleaned else ""
+        if metric:
+            metric_display = metric.replace("_", " ").upper()
+            return f"SLO critical — {metric_display}"
+        return "SLO critical breach"
+    if lowered.startswith("recon_divergence"):
+        detail = cleaned.split("::", 1)[1].strip() if "::" in cleaned else ""
+        if detail:
+            return f"Reconciliation divergence — {detail}"
+        return "Reconciliation divergence"
     return cleaned
 
 
@@ -1101,6 +1149,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     execution_history = execution_quality.get("history") or []
     success_rate = execution_quality.get("success_rate")
     per_venue_quality = execution_quality.get("per_venue") or {}
+    exchange_watchdog_reason = str(context.get("exchange_watchdog_hold_reason") or "").strip()
 
     edge_guard_status = context.get("edge_guard", {}) or {}
     edge_guard_allowed = bool(edge_guard_status.get("allowed"))
@@ -1288,6 +1337,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     auto_hold_daily_loss = context.get("auto_hold_daily_loss") or {}
     if not isinstance(auto_hold_daily_loss, Mapping):
         auto_hold_daily_loss = {}
+    hold_reason_raw = str(
+        safety.get("hold_reason_raw")
+        or safety.get("hold_reason")
+        or ""
+    ).strip()
+    hold_reason_display = safety.get("hold_reason_display") or _format_hold_reason(hold_reason_raw)
+    hold_active_flag = bool(safety.get("hold_active"))
+    hold_reason_upper = hold_reason_raw.upper()
     runtime_badges_payload = context.get("runtime_badges") or {}
     if not isinstance(runtime_badges_payload, Mapping):
         runtime_badges_payload = {}
@@ -1298,10 +1355,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     chaos_selected_profile = str(chaos_info.get("selected_profile") or chaos_profile)
     chaos_enabled = bool(chaos_info.get("enabled"))
 
+    asset_version = str(context.get("build_version") or APP_VERSION)
+    asset_version_attr = escape(asset_version, quote=True)
+
     parts: list[str] = []
     parts.append(
         "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
         "<title>Operator Dashboard</title>"
+        f"<link rel=\"stylesheet\" href=\"/static/dashboard.css?v={asset_version}\" />"
         "<style>body{font-family:Arial,sans-serif;margin:2rem;background:#f8f9fb;color:#222;}"
         "h1,h2{color:#14365d;}table{border-collapse:collapse;width:100%;margin-bottom:2rem;background:#fff;}"
         "th,td{border:1px solid #d0d5dd;padding:0.5rem 0.75rem;text-align:left;vertical-align:top;}"
@@ -1326,6 +1387,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".chaos-profile .status-pill{margin-left:0.5rem;}"
         "footer{margin-top:3rem;font-size:0.8rem;color:#4b5563;text-align:center;}"
         ".footer-warning{color:#9a3412;font-weight:600;}"
+        ".watchdog-reason{background:#fff;padding:1rem 1.25rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;font-weight:600;color:#1f2937;}"
+        ".watchdog-reason strong{color:#0f172a;}"
         ".operator-meta{background:#fff;padding:1rem 1.5rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;gap:2rem;align-items:center;flex-wrap:wrap;}"
         ".operator-meta .label{color:#4b5563;font-weight:600;margin-right:0.5rem;}"
         ".status-pills{margin-left:auto;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;}"
@@ -1442,7 +1505,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".auto-hold-banner .reason{font-weight:600;font-size:0.95rem;}"
         "button:disabled{background:#9ca3af;cursor:not-allowed;}"
         "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
-        "</style></head><body>"
+        f"</style></head><body data-dashboard-build=\"{asset_version_attr}\">"
     )
     parts.append(
         f"<h1>Operator Dashboard</h1><p>Build Version: <strong>{_fmt(context.get('build_version'))}</strong></p>"
@@ -1463,16 +1526,26 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "</p>"
     )
 
+    status_pills_markup = [
+        f"<span class=\"status-pill {leader_class}\"><span class=\"label\">LEADER:</span> {_fmt(leader_label)}</span>",
+        f"<span class=\"status-pill status-info\"><span class=\"label\">FENCING_ID:</span> {_fmt(fencing_label)}</span>",
+        f"<span class=\"status-pill status-info\"><span class=\"label\">HB age:</span> {_fmt(hb_age_label)}</span>",
+        f"<span class=\"status-pill {readiness_class}\"{readiness_title_attr}><span class=\"label\">LIVE READY:</span> {_fmt(readiness_label)}</span>",
+    ]
+    if hold_active_flag and (
+        hold_reason_upper.startswith("SLO_CRITICAL::")
+        or hold_reason_upper.startswith("RECON_DIVERGENCE")
+    ):
+        badge_text = hold_reason_display or hold_reason_raw or "AUTO-HOLD active"
+        status_pills_markup.append(
+            f"<span class=\"status-pill status-bad\"><span class=\"label\">AUTO-HOLD:</span> {_fmt(badge_text)}</span>"
+        )
+
     parts.append(
         "<div class=\"operator-meta\">"
         f"<div><span class=\"label\">Operator:</span> <strong>{_fmt(operator_name)}</strong></div>"
         f"<div><span class=\"label\">Role:</span> <span class=\"role-badge role-{operator_role}\">{_fmt(operator_role_label)}</span></div>"
-        f"<div class=\"status-pills\">"
-        f"<span class=\"status-pill {leader_class}\"><span class=\"label\">LEADER:</span> {_fmt(leader_label)}</span>"
-        f"<span class=\"status-pill status-info\"><span class=\"label\">FENCING_ID:</span> {_fmt(fencing_label)}</span>"
-        f"<span class=\"status-pill status-info\"><span class=\"label\">HB age:</span> {_fmt(hb_age_label)}</span>"
-        f"<span class=\"status-pill {readiness_class}\"{readiness_title_attr}><span class=\"label\">LIVE READY:</span> {_fmt(readiness_label)}</span>"
-        "</div>"
+        f"<div class=\"status-pills\">{''.join(status_pills_markup)}</div>"
         "</div>"
     )
 
@@ -1508,6 +1581,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<div class=\"flash\" style=\"background:#fee2e2;border-color:#f87171;color:#7f1d1d;\">"
             f"{_fmt(highlight)}"
             "</div>"
+        )
+
+    if exchange_watchdog_reason:
+        parts.append(
+            "<div class=\"watchdog-reason\"><strong>Exchange watchdog reason:</strong> "
+            f"{_fmt(exchange_watchdog_reason)}</div>"
         )
 
     if runtime_badges_payload:
@@ -3326,6 +3405,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append("".join(controls_parts))
 
     build_value = _fmt(context.get("build_version")) or "n/a"
+    build_timestamp_raw = context.get("build_timestamp")
+    build_timestamp = _fmt(build_timestamp_raw) if build_timestamp_raw else _fmt(_build_timestamp_value())
     last_snapshot_ts = ""
     if pnl_history:
         try:
@@ -3335,11 +3416,20 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if not last_snapshot_ts:
         last_snapshot_ts = "n/a"
     warning_text = "All trading actions require dual approval. Manual overrides are audited."
+    runbook_url_raw = str(context.get("runbook_url") or _RUNBOOK_URL or "").strip()
+    if not runbook_url_raw:
+        runbook_url_raw = _RUNBOOK_URL
+    runbook_href = escape(runbook_url_raw, quote=True)
+    runbook_label = "Warnings runbook"
     parts.append(
-        "<footer>Build version: <strong>{build}</strong> • Last PnL snapshot: {snapshot} • "
+        "<footer>Build version: <strong>{build}</strong> • Build timestamp: {build_ts} • Last PnL snapshot: {snapshot} • "
+        "<a href=\"{runbook}\" target=\"_blank\" rel=\"noopener\">{runbook_label}</a> • "
         "<span class=\"footer-warning\">{warning}</span></footer>".format(
             build=build_value,
+            build_ts=build_timestamp,
             snapshot=last_snapshot_ts,
+            runbook=runbook_href,
+            runbook_label=_fmt(runbook_label),
             warning=_fmt(warning_text),
         )
     )

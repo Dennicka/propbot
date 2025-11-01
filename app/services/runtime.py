@@ -18,6 +18,7 @@ from .. import ledger
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
 from ..metrics import set_auto_trade_state, slo
+from ..persistence import state_store
 from ..runtime import leader_lock
 from ..runtime_state_store import (
     load_runtime_payload as _store_load_runtime_payload,
@@ -2100,6 +2101,104 @@ def _persist_runtime_payload(updates: Mapping[str, Any]) -> None:
     _store_write_runtime_payload(payload)
 
 
+def _restore_on_start_enabled(cfg: LoadedConfig) -> bool:
+    if os.environ.get("INCIDENT_RESTORE_ON_START") is not None:
+        return _env_flag("INCIDENT_RESTORE_ON_START", True)
+    incident_cfg = getattr(cfg.data, "incident", None)
+    if incident_cfg is None:
+        return True
+    if isinstance(incident_cfg, Mapping):
+        candidate = incident_cfg.get("restore_on_start")
+    else:
+        candidate = getattr(incident_cfg, "restore_on_start", None)
+    if candidate is None:
+        return True
+    if isinstance(candidate, str):
+        return candidate.strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        return bool(candidate)
+    except Exception:
+        return True
+
+
+def _restore_runtime_snapshot(state: RuntimeState) -> bool:
+    if not _restore_on_start_enabled(state.config):
+        return False
+    snapshot = state_store.load()
+    if not snapshot:
+        return False
+
+    control_payload = snapshot.get("control")
+    safety_payload = snapshot.get("safety")
+    positions_payload = snapshot.get("positions")
+    restored = False
+    positions_snapshot: list[dict[str, Any]] = []
+
+    with _STATE_LOCK:
+        if isinstance(control_payload, Mapping) and control_payload:
+            mode = str(control_payload.get("mode") or state.control.mode).upper()
+            if mode in {"RUN", "HOLD"}:
+                state.control.mode = mode
+            if "safe_mode" in control_payload:
+                state.control.safe_mode = bool(control_payload.get("safe_mode"))
+            if "auto_loop" in control_payload:
+                state.control.auto_loop = bool(control_payload.get("auto_loop"))
+            restored = True
+
+        if isinstance(safety_payload, Mapping) and safety_payload:
+            if "hold_active" in safety_payload:
+                state.safety.hold_active = bool(safety_payload.get("hold_active"))
+            if "hold_reason" in safety_payload:
+                reason = safety_payload.get("hold_reason")
+                state.safety.hold_reason = str(reason) if reason not in (None, "") else None
+            if "hold_source" in safety_payload:
+                source = safety_payload.get("hold_source")
+                state.safety.hold_source = str(source) if source not in (None, "") else None
+            if "hold_since" in safety_payload:
+                since = safety_payload.get("hold_since")
+                state.safety.hold_since = str(since) if since not in (None, "") else None
+            if "last_released_ts" in safety_payload:
+                last = safety_payload.get("last_released_ts")
+                state.safety.last_released_ts = str(last) if last not in (None, "") else None
+            restored = True
+
+        if isinstance(positions_payload, list):
+            for entry in positions_payload:
+                if not isinstance(entry, Mapping):
+                    continue
+                record = {str(key): value for key, value in entry.items()}
+                status_value = str(record.get("status") or "").lower()
+                if status_value == "closed":
+                    continue
+                positions_snapshot.append(record)
+            if positions_snapshot:
+                state.hedge_positions = [dict(entry) for entry in positions_snapshot]
+                restored = True
+
+    if positions_snapshot:
+        try:
+            from positions_store import append_record as _append_position, reset_store as _reset_positions_store
+        except Exception:
+            LOGGER.exception("failed to import positions store for snapshot restore")
+        else:
+            try:
+                _reset_positions_store()
+                for entry in positions_snapshot:
+                    _append_position(entry)
+            except Exception:
+                LOGGER.exception("failed to restore hedge positions store from snapshot")
+
+    if restored:
+        _persist_runtime_payload(
+            {
+                "control": asdict(state.control),
+                "safety": state.safety.as_dict(),
+                "positions": [dict(entry) for entry in state.hedge_positions],
+            }
+        )
+    return restored
+
+
 def _to_epoch_timestamp(value: object) -> float | None:
     if value is None:
         return None
@@ -2435,6 +2534,8 @@ _STATE = _bootstrap_runtime()
 _load_persisted_state(_STATE)
 _sync_loop_from_control(_STATE)
 _enforce_safe_start(_STATE)
+_restore_runtime_snapshot(_STATE)
+_sync_loop_from_control(_STATE)
 _persist_runtime_payload({
     "control": asdict(_STATE.control),
     "safety": _STATE.safety.as_dict(),
@@ -2553,6 +2654,15 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
         LOGGER.info("initiating shutdown", extra={"reason": shutdown_reason})
         summary: Dict[str, object] = {"reason": shutdown_reason}
 
+        with _STATE_LOCK:
+            pre_shutdown_control = asdict(_STATE.control)
+            pre_shutdown_safety = _STATE.safety.as_dict()
+            pre_shutdown_positions = [
+                dict(entry)
+                for entry in _STATE.hedge_positions
+                if str(entry.get("status") or "").lower() != "closed"
+            ]
+
         hold_changed = engage_safety_hold("shutdown", source="signal_handler")
         set_mode("HOLD")
         summary["hold_engaged"] = hold_changed or bool(get_state().safety.hold_active)
@@ -2650,6 +2760,15 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
         if cancel_summary["cancelled"]:
             remaining = await asyncio.to_thread(ledger.fetch_open_orders)
             set_open_orders(remaining)
+
+        try:
+            state_store.dump(
+                control=pre_shutdown_control,
+                safety=pre_shutdown_safety,
+                positions=pre_shutdown_positions,
+            )
+        except Exception:
+            LOGGER.exception("failed to persist runtime snapshot on shutdown")
 
         _LAST_SHUTDOWN_RESULT = dict(summary)
         return summary

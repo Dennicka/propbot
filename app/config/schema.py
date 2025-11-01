@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class RateLimitConfig(BaseModel):
@@ -166,6 +166,12 @@ class TcaConfig(BaseModel):
     horizon_min: float = Field(60.0, ge=0.0)
 
 
+class IncidentConfig(BaseModel):
+    restore_on_start: bool = True
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class ControlConfig(BaseModel):
     safe_mode: bool = True
     dry_run: bool = True
@@ -208,6 +214,7 @@ class AppConfig(BaseModel):
     obs: Dict[str, object] | None = None
     status_thresholds_file: str | None = None
     chaos: ChaosConfig | None = None
+    incident: IncidentConfig | None = None
 
 
 @dataclass
@@ -241,6 +248,7 @@ __all__ = [
     "DerivativesConfig",
     "StatusThresholds",
     "ChaosConfig",
+    "IncidentConfig",
     "AppConfig",
     "LoadedConfig",
 ]

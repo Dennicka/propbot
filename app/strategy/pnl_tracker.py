@@ -91,14 +91,12 @@ class StrategyPnlTracker:
 
         result: dict[str, dict[str, float]] = {}
         for name, events in data.items():
-            filtered: Iterable[_PnlEvent]
             if exclude_simulated:
-                filtered = [event for event in events if not event.simulated]
+                filtered_list = [event for event in events if not event.simulated]
+                if not filtered_list:
+                    continue
             else:
-                filtered = list(events)
-            filtered_list = list(filtered)
-            if exclude_simulated and not filtered_list:
-                continue
+                filtered_list = list(events)
 
             realized_today = sum(event.pnl for event in filtered_list if event.ts >= today_cutoff)
             realized_7d = sum(event.pnl for event in filtered_list if event.ts >= window_cutoff)
