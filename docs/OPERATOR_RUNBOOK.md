@@ -352,3 +352,32 @@ runtime risk limits, strategy budgets и снимок watchdog. Счётчик �
   `propbot_daily_loss_breached`, `propbot_auto_trade`). 【F:app/server_ws.py†L37-L44】【F:README.md†L76-L87】
 * Для SRE-дашборда проверяйте также `/api/ui/status/overview` и `/api/ui/status/components`
   — они дублируют бейджи и счётчики, которые использует runbook.
+
+## Idempotency & Restart Recovery
+
+Журнал заявок (`order_intents`) хранит все попытки в таблице SQLite
+`data/orders.db`. На каждую заявку UI/бот передаёт `request_id`
+(если не указан — OrderRouter сгенерирует ULID-подобный `rid-*`).
+Перед сетевым вызовом в таблице фиксируется `state=PENDING → SENT`,
+а после ACK — `state=ACKED` с `broker_order_id`. Повторная отправка с тем
+же `request_id` вернёт прежний `broker_order_id` без повторной заявки в
+биржу. Состояния цепочки replacement (`replaced_by`) можно посмотреть через
+`GET /api/ui/intents/<intent_id>` — ответ содержит связанный `request_id`,
+аккаунт и текущий `state`. 【F:app/router/order_router.py†L27-L235】【F:app/routers/ui_exec.py†L9-L75】
+
+Метрики Prometheus:
+
+* `order_idempotency_hit_total{operation=submit|cancel|replace}` — счётчик
+  подавленных повторов. Значение >5% за 5 минут стоит отследить с алертом.
+* `order_intent_total{state=...}` — накопительный счётчик финальных
+  состояний (ACKED/REJECTED/etc.).
+* `open_order_intents` — gauge открытых intent'ов.
+* `order_replace_chain_length{intent_id=...}` — gauge цепочки replace;
+  скачок указывает на длинную замену в ручном режиме.
+* `order_submit_latency_ms` — latency-гистограмма вызова брокера.
+
+При рестарте вызывайте `OrderRouter.recover_inflight()` — метод ищет все
+`state in (PENDING,SENT)` intents, подтягивает `broker_order_id` через
+`get_order_by_client_id` и добивает состояние до `ACKED`. Оркестратор
+`app/services/reconciler_orchestrator.py` делает это автоматически при запуске
+runtime (если safe_mode выключен). 【F:app/router/order_router.py†L237-L276】【F:app/services/reconciler_orchestrator.py†L1-L15】

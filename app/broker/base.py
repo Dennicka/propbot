@@ -42,6 +42,8 @@ class Broker(ABC):
         qty: float,
         price: Optional[float] = None,
         type: str = "LIMIT",
+        tif: str | None = None,
+        strategy: str | None = None,
         post_only: bool = True,
         reduce_only: bool = False,
         fee: float = 0.0,
@@ -72,6 +74,9 @@ class Broker(ABC):
     # ------------------------------------------------------------------
     # Optional reconciliation helpers (safe no-ops by default)
     # ------------------------------------------------------------------
+    async def get_order_by_client_id(self, client_id: str) -> Dict[str, object] | None:
+        return None
+
     async def get_recently_closed_symbols(
         self, *, since: datetime | None = None
     ) -> List[str]:  # pragma: no cover - default hook
