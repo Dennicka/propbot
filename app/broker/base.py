@@ -1,8 +1,32 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
+
+
+@dataclass(frozen=True)
+class CancelAllResult:
+    """Typed response for idempotent cancel-all operations."""
+
+    ok: bool
+    cleared: int = 0
+    failed: int = 0
+    order_ids: Sequence[int] = ()
+    details: Optional[Dict[str, object]] = None
+
+    def as_dict(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "ok": bool(self.ok),
+            "cleared": int(self.cleared),
+            "failed": int(self.failed),
+        }
+        if self.order_ids:
+            payload["order_ids"] = [int(order_id) for order_id in self.order_ids]
+        if self.details:
+            payload["details"] = dict(self.details)
+        return payload
 
 
 class Broker(ABC):
@@ -44,6 +68,28 @@ class Broker(ABC):
     @abstractmethod
     async def get_fills(self, since: datetime | None = None) -> List[Dict[str, object]]:
         """Return fills executed on the broker since the optional timestamp."""
+
+    # ------------------------------------------------------------------
+    # Optional reconciliation helpers (safe no-ops by default)
+    # ------------------------------------------------------------------
+    async def get_recently_closed_symbols(
+        self, *, since: datetime | None = None
+    ) -> List[str]:  # pragma: no cover - default hook
+        return []
+
+    async def positions_snapshot(
+        self, *, venue: str | None = None
+    ) -> List[Dict[str, object]]:  # pragma: no cover - default hook
+        return []
+
+    async def cancel_all_orders_idempotent(
+        self,
+        *,
+        venue: str | None = None,
+        correlation_id: str | None = None,
+        orders: Iterable[Dict[str, object]] | None = None,
+    ) -> CancelAllResult:  # pragma: no cover - default hook
+        return CancelAllResult(ok=True, cleared=0, failed=0)
 
     # ------------------------------------------------------------------
     # Optional telemetry hooks (safe no-ops by default)

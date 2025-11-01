@@ -29,6 +29,7 @@ from .runtime import (
     get_last_opportunity_state,
     get_liquidity_status,
     get_market_data,
+    make_runtime_snapshot,
     get_reconciliation_status,
     get_state,
 )
@@ -391,6 +392,7 @@ def _safety_snapshot(state) -> Dict[str, Any]:
 async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     state = get_state()
     runtime_badges = get_runtime_badges()
+    runtime_snapshot_payload = make_runtime_snapshot()
     persisted = load_runtime_payload()
     auto_state = get_auto_hedge_state()
     chaos_settings = get_chaos_state()
@@ -534,9 +536,18 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     guard_allowed, guard_reason = edge_guard_allowed()
     guard_context = edge_guard_current_context()
     liquidity_status = get_liquidity_status()
-    reconciliation_raw = get_reconciliation_status()
-    reconciliation_status = _normalise_reconciliation_snapshot(reconciliation_raw)
+    reconciliation_raw = runtime_snapshot_payload.get("reconciliation_snapshot")
+    if isinstance(reconciliation_raw, Mapping):
+        reconciliation_snapshot_raw = dict(reconciliation_raw)
+    else:
+        reconciliation_snapshot_raw = get_reconciliation_status()
+    reconciliation_status = _normalise_reconciliation_snapshot(reconciliation_snapshot_raw)
     reconciliation_runtime = build_reconciliation_summary(reconciliation_status)
+    reconciliation_overview = dict(runtime_snapshot_payload.get("reconciliation") or {})
+    reconciliation_overview.update(reconciliation_runtime)
+    runtime_snapshot_payload["reconciliation"] = reconciliation_overview
+    runtime_snapshot_payload["reconciliation_snapshot"] = reconciliation_snapshot_raw
+    runtime_snapshot_payload["reconciliation_normalized"] = reconciliation_status
     autopilot_state = state.autopilot.as_dict()
 
     try:
@@ -795,7 +806,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "recent_ops_incidents": recent_ops_incidents,
         "liquidity": liquidity_status,
         "reconciliation": reconciliation_status,
-        "runtime_snapshot": {"reconciliation": reconciliation_runtime},
+        "runtime_snapshot": runtime_snapshot_payload,
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": hold_reason if risk_throttled else "",
         "edge_guard": {
@@ -1025,9 +1036,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     liquidity_snapshot = liquidity.get("per_venue") or {}
     env_flags = context.get("env", {}) or {}
     show_recon_widget = bool(env_flags.get("SHOW_RECON_STATUS", True))
+    reconciliation = context.get("reconciliation", {}) or {}
     runtime_snapshot = context.get("runtime_snapshot", {}) or {}
     reconciliation_snapshot = runtime_snapshot.get("reconciliation") or {}
-    reconciliation = context.get("reconciliation", {}) or {}
+    reconciliation_snapshot_normalized = runtime_snapshot.get("reconciliation_normalized")
+    if not isinstance(reconciliation_snapshot_normalized, Mapping):
+        reconciliation_snapshot_normalized = reconciliation
+    if not isinstance(reconciliation_snapshot_normalized, Mapping):
+        reconciliation_snapshot_normalized = {}
     desync_detected = bool(reconciliation.get("desync_detected"))
     reconciliation_issues = reconciliation.get("issues") or []
     issue_count = reconciliation.get("issue_count")
@@ -1040,11 +1056,17 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     recon_diff_value = _coerce_int(reconciliation.get("diff_count"), len(recon_diffs_list))
     mismatch_value = recon_diff_value if recon_diff_value >= issue_count else issue_count
     recon_widget_status = (
-        reconciliation_snapshot.get("status")
+        reconciliation_snapshot.get("state")
+        or reconciliation_snapshot.get("status")
+        or reconciliation_snapshot_normalized.get("status")
         or reconciliation.get("status")
         or ("DEGRADED" if mismatch_value or desync_detected else "OK")
     )
-    recon_widget_last_run = reconciliation_snapshot.get("last_run_iso") or last_recon_ts
+    recon_widget_last_run = (
+        reconciliation_snapshot.get("last_run_iso")
+        or reconciliation_snapshot_normalized.get("last_run_iso")
+        or last_recon_ts
+    )
     if isinstance(recon_widget_last_run, datetime):
         recon_widget_last_run_display = recon_widget_last_run.isoformat()
     else:
@@ -1054,8 +1076,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         mismatch_value,
     )
     recon_widget_auto_hold = bool(
-        reconciliation_snapshot.get("auto_hold") or reconciliation.get("auto_hold")
+        reconciliation_snapshot.get("auto_hold")
+        or reconciliation_snapshot_normalized.get("auto_hold")
+        or reconciliation.get("auto_hold")
     )
+    recon_widget_summary = reconciliation_snapshot.get("summary")
+    if not recon_widget_summary and recon_widget_status:
+        recon_widget_summary = f"Reconciliation status: {recon_widget_status}"
 
     recent_ops_incidents = context.get("recent_ops_incidents", []) or []
 
@@ -1463,6 +1490,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append("<!-- Reconciliation widget -->")
         parts.append("<section id=\"reconciliation\">")
         parts.append("<h3>Reconciliation status:</h3>")
+        if recon_widget_summary:
+            parts.append(f"<p>{_fmt(recon_widget_summary)}</p>")
         parts.append(f"<p>Status: {status_display}</p>")
         parts.append(
             f"<p>Last run: {_fmt(recon_widget_last_run_display) if recon_widget_last_run_display else '-'}</p>"

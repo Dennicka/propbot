@@ -32,10 +32,10 @@ test:
 	$(PYTEST) -q --maxfail=1
 
 acceptance:
-        $(PYTEST) -q -m acceptance tests/acceptance
+	$(PYTEST) -q -m acceptance tests/acceptance
 
 smoke:
-        $(PYTEST) -q tests/acceptance/test_smoke.py
+	$(PYTEST) -q tests/acceptance/test_smoke.py
 
 run:
 	$(UVICORN) app.main:app --host 127.0.0.1 --port 8000

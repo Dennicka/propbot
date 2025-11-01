@@ -574,6 +574,8 @@ def test_dashboard_renders_runtime_snapshot(monkeypatch, tmp_path, client) -> No
     assert "okx" in html
     assert "free balance below hedge size" in html
     assert "Reconciliation status" in html
+    assert "Reconciliation status: MISMATCH" in html
+    assert "Status: MISMATCH" in html
     assert "STATE DESYNC — manual intervention required" in html
     assert "Outstanding mismatches:" in html
     assert "Daily loss cap" in html
