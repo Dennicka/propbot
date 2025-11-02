@@ -302,6 +302,14 @@ class ChaosConfig(BaseModel):
     order_delay_ms: int = Field(0, ge=0)
 
 
+class ReconConfig(BaseModel):
+    max_divergence: float = Field(0.0, ge=0.0)
+
+
+class ReadinessConfig(BaseModel):
+    startup_timeout_sec: float = Field(120.0, ge=1.0)
+
+
 class AppConfig(BaseModel):
     profile: str
     market: MarketConfig | None = None
@@ -320,6 +328,8 @@ class AppConfig(BaseModel):
     chaos: ChaosConfig | None = None
     incident: IncidentConfig | None = None
     watchdog: BrokerWatchdogConfig | None = None
+    recon: ReconConfig | None = None
+    readiness: ReadinessConfig | None = None
 
 
 @dataclass
@@ -363,6 +373,8 @@ __all__ = [
     "DerivativesConfig",
     "StatusThresholds",
     "ChaosConfig",
+    "ReconConfig",
+    "ReadinessConfig",
     "IncidentConfig",
     "MarketRetryPolicy",
     "MarketResyncConfig",

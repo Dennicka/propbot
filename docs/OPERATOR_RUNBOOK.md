@@ -366,9 +366,10 @@ runtime risk limits, strategy budgets и снимок watchdog. Счётчик �
 
 ## Readiness и метрики
 
-* `GET /live-readiness` возвращает `{"ok": true|false, "reasons": [...]}` и
-  меняет статус на `503`, если бот не готов к live (причины:
-  `watchdog:auto_hold`, `daily_loss:breach`). 【F:app/services/live_readiness.py†L5-L18】【F:app/routers/live.py†L10-L14】
+* `GET /live/readiness` — основной агрегатор готовности. Возвращает `{"status": "GREEN|YELLOW|RED", "reasons": [...], "details": {...}}`, где причины включают `pretrade_throttled`, `md_staleness`, `watchdog_down`, `router_not_ready` и др. 【F:app/api/ui/readiness.py†L1-L12】【F:app/readiness/aggregator.py†L26-L205】
+* `/live-readiness` оставлен для обратной совместимости (watchdog/daily loss). Используйте новый эндпоинт для UI и алертов, он же экспортирует метрики `readiness_status{status="..."}` и `readiness_reason_total{reason="..."}`. 【F:app/routers/live.py†L10-L14】【F:app/readiness/aggregator.py†L33-L82】
+* На старте процесс ждёт `status=GREEN`, если `WAIT_FOR_LIVE_READINESS_ON_START=true`; таймаут задаётся `readiness.startup_timeout_sec` (YAML). При таймауте бот остаётся в HOLD. 【F:app/main.py†L92-L123】【F:configs/config.live.yaml†L57-L64】
+* В `/ui/status` отображается бейдж Readiness; наведите, чтобы увидеть активные причины. 【F:app/templates/status.html†L462-L575】
 * Prometheus-метрики публикуются на `/metrics` без дополнительных флагов, в том
   числе бизнес-гистограммы (`propbot_order_cycle_ms`, `propbot_watchdog_ok`,
   `propbot_daily_loss_breached`, `propbot_auto_trade`). 【F:app/server_ws.py†L37-L44】【F:README.md†L76-L87】

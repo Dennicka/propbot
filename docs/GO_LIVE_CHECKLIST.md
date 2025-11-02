@@ -37,6 +37,13 @@
 * Chaos-флаги держите выключенными (`FEATURE_CHAOS=0`) на live, иначе будут искусственные сбои в адаптерах. 【F:.env.example†L63-L71】
 * Recon: `RECON_ENABLED`, `RECON_AUTO_HOLD` и `SHOW_RECON_STATUS` управляют сверкой позиций и видимостью виджета/бейджа. 【F:.env.example†L57-L61】【F:app/services/operator_dashboard.py†L539-L549】【F:app/services/recon_runner.py†L83-L114】
 
+## Live Readiness Gate
+
+* Новый агрегатор `LiveReadinessAggregator` собирает сигналы runtime (`pre_trade_gate`, риск-гард, recon, watchdog, market-data) и выдаёт `status`=`GREEN|YELLOW|RED` плюс список причин. 【F:app/readiness/aggregator.py†L26-L262】
+* REST ручка `GET /live/readiness` возвращает снимок, а Prometheus экспонирует `readiness_status{status="..."}` и `readiness_reason_total{reason="..."}` для дашбордов. 【F:app/api/ui/readiness.py†L1-L12】【F:app/readiness/aggregator.py†L33-L82】
+* Автозапуск live-режима блокируется до `GREEN`, если `WAIT_FOR_LIVE_READINESS_ON_START` включён (по умолчанию для `live`/`testnet`). Таймаут на ожидание берётся из `readiness.startup_timeout_sec`. 【F:app/main.py†L34-L123】【F:configs/config.live.yaml†L57-L64】
+* При `RED` в списке причин появится `pretrade_throttled`, `risk_throttled`, `md_staleness`, `watchdog_down` и т.п. — UI отображает бейдж Readiness с подсказкой по активным блокерам. 【F:app/readiness/aggregator.py†L88-L205】【F:app/templates/status.html†L462-L575】
+
 ## Pre-flight checks
 
 1. **Конфиг и переменные**. Подтяните `.env`, убедитесь, что `PROFILE=live`, `SAFE_MODE=true`, `TWO_MAN_RULE=true`, `AUTOPILOT_ENABLE=false`, заданы `APPROVE_TOKEN` и API-ключи. 【F:.env.example†L5-L118】
