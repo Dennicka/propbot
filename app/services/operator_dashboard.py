@@ -868,6 +868,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             "reason": guard_reason,
             "context": asdict(guard_context),
         },
+        "last_pretrade_block": dict(state.safety.last_pretrade_block)
+        if isinstance(state.safety.last_pretrade_block, Mapping)
+        else None,
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
         "pnl_snapshot": pnl_snapshot,
@@ -1246,6 +1249,15 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     tca_preview_error = context.get("tca_preview_error")
     smart_router_preview = context.get("smart_router_preview")
     smart_router_error = context.get("smart_router_error")
+
+    last_pretrade_block = context.get("last_pretrade_block") or {}
+    if not isinstance(last_pretrade_block, Mapping):
+        last_pretrade_block = {}
+    pretrade_reason = last_pretrade_block.get("reason")
+    pretrade_symbol = last_pretrade_block.get("symbol")
+    pretrade_ts = last_pretrade_block.get("ts")
+    pretrade_qty = last_pretrade_block.get("qty")
+    pretrade_price = last_pretrade_block.get("price")
 
     pnl_snapshot_raw = context.get("pnl_snapshot", {}) or {}
     pnl_snapshot = dict(pnl_snapshot_raw) if isinstance(pnl_snapshot_raw, Mapping) else {}
@@ -2828,6 +2840,25 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         hold_cell = '<span style=\"color:#1b7f3b;font-weight:600;\">NO</span>'
     parts.append(f"<tr><th>HOLD Active</th><td>{hold_cell}</td></tr>")
+
+    if pretrade_reason:
+        detail_bits: list[str] = []
+        if pretrade_symbol:
+            detail_bits.append(f"symbol {_fmt(pretrade_symbol)}")
+        if pretrade_qty is not None:
+            detail_bits.append(f"qty {_fmt(pretrade_qty)}")
+        if pretrade_price is not None:
+            detail_bits.append(f"price {_fmt(pretrade_price)}")
+        if pretrade_ts:
+            detail_bits.append(f"at {_fmt(pretrade_ts)}")
+        detail_suffix = f" — {' · '.join(detail_bits)}" if detail_bits else ""
+        pretrade_cell = (
+            f'<span style="color:#b00020;font-weight:700;">{_fmt(pretrade_reason)}</span>'
+            f"{detail_suffix}"
+        )
+    else:
+        pretrade_cell = '<span style="color:#1b7f3b;font-weight:600;">no blocks</span>'
+    parts.append(f"<tr><th>Last PRETRADE block</th><td>{pretrade_cell}</td></tr>")
 
     if isinstance(last_watchdog_alert, Mapping) and last_watchdog_alert:
         watchdog_cell = (

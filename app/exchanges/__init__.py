@@ -13,6 +13,8 @@ class DerivClient(Protocol):
 
     def get_filters(self, symbol: str) -> Dict[str, float]: ...
 
+    def get_symbol_specs(self, symbol: str) -> Dict[str, float]: ...
+
     def get_fees(self, symbol: str) -> Dict[str, float]: ...
 
     def get_mark_price(self, symbol: str) -> Dict[str, float]: ...
@@ -81,6 +83,9 @@ class InMemoryDerivClient:
             "max_qty": state.max_qty,
             "min_notional": state.min_notional,
         }
+
+    def get_symbol_specs(self, symbol: str) -> Dict[str, float]:
+        return self.get_filters(symbol)
 
     def get_fees(self, symbol: str) -> Dict[str, float]:
         s = self.symbols[symbol]

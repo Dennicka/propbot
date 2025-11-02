@@ -196,6 +196,9 @@ class BinanceUMClient:
         best_ask = float(asks[0][0])
         return {"bid": best_bid, "ask": best_ask, "ts": float(data.get("E", 0))}
 
+    def get_symbol_specs(self, symbol: str) -> Dict[str, float]:
+        return dict(self.get_filters(symbol))
+
     def get_funding_info(self, symbol: str) -> Dict[str, float]:
         if self.safe_mode:
             return self._fallback.get_funding_info(symbol)

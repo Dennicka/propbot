@@ -187,6 +187,9 @@ class OKXPerpClient:
         self._filters_cache[symbol] = result
         return result
 
+    def get_symbol_specs(self, symbol: str) -> Dict[str, float]:
+        return dict(self.get_filters(symbol))
+
     def get_fees(self, symbol: str) -> Dict[str, float]:
         if self.safe_mode:
             return self._fallback.get_fees(symbol)

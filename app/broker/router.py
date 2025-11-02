@@ -260,6 +260,18 @@ class ExecutionRouter:
                     "positions_delta": 0 if reduce_only else 1,
                 }
                 enforce_pre_trade(venue, order_context)
+                context_qty = order_context.get("qty")
+                context_price = order_context.get("price")
+                if context_qty is not None:
+                    try:
+                        qty = float(context_qty)
+                    except (TypeError, ValueError):
+                        pass
+                if context_price is not None:
+                    try:
+                        price_to_use = float(context_price)
+                    except (TypeError, ValueError):
+                        pass
                 if self._watchdog.should_block_orders(venue):
                     raise HoldActiveError("WATCHDOG_DOWN")
                 self._watchdog.record_order_submit(venue)

@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
+import math
 import os
 import signal
 import time
@@ -544,6 +545,7 @@ class SafetyState:
     reconciliation_snapshot: Dict[str, object] = field(default_factory=dict)
     risk_throttled: bool = False
     risk_throttle_reason: str | None = None
+    last_pretrade_block: Dict[str, object] | None = None
 
     def engage_hold(self, reason: str, *, source: str) -> bool:
         changed = not self.hold_active
@@ -608,6 +610,8 @@ class SafetyState:
             "reason": self.risk_throttle_reason,
             "governor": governor_snapshot if isinstance(governor_snapshot, Mapping) else None,
         }
+        if self.last_pretrade_block:
+            payload["last_pretrade_block"] = dict(self.last_pretrade_block)
         return payload
 
     def status_payload(self) -> Dict[str, object | None]:
@@ -918,6 +922,22 @@ def get_loop_state() -> LoopState:
 def get_safety_status() -> Dict[str, object]:
     with _STATE_LOCK:
         return dict(_STATE.safety.status_payload())
+
+
+def record_pretrade_block(
+    symbol: str,
+    reason: str,
+    *,
+    qty: float | None = None,
+    price: float | None = None,
+) -> None:
+    entry: Dict[str, object] = {"symbol": symbol, "reason": reason, "ts": _ts()}
+    if qty is not None and not math.isnan(qty):
+        entry["qty"] = float(qty)
+    if price is not None and not math.isnan(price):
+        entry["price"] = float(price)
+    with _STATE_LOCK:
+        _STATE.safety.last_pretrade_block = entry
 
 
 def update_runaway_guard_snapshot(snapshot: Mapping[str, object]) -> None:

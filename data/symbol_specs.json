@@ -1,0 +1,25 @@
+{
+  "BTCUSDT": {
+    "tick": 0.1,
+    "lot": 0.001,
+    "min_notional": 5.0,
+    "trade_hours": [],
+    "blocked": false
+  },
+  "ETHUSDT": {
+    "tick": 0.01,
+    "lot": 0.001,
+    "min_notional": 5.0,
+    "trade_hours": [],
+    "blocked": false
+  },
+  "BTCUSDT.PERP": {
+    "tick": 0.1,
+    "lot": 0.001,
+    "min_notional": 5.0,
+    "trade_hours": [
+      {"from": "00:00", "to": "23:59", "tz": "UTC"}
+    ],
+    "blocked": false
+  }
+}

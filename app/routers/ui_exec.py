@@ -1,10 +1,11 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..broker.paper import PaperBroker
 from ..router.order_router import OrderRouter
 from ..persistence import order_store
+from ..rules.pretrade import PretradeValidationError
 
 
 router = APIRouter()
@@ -47,18 +48,22 @@ async def submit_order(
     payload: SubmitOrderRequest,
     router: OrderRouter = Depends(_get_router),
 ) -> SubmitOrderResponse:
-    ref = await router.submit_order(
-        account=payload.account,
-        venue=payload.venue,
-        symbol=payload.symbol,
-        side=payload.side,
-        order_type=payload.type,
-        qty=payload.qty,
-        price=payload.price,
-        tif=payload.tif,
-        strategy=payload.strategy,
-        request_id=payload.request_id,
-    )
+    try:
+        ref = await router.submit_order(
+            account=payload.account,
+            venue=payload.venue,
+            symbol=payload.symbol,
+            side=payload.side,
+            order_type=payload.type,
+            qty=payload.qty,
+            price=payload.price,
+            tif=payload.tif,
+            strategy=payload.strategy,
+            request_id=payload.request_id,
+        )
+    except PretradeValidationError as exc:
+        detail = {"code": "PRETRADE_INVALID", "reason": exc.reason, "details": exc.details}
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
     return SubmitOrderResponse(
         intent_id=ref.intent_id,
         request_id=ref.request_id,

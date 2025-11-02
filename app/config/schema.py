@@ -28,6 +28,36 @@ class MaintenanceWindow(BaseModel):
     title: str | None = None
 
 
+class TradeWindowConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    start: str = Field(alias="from")
+    end: str = Field(alias="to")
+    tz: str | None = None
+    reason: str | None = None
+
+
+class PretradeConfig(BaseModel):
+    allow_autofix: bool = True
+    default_tz: str = "UTC"
+
+
+class MaintenanceScheduleWindow(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    start: str = Field(alias="from")
+    end: str = Field(alias="to")
+    tz: str | None = None
+    reason: str | None = None
+
+
+class MaintenanceConfig(BaseModel):
+    windows: List[MaintenanceScheduleWindow] = Field(default_factory=list)
+
+
+class GuardrailsConfig(BaseModel):
+    testnet_block_highrisk: bool = True
+    blocklist: List[str] = Field(default_factory=list)
+
+
 class ThresholdBand(BaseModel):
     degraded: float = Field(..., ge=0.0)
     down: float = Field(..., ge=0.0)
@@ -279,6 +309,9 @@ class AppConfig(BaseModel):
     server: Dict[str, object] | None = None
     risk: RiskConfig | None = None
     guards: GuardsConfig | None = None
+    guardrails: GuardrailsConfig | None = None
+    maintenance: MaintenanceConfig | None = None
+    pretrade: PretradeConfig | None = None
     control: ControlConfig | None = None
     derivatives: DerivativesConfig | None = None
     tca: TcaConfig | None = None
@@ -301,6 +334,11 @@ __all__ = [
     "KillCapsConfig",
     "RunawayBreakerConfig",
     "MaintenanceWindow",
+    "TradeWindowConfig",
+    "PretradeConfig",
+    "MaintenanceScheduleWindow",
+    "MaintenanceConfig",
+    "GuardrailsConfig",
     "ThresholdBand",
     "BrokerWatchdogThresholds",
     "BrokerWatchdogConfig",

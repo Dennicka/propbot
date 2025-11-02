@@ -14,6 +14,7 @@ from ..metrics import (
     observe_replace_chain,
     record_open_intents,
 )
+from ..rules.pretrade import PretradeValidationError, get_pretrade_validator
 from ..persistence import order_store
 from ..runtime import locks
 from ..utils.identifiers import generate_request_id
@@ -52,6 +53,26 @@ class OrderRouter:
         strategy: str | None = None,
         request_id: str | None = None,
     ) -> OrderRef:
+        validator = get_pretrade_validator()
+        order_payload: Dict[str, object] = {
+            "venue": venue,
+            "symbol": symbol,
+            "qty": qty,
+            "price": price,
+            "side": side,
+            "type": order_type,
+            "tif": tif,
+            "strategy": strategy,
+        }
+        ok, reason, fixed = validator.validate(order_payload)
+        if not ok:
+            raise PretradeValidationError(reason or "PRETRADE_INVALID", details=order_payload)
+        if fixed:
+            order_payload.update(fixed)
+        qty = float(order_payload.get("qty", qty))
+        price_value = order_payload.get("price", price)
+        price = float(price_value) if price_value is not None else None
+
         intent_id = request_id or generate_request_id()
         async with locks.intent_lock(intent_id):
             with order_store.session_scope() as session:

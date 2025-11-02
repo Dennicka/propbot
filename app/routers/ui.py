@@ -78,6 +78,7 @@ from ..utils import redact_sensitive_data
 from ..utils.symbols import normalise_symbol
 from ..utils.operators import OperatorIdentity, resolve_operator_identity
 from pnl_history_store import list_recent as list_recent_snapshots
+from ..rules.pretrade import get_pretrade_validator
 from services import adaptive_risk_advisor
 from services.audit_snapshot import get_recent_audit_snapshot
 from services.daily_reporter import load_latest_report
@@ -147,6 +148,20 @@ class ChaosInjectionRequest(BaseModel):
         None,
         description="Latency spike in milliseconds (required for latency_spike_ms)",
     )
+
+
+@router.get("/symbol_rules")
+def symbol_rules(
+    request: Request,
+    symbol: str = Query(..., description="Target symbol (e.g. BTCUSDT)"),
+    venue: str | None = Query(None, description="Optional venue identifier"),
+) -> dict[str, Any]:
+    require_token(request)
+    validator = get_pretrade_validator()
+    try:
+        return validator.describe_symbol(symbol, venue=venue)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "SYMBOL_UNKNOWN"})
 
 
 @router.get("/capital")
