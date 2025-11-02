@@ -34,6 +34,7 @@ from .runtime import (
     get_state,
 )
 from .runtime_badges import get_runtime_badges
+from .market_ws import market_status_snapshot
 from .status import get_partial_rebalance_summary
 from .partial_hedge_runner import get_partial_hedge_status
 from .positions_view import build_positions_snapshot
@@ -858,6 +859,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "liquidity": liquidity_status,
         "reconciliation": reconciliation_status,
         "runtime_snapshot": runtime_snapshot_payload,
+        "market_status": market_status_snapshot(),
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": throttle_reason,
         "risk_governor": risk_governor_context,
@@ -1616,6 +1618,25 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<div class=\"watchdog-reason\"><strong>Exchange watchdog reason:</strong> "
             f"{_fmt(exchange_watchdog_reason)}</div>"
         )
+
+    market_status_rows = context.get("market_status") or []
+    if market_status_rows:
+        parts.append("<section class=\"market-status\">")
+        parts.append("<h3>Market data status</h3>")
+        parts.append("<ul class=\"market-status-list\">")
+        for row in market_status_rows:
+            venue = _fmt(row.get("venue"))
+            symbol = _fmt(row.get("symbol"))
+            state = _fmt(row.get("state"))
+            staleness = _fmt(row.get("staleness_s"))
+            resyncs = _fmt(row.get("resyncs"))
+            reason = _fmt(row.get("last_reason"))
+            last_seq = _fmt(row.get("last_seq"))
+            parts.append(
+                f"<li><strong>{venue}/{symbol}</strong> — state: {state}, staleness: {staleness}s, resyncs: {resyncs}, last seq: {last_seq}, reason: {reason}</li>"
+            )
+        parts.append("</ul>")
+        parts.append("</section>")
 
     if runtime_badges_payload:
         badge_labels = {

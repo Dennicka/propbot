@@ -242,6 +242,30 @@ class StatusThresholds(BaseModel):
     status: Dict[str, float] = Field(default_factory=dict)
 
 
+
+
+class MarketRetryPolicy(BaseModel):
+    max_attempts: int = Field(3, ge=1)
+    backoff_s: float = Field(1.0, ge=0.0)
+
+
+class MarketResyncConfig(BaseModel):
+    max_snapshot_depth: int = Field(1000, ge=1)
+    retry_policy: MarketRetryPolicy = Field(default_factory=MarketRetryPolicy)
+
+
+class MarketWsConfig(BaseModel):
+    hb_timeout_s: float = Field(5.0, ge=0.0)
+    backoff_base_s: float = Field(0.25, gt=0.0)
+    backoff_max_s: float = Field(30.0, gt=0.0)
+    stable_window_s: float = Field(60.0, ge=0.0)
+
+
+class MarketConfig(BaseModel):
+    ws: MarketWsConfig = Field(default_factory=MarketWsConfig)
+    resync: MarketResyncConfig = Field(default_factory=MarketResyncConfig)
+
+
 class ChaosConfig(BaseModel):
     ws_drop_probability: float = Field(0.0, ge=0.0, le=1.0)
     rest_timeout_probability: float = Field(0.0, ge=0.0, le=1.0)
@@ -250,6 +274,7 @@ class ChaosConfig(BaseModel):
 
 class AppConfig(BaseModel):
     profile: str
+    market: MarketConfig | None = None
     lang: str | None = None
     server: Dict[str, object] | None = None
     risk: RiskConfig | None = None
@@ -301,6 +326,10 @@ __all__ = [
     "StatusThresholds",
     "ChaosConfig",
     "IncidentConfig",
+    "MarketRetryPolicy",
+    "MarketResyncConfig",
+    "MarketWsConfig",
+    "MarketConfig",
     "AppConfig",
     "LoadedConfig",
 ]
