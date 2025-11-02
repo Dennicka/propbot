@@ -310,12 +310,31 @@ class ReadinessConfig(BaseModel):
     startup_timeout_sec: float = Field(120.0, ge=1.0)
 
 
+class HealthConfig(BaseModel):
+    margin_ratio_warn: float = Field(0.75, ge=0.0, le=1.0)
+    margin_ratio_critical: float = Field(0.85, ge=0.0, le=1.0)
+    free_collateral_warn_usd: float = Field(100.0, ge=0.0)
+    free_collateral_critical_usd: float = Field(10.0, ge=0.0)
+    hysteresis_ok_windows: int = Field(2, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_thresholds(self) -> "HealthConfig":
+        if self.margin_ratio_critical < self.margin_ratio_warn:
+            raise ValueError("margin_ratio_critical must be >= margin_ratio_warn")
+        if self.free_collateral_critical_usd > self.free_collateral_warn_usd:
+            raise ValueError(
+                "free_collateral_critical_usd must be <= free_collateral_warn_usd"
+            )
+        return self
+
+
 class AppConfig(BaseModel):
     profile: str
     market: MarketConfig | None = None
     lang: str | None = None
     server: Dict[str, object] | None = None
     risk: RiskConfig | None = None
+    health: HealthConfig = Field(default_factory=HealthConfig)
     guards: GuardsConfig | None = None
     guardrails: GuardrailsConfig | None = None
     maintenance: MaintenanceConfig | None = None
@@ -375,6 +394,7 @@ __all__ = [
     "ChaosConfig",
     "ReconConfig",
     "ReadinessConfig",
+    "HealthConfig",
     "IncidentConfig",
     "MarketRetryPolicy",
     "MarketResyncConfig",
