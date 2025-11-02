@@ -9,6 +9,7 @@ from .pretrade import (
     pretrade_status,
     router,
 )
+from .system_status import system_status
 
 __all__ = [
     "router",
@@ -16,5 +17,6 @@ __all__ = [
     "pretrade_status",
     "get_pretrade_gate_status",
     "get_pretrade_status",
+    "system_status",
 ]
 

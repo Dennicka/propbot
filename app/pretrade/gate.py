@@ -55,6 +55,23 @@ class PreTradeGate:
         return True, None
 
     # ------------------------------------------------------------------
+    def is_throttled_by(self, reason: str) -> bool:
+        """Return ``True`` when the gate is throttled for the supplied reason."""
+
+        if not self.is_throttled:
+            return False
+        if reason is None:
+            return False
+        try:
+            expected = (str(reason) or "").strip()
+        except Exception:  # pragma: no cover - defensive coercion
+            return False
+        if not expected:
+            return False
+        current = (self.reason or "").strip()
+        return current == expected
+
+    # ------------------------------------------------------------------
     def snapshot(self) -> dict[str, object | None]:
         """Expose the gate state for UI/runtime snapshots."""
 

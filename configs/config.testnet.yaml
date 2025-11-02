@@ -5,6 +5,13 @@ control:
   two_man_rule: true
   post_only: true
   reduce_only: false
+health:
+  guard_enabled: true
+  margin_ratio_warn: 0.75
+  margin_ratio_critical: 0.85
+  free_collateral_warn_usd: 100.0
+  free_collateral_critical_usd: 10.0
+  hysteresis_ok_windows: 2
 api:
   base_url: http://127.0.0.1:8000
 guards:

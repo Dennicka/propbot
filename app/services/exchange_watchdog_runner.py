@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Mapping
 from fastapi import FastAPI
 
 from ..opsbot import notifier
+from ..risk.guards.health_guard import AccountHealthGuard, build_health_guard_context
 from . import runtime
 from ..watchdog.exchange_watchdog import (
     ExchangeWatchdog,
@@ -41,6 +42,17 @@ def _env_interval() -> float:
     return max(1.0, value)
 
 
+def _health_guard_interval() -> float:
+    raw = os.getenv("HEALTH_GUARD_INTERVAL_SEC")
+    if raw is None:
+        return 1.5
+    try:
+        value = float(raw)
+    except ValueError:
+        return 1.5
+    return max(0.5, value)
+
+
 class ExchangeWatchdogRunner:
     def __init__(
         self,
@@ -48,6 +60,8 @@ class ExchangeWatchdogRunner:
         *,
         probe: WatchdogProbe | None = None,
         interval: float | None = None,
+        health_guard: AccountHealthGuard | None = None,
+        health_interval: float | None = None,
     ) -> None:
         self._watchdog = watchdog
         self._probe: WatchdogProbe = probe or (lambda: {})
@@ -55,30 +69,50 @@ class ExchangeWatchdogRunner:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._last_overall_ok = True
+        self._health_guard = health_guard
+        self._health_interval = max(float(health_interval or _health_guard_interval()), 0.5)
+        self._health_task: asyncio.Task[None] | None = None
 
     def set_probe(self, probe: WatchdogProbe) -> None:
         self._probe = probe
 
     async def start(self) -> None:
-        if not _env_flag("WATCHDOG_ENABLED"):
+        guard = self._resolve_health_guard()
+        guard_enabled = bool(guard and guard.enabled)
+        watchdog_enabled = _env_flag("WATCHDOG_ENABLED")
+
+        if not watchdog_enabled and not guard_enabled:
             LOGGER.info("exchange watchdog disabled by configuration")
             return
-        if self._task and not self._task.done():
-            return
-        self._stop.clear()
-        self._task = asyncio.create_task(self._run())
+
+        if watchdog_enabled and (self._task is None or self._task.done()):
+            self._stop.clear()
+            self._task = asyncio.create_task(self._run())
+
+        if guard_enabled and (self._health_task is None or self._health_task.done()):
+            self._stop.clear()
+            self._health_task = asyncio.create_task(self._run_health_guard())
 
     async def stop(self) -> None:
-        if not self._task:
-            return
         self._stop.set()
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-            pass
-        finally:
-            self._task = None
+
+        if self._health_task:
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
+                pass
+            finally:
+                self._health_task = None
+
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
+                pass
+            finally:
+                self._task = None
 
     async def check_once(self) -> WatchdogCheckResult | None:
         try:
@@ -105,6 +139,32 @@ class ExchangeWatchdogRunner:
             except asyncio.TimeoutError:
                 continue
         LOGGER.info("exchange watchdog loop stopped")
+
+    def _resolve_health_guard(self) -> AccountHealthGuard | None:
+        if self._health_guard is not None:
+            return self._health_guard
+        ctx_factory, cfg = build_health_guard_context()
+        guard = AccountHealthGuard(ctx_factory, cfg)
+        self._health_guard = guard
+        return guard
+
+    async def _run_health_guard(self) -> None:
+        guard = self._resolve_health_guard()
+        if guard is None or not guard.enabled:
+            return
+        LOGGER.info(
+            "account health guard loop starting with interval=%ss", self._health_interval
+        )
+        while not self._stop.is_set():
+            try:
+                guard.tick()
+            except Exception:  # pragma: no cover - defensive guard
+                LOGGER.exception("health guard tick failed")
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._health_interval)
+            except asyncio.TimeoutError:
+                continue
+        LOGGER.info("account health guard loop stopped")
 
     def _maybe_emit_transition_alert(
         self, exchange: str, transition: WatchdogStateTransition

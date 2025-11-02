@@ -48,10 +48,11 @@
 
 1. **Конфиг и переменные**. Подтяните `.env`, убедитесь, что `PROFILE=live`, `SAFE_MODE=true`, `TWO_MAN_RULE=true`, `AUTOPILOT_ENABLE=false`, заданы `APPROVE_TOKEN` и API-ключи. 【F:.env.example†L5-L118】
 2. **Acceptance suite**. Выполните `make acceptance` — проверяется `healthz`, `live-readiness` и устойчивость к mild chaos. 【F:docs/OPERATOR_RUNBOOK.md†L63-L71】
-3. **Smoke + дашборд**. Прогоните `scripts/smoke.sh` против `SMOKE_HOST`, затем проверьте `/ui/dashboard`: бейджи `auto_trade=OFF`, `risk_checks=ON`, `daily_loss=OK`, `watchdog=OK`. 【F:.env.example†L49-L58】【F:app/services/runtime_badges.py†L41-L81】
-4. **Сверка**. Запустите `python -m app.tools.replay_runner` (оффлайн отчёт) и убедитесь, что `GET /api/ui/recon/status` без диффов. 【F:docs/OPERATOR_RUNBOOK.md†L92-L123】【F:app/services/recon_runner.py†L83-L114】
-5. **Бюджеты и лимиты**. Через `/api/ui/ops_report` убедитесь, что `strategy_budgets` не заблокированы и дневной лимит выставлен. 【F:app/services/ops_report.py†L315-L384】【F:app/services/autopilot.py†L23-L72】
-6. **Two-Man approvals**. Проверьте `/api/ui/approvals` — очередь пуста, `two_man_resume_required=true`. 【F:app/services/runtime.py†L713-L733】【F:app/services/status.py†L252-L254】
+3. **Пороги account health**. Сверьте значения `health.margin_ratio_*` и `health.free_collateral_*` в YAML-конфиге с актуальными лимитами счётов. При необходимости скорректируйте `configs/config.*.yaml` перед релизом. 【F:configs/config.live.yaml†L63-L69】【F:app/config/schema.py†L286-L327】
+4. **Smoke + дашборд**. Прогоните `scripts/smoke.sh` против `SMOKE_HOST`, затем проверьте `/ui/dashboard`: бейджи `auto_trade=OFF`, `risk_checks=ON`, `daily_loss=OK`, `watchdog=OK`. 【F:.env.example†L49-L58】【F:app/services/runtime_badges.py†L41-L81】
+5. **Сверка**. Запустите `python -m app.tools.replay_runner` (оффлайн отчёт) и убедитесь, что `GET /api/ui/recon/status` без диффов. 【F:docs/OPERATOR_RUNBOOK.md†L92-L123】【F:app/services/recon_runner.py†L83-L114】
+6. **Бюджеты и лимиты**. Через `/api/ui/ops_report` убедитесь, что `strategy_budgets` не заблокированы и дневной лимит выставлен. 【F:app/services/ops_report.py†L315-L384】【F:app/services/autopilot.py†L23-L72】
+7. **Two-Man approvals**. Проверьте `/api/ui/approvals` — очередь пуста, `two_man_resume_required=true`. 【F:app/services/runtime.py†L713-L733】【F:app/services/status.py†L252-L254】
 
 ## Two-Man approvals, daily loss и бюджеты
 

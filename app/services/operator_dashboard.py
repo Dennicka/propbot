@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -38,6 +39,7 @@ from .market_ws import market_status_snapshot
 from .status import get_partial_rebalance_summary
 from .partial_hedge_runner import get_partial_hedge_status
 from .positions_view import build_positions_snapshot
+from ..health.account_health import get_account_health
 from .pnl_attribution import build_pnl_attribution
 from positions import list_positions
 from pnl_history_store import list_recent as list_recent_snapshots
@@ -431,6 +433,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     runtime_snapshot_payload = make_runtime_snapshot()
     persisted = load_runtime_payload()
     auto_state = get_auto_hedge_state()
+    account_health_snapshot = get_account_health()
     chaos_settings = get_chaos_state()
     selected_profile = chaos_settings.profile or ("custom" if chaos_settings.enabled else "none")
     effective_profile = selected_profile if chaos_settings.enabled else "none"
@@ -859,6 +862,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "liquidity": liquidity_status,
         "reconciliation": reconciliation_status,
         "runtime_snapshot": runtime_snapshot_payload,
+        "account_health": account_health_snapshot,
         "market_status": market_status_snapshot(),
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": throttle_reason,
@@ -1177,6 +1181,57 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         watchdog_rows = []
     watchdog_overall_ok = bool(watchdog_status.get("overall_ok", True))
 
+    account_health = context.get("account_health", {}) or {}
+    if not isinstance(account_health, Mapping):
+        account_health = {}
+    account_health_per_exchange = account_health.get("per_exchange") or {}
+    if not isinstance(account_health_per_exchange, Mapping):
+        account_health_per_exchange = {}
+    account_health_worst = str(account_health.get("worst_state") or "OK").upper()
+    account_health_reason = account_health.get("reason")
+    if not isinstance(account_health_reason, str) or not account_health_reason.strip():
+        account_health_reason = None
+
+    def _format_account_ratio(value: object) -> str:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return "n/a"
+        if math.isinf(numeric):
+            return "inf"
+        return f"{numeric:.4f}"
+
+    def _format_account_collateral(value: object) -> str:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return "n/a"
+        return f"{numeric:,.2f}"
+
+    tooltip_entries: list[str] = []
+    for exchange, payload in account_health_per_exchange.items():
+        if not isinstance(payload, Mapping):
+            continue
+        ratio_display = _format_account_ratio(payload.get("margin_ratio"))
+        collateral_display = _format_account_collateral(payload.get("free_collateral"))
+        tooltip_entries.append(
+            f"{str(exchange).upper()}: ratio={ratio_display}, free={collateral_display} USD"
+        )
+    health_tooltip_text = " | ".join(tooltip_entries)
+    health_tooltip_attr = (
+        f' title="{escape(health_tooltip_text, quote=True)}"' if health_tooltip_text else ""
+    )
+    account_health_class_map = {
+        "CRITICAL": "status-bad",
+        "WARN": "status-warn",
+        "OK": "status-ok",
+    }
+    account_health_css = account_health_class_map.get(account_health_worst, "status-info")
+    account_health_banner_text: str | None = None
+    if account_health_worst == "CRITICAL":
+        detail = account_health_reason or "ACCOUNT HEALTH CRITICAL"
+        account_health_banner_text = f"ACCOUNT HEALTH CRITICAL — {detail}"
+
     pnl_history = context.get("pnl_history", []) or []
     execution_quality = context.get("execution_quality", {}) or {}
     execution_history = execution_quality.get("history") or []
@@ -1438,12 +1493,14 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".status-pill .label{font-weight:600;color:#475569;}"
         ".status-pill.status-ok{background:#dcfce7;color:#166534;}"
         ".status-pill.status-bad{background:#fee2e2;color:#991b1b;}"
+        ".status-pill.status-warn{background:#fef3c7;color:#92400e;}"
         ".status-pill.status-info{background:#e0f2fe;color:#0c4a6e;}"
         ".role-badge{padding:0.25rem 0.75rem;border-radius:999px;font-weight:700;text-transform:uppercase;}"
         ".role-operator{background:#dcfce7;color:#166534;}"
         ".role-viewer{background:#fee2e2;color:#991b1b;}"
         ".role-auditor{background:#e0f2fe;color:#1d4ed8;}"
         ".read-only-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #fca5a5;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.1rem;border-radius:4px;}"
+        ".account-health-banner{margin-bottom:1.5rem;padding:1rem 1.25rem;border:1px solid #f87171;background:#fee2e2;color:#7f1d1d;font-weight:700;font-size:1.05rem;border-radius:4px;}"
         ".runtime-badges{background:#fff;padding:1rem 1.25rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;display:flex;flex-direction:column;gap:0.75rem;}"
         ".runtime-badges h2{margin:0;font-size:1.1rem;}"
         ".runtime-badges-list{display:flex;flex-wrap:wrap;gap:0.5rem;}"
@@ -1574,6 +1631,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         f"<span class=\"status-pill status-info\"><span class=\"label\">HB age:</span> {_fmt(hb_age_label)}</span>",
         f"<span class=\"status-pill {readiness_class}\"{readiness_title_attr}><span class=\"label\">LIVE READY:</span> {_fmt(readiness_label)}</span>",
     ]
+    status_pills_markup.append(
+        "<span class=\"status-pill {cls}\"{attr}><span class=\"label\">ACCOUNT HEALTH:</span> {state}</span>".format(
+            cls=account_health_css,
+            attr=health_tooltip_attr,
+            state=_fmt(account_health_worst),
+        )
+    )
     if hold_active_flag and (
         hold_reason_upper.startswith("SLO_CRITICAL::")
         or hold_reason_upper.startswith("RECON_DIVERGENCE")
@@ -1590,6 +1654,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         f"<div class=\"status-pills\">{''.join(status_pills_markup)}</div>"
         "</div>"
     )
+
+    if account_health_banner_text:
+        parts.append(
+            f"<div class=\"account-health-banner\">{_fmt(account_health_banner_text)}</div>"
+        )
 
     if not is_operator:
         if is_auditor:
