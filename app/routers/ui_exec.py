@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from ..broker.paper import PaperBroker
-from ..router.order_router import OrderRouter
+from ..router.order_router import OrderRouter, PretradeGateThrottled
 from ..persistence import order_store
 from ..rules.pretrade import PretradeValidationError
 
@@ -61,6 +61,9 @@ async def submit_order(
             strategy=payload.strategy,
             request_id=payload.request_id,
         )
+    except PretradeGateThrottled as exc:
+        detail = {"code": "PRETRADE_BLOCKED", "reason": exc.reason, "details": exc.details}
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail) from exc
     except PretradeValidationError as exc:
         detail = {"code": "PRETRADE_INVALID", "reason": exc.reason, "details": exc.details}
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc

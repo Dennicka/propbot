@@ -15,6 +15,7 @@ import threading
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from ..audit_log import log_operator_action
+from ..pretrade.gate import PreTradeGate
 from .. import ledger
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
 from ..exchange_watchdog import get_exchange_watchdog
@@ -659,6 +660,7 @@ class RuntimeState:
     safety: SafetyState = field(default_factory=SafetyState)
     universe: UniverseState = field(default_factory=UniverseState)
     chaos: ChaosSettings = field(default_factory=ChaosSettings)
+    pre_trade_gate: PreTradeGate = field(default_factory=PreTradeGate)
 
 
 def _sync_loop_from_control(state: RuntimeState) -> None:
@@ -917,6 +919,15 @@ def ensure_dryrun_state() -> DryRunState:
 
 def get_loop_state() -> LoopState:
     return _STATE.loop
+
+
+def get_pre_trade_gate() -> PreTradeGate:
+    return _STATE.pre_trade_gate
+
+
+def get_pre_trade_gate_status() -> dict[str, object | None]:
+    with _STATE_LOCK:
+        return _STATE.pre_trade_gate.snapshot()
 
 
 def get_safety_status() -> Dict[str, object]:
@@ -1376,12 +1387,21 @@ def update_risk_throttle(
 
     persist_snapshot: Dict[str, object] | None = None
     changed = False
+    gate_changed = False
+    gate_snapshot: dict[str, object | None] | None = None
     with _STATE_LOCK:
         safety = _STATE.safety
+        gate = _STATE.pre_trade_gate
         previous_active = safety.risk_throttled
         previous_reason = safety.risk_throttle_reason
         safety.risk_throttled = bool(active)
         safety.risk_throttle_reason = reason if active else None
+        if safety.risk_throttled:
+            gate_changed = gate.set_throttled(reason or "RISK_THROTTLED")
+        else:
+            gate_changed = gate.clear()
+        if gate_changed:
+            gate_snapshot = gate.snapshot()
         changed = (
             previous_active != safety.risk_throttled
             or previous_reason != safety.risk_throttle_reason
@@ -1401,6 +1421,8 @@ def update_risk_throttle(
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
+    if gate_changed and not changed and gate_snapshot is not None:
+        _persist_runtime_payload({"pre_trade_gate": gate_snapshot})
 
 
 def update_risk_snapshot(snapshot: Mapping[str, object]) -> None:
@@ -2263,6 +2285,7 @@ def _runtime_status_snapshot() -> Dict[str, Any]:
             "reason": safety.risk_throttle_reason,
             "success_rate_1h": success_rate,
         }
+        status["pre_trade_gate"] = _STATE.pre_trade_gate.snapshot()
         return status
 
 
@@ -2337,6 +2360,27 @@ def _restore_runtime_snapshot(state: RuntimeState) -> bool:
                 state.safety.last_released_ts = str(last) if last not in (None, "") else None
             restored = True
 
+        gate_payload = snapshot.get("pre_trade_gate")
+        if isinstance(gate_payload, Mapping):
+            gate = state.pre_trade_gate
+            throttled_flag = bool(gate_payload.get("throttled"))
+            reason_value = gate_payload.get("reason")
+            updated_ts_value = gate_payload.get("updated_ts")
+            if throttled_flag:
+                if reason_value not in (None, ""):
+                    reason_text = str(reason_value).strip()
+                else:
+                    reason_text = ""
+                gate.is_throttled = True
+                gate.reason = reason_text or "THROTTLED"
+            else:
+                gate.is_throttled = False
+                gate.reason = None
+            try:
+                gate.last_updated_ts = float(updated_ts_value)
+            except (TypeError, ValueError, OverflowError):
+                gate.last_updated_ts = 0.0
+            restored = True
         if isinstance(positions_payload, list):
             for entry in positions_payload:
                 if not isinstance(entry, Mapping):

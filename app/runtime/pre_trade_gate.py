@@ -11,6 +11,7 @@ from ..risk.risk_governor import (
     get_pretrade_risk_governor,
 )
 from ..rules.pretrade import PretradeValidationError, get_pretrade_validator
+from ..services import runtime
 from ..services.runtime import HoldActiveError
 
 LOGGER = logging.getLogger(__name__)
@@ -37,23 +38,34 @@ def enforce_pre_trade(
 ) -> RiskDecision:
     """Evaluate the risk governor before submitting an order."""
 
+    gate = runtime.get_pre_trade_gate()
+    allowed, throttle_reason = gate.check_allowed(order)
+    if not allowed:
+        LOGGER.warning(
+            "pre-trade gate blocked order before validation",
+            extra={"reason": throttle_reason or "RISK_THROTTLED", "venue": venue},
+        )
+        raise PreTradeThrottled(throttle_reason or "RISK_THROTTLED")
+
     validator = get_pretrade_validator()
-    try:
-        ok, reason, fixed = validator.validate(order or {})
-    except PretradeValidationError as exc:  # pragma: no cover - defensive path
-        LOGGER.warning(
-            "pre-trade validator raised error",
-            extra={"reason": exc.reason, "venue": venue},
-        )
-        raise PreTradeRejected(exc.reason or "PRETRADE_INVALID") from exc
-    if not ok:
-        LOGGER.warning(
-            "pre-trade validator blocked order",
-            extra={"reason": reason or "PRETRADE_INVALID", "venue": venue},
-        )
-        raise PreTradeRejected(reason or "PRETRADE_INVALID")
-    if fixed and isinstance(order, MutableMapping):
-        order.update(fixed)
+    order_payload = dict(order or {})
+    if order_payload:
+        try:
+            ok, reason, fixed = validator.validate(order_payload)
+        except PretradeValidationError as exc:  # pragma: no cover - defensive path
+            LOGGER.warning(
+                "pre-trade validator raised error",
+                extra={"reason": exc.reason, "venue": venue},
+            )
+            raise PreTradeRejected(exc.reason or "PRETRADE_INVALID") from exc
+        if not ok:
+            LOGGER.warning(
+                "pre-trade validator blocked order",
+                extra={"reason": reason or "PRETRADE_INVALID", "venue": venue},
+            )
+            raise PreTradeRejected(reason or "PRETRADE_INVALID")
+        if fixed and isinstance(order, MutableMapping):
+            order.update(fixed)
 
     governor = get_pretrade_risk_governor()
     ok, reason = governor.check_and_account(None, order)

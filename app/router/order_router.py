@@ -7,16 +7,19 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping
 
+from ..audit_log import log_operator_action
 from ..metrics import (
     IDEMPOTENCY_HIT_TOTAL,
     ORDER_INTENT_TOTAL,
     ORDER_SUBMIT_LATENCY,
+    PRETRADE_BLOCKS_TOTAL,
     observe_replace_chain,
     record_open_intents,
 )
 from ..rules.pretrade import PretradeValidationError, get_pretrade_validator
 from ..persistence import order_store
 from ..runtime import locks
+from ..services import runtime
 from ..utils.identifiers import generate_request_id
 
 
@@ -25,6 +28,16 @@ LOGGER = logging.getLogger(__name__)
 
 class OrderRouterError(RuntimeError):
     """Raised when the order router encounters an unrecoverable error."""
+
+
+class PretradeGateThrottled(RuntimeError):
+    """Raised when the pre-trade gate blocks an order submission."""
+
+    def __init__(self, reason: str, *, details: Mapping[str, Any] | None = None) -> None:
+        message = reason or "PRETRADE_BLOCKED"
+        super().__init__(message)
+        self.reason = message
+        self.details = dict(details or {})
 
 
 @dataclass(slots=True)
@@ -64,6 +77,25 @@ class OrderRouter:
             "tif": tif,
             "strategy": strategy,
         }
+        gate = runtime.get_pre_trade_gate()
+        allowed, gate_reason = gate.check_allowed(order_payload)
+        if not allowed:
+            reason_text = (gate_reason or "PRETRADE_BLOCKED").strip() or "PRETRADE_BLOCKED"
+            PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+            runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+            log_operator_action(
+                "system",
+                "system",
+                "PRETRADE_BLOCKED",
+                details={
+                    "reason": reason_text,
+                    "venue": venue,
+                    "symbol": symbol,
+                    "qty": qty,
+                    "price": price,
+                },
+            )
+            raise PretradeGateThrottled(reason_text, details=order_payload)
         ok, reason, fixed = validator.validate(order_payload)
         if not ok:
             raise PretradeValidationError(reason or "PRETRADE_INVALID", details=order_payload)

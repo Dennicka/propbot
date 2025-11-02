@@ -14,4 +14,9 @@ PRETRADE_AUTOFIX_TOTAL = Counter(
     ("field",),
 )
 
-__all__ = ["PRETRADE_CHECKS_TOTAL", "PRETRADE_AUTOFIX_TOTAL"]
+PRETRADE_BLOCKS_TOTAL = Counter(
+    "pretrade_blocks_total",
+    "Number of orders blocked by the pre-trade gate",
+    ("reason",),
+)
+__all__ = ["PRETRADE_CHECKS_TOTAL", "PRETRADE_AUTOFIX_TOTAL", "PRETRADE_BLOCKS_TOTAL"]

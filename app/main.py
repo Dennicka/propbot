@@ -35,6 +35,7 @@ from .routers import ui_risk
 from .routers import ui_pnl_attrib
 from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
+from .api.ui import pretrade as ui_pretrade
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .utils.static import CachedStaticFiles
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
@@ -148,6 +149,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_status.router, prefix="/api/ui/status")
     app.include_router(ui_trades.router)
     app.include_router(ui_risk.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(ui_pretrade.router)
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
     from .opsbot import setup_notifier as setup_ops_notifier
