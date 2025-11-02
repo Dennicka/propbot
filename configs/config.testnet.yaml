@@ -15,6 +15,20 @@ guards:
   kill_caps: { enabled: true, flatten_on_breach: true }
   runaway_breaker: { place_per_min: 300, cancel_per_min: 600 }
   maintenance_calendar: []
+pretrade:
+  allow_autofix: true
+  default_tz: "UTC"
+maintenance:
+  windows:
+    - from: "02:00"
+      to: "02:15"
+      tz: "Europe/Stockholm"
+      reason: "Daily ops"
+guardrails:
+  testnet_block_highrisk: true
+  blocklist:
+    - "BTCUSDT.perp"
+    - "ETHUSDT.perp"
 watchdog:
 market:
   ws:

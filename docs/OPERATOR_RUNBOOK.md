@@ -105,6 +105,28 @@ Runtime публикует отдельный блок «Reconciliation status»
 префиксом `propbot_risk_*` (`risk_success_rate_1h`, `risk_order_error_rate_1h`,
 `risk_throttled{reason=...}` и счётчик окон `risk_windows_total`).
 
+## Pre-Trade Gate и дросселирование
+
+Pre-Trade Gate — это тонкая прослойка перед risk-governor, которая мгновенно
+останавливает отправку ордеров, когда error-budget, watchdog или risk governor
+переводят систему в состояние `throttled`. В отличие от HOLD, gate действует на
+уровне заявки: ордер не доходит до биржи и не проходит даже pre-trade валидацию.
+
+* Источник блокировки прописывается в `reason` (`ERROR_BUDGET::...`,
+  `HIGH_ORDER_ERRORS`, `WATCHDOG::binance:DEGRADED` и т.п.). При повторных вызовах
+  с тем же reason gate не логирует дубликаты.
+* Состояние доступно через `GET /api/ui/pretrade_gate` (и совместимый алиас
+  `/api/ui/pretrade/status`). Ответ: `{ "throttled": bool, "reason": str|null }`
+  + поле `updated_ts` — unix-timestamp последнего изменения. Endpoint требует
+  operator-токен.
+* На дашборде блокируется пайплайн «Order pipeline» и подсвечивается последняя
+  причина в секции «Pre-trade blocks» (данные берутся из `runtime.safety.last_pretrade_block`).
+* Gate автоматически сбрасывается, когда watchdog/error-budget возвращаются в
+  норму и risk governor снимает троттлинг (в UI reason становится `null`).
+
+Для ручной проверки можно вызвать `runtime.get_pre_trade_gate_status()` из REPL или
+посмотреть snapshot в `/api/ui/state` — там появляется блок `pre_trade_gate`.
+
 ## Операционные сценарии
 
 ### Включить автоторговлю

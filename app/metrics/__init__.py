@@ -50,6 +50,7 @@ from .orders import (
     observe_replace_chain,
     record_open_intents,
 )
+from .pretrade import PRETRADE_AUTOFIX_TOTAL, PRETRADE_BLOCKS_TOTAL, PRETRADE_CHECKS_TOTAL
 from .risk_governor import (
     increment_window as increment_risk_window,
     record_blocked_order,
@@ -86,6 +87,9 @@ __all__ = [
     "ORDER_SUBMIT_LATENCY",
     "observe_replace_chain",
     "record_open_intents",
+    "PRETRADE_CHECKS_TOTAL",
+    "PRETRADE_AUTOFIX_TOTAL",
+    "PRETRADE_BLOCKS_TOTAL",
     "record_trade_execution",
     "record_risk_breach",
     "set_auto_trade_state",
