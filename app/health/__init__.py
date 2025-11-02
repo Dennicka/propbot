@@ -3,6 +3,7 @@
 from .account_health import (
     AccountHealthSnapshot,
     AccountHealthState,
+    collect_account_health,
     evaluate_health,
     register_metrics,
     update_metrics,
@@ -11,6 +12,7 @@ from .account_health import (
 __all__ = [
     "AccountHealthSnapshot",
     "AccountHealthState",
+    "collect_account_health",
     "evaluate_health",
     "register_metrics",
     "update_metrics",
