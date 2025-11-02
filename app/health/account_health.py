@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - fallback for optional import cycles
 
 AccountHealthState = Literal["OK", "WARN", "CRITICAL"]
 _STATE_LABELS: tuple[AccountHealthState, ...] = ("OK", "WARN", "CRITICAL")
+_STATE_SEVERITY: dict[AccountHealthState, int] = {"OK": 0, "WARN": 1, "CRITICAL": 2}
 
 _EQUITY_KEYS = (
     "equity",
@@ -69,6 +70,12 @@ _MARGIN_RATIO_KEYS = (
 _ACCOUNT_HEALTH_MARGIN_RATIO: Gauge | None = None
 _ACCOUNT_HEALTH_FREE_COLLATERAL: Gauge | None = None
 _ACCOUNT_HEALTH_STATE: Gauge | None = None
+
+_LAST_SNAPSHOTS: dict[str, AccountHealthSnapshot] = {}
+_LAST_STATES: dict[str, AccountHealthState] = {}
+_LAST_WORST_STATE: AccountHealthState = "OK"
+_LAST_WORST_EXCHANGES: list[str] = []
+_LAST_TS: float | None = None
 
 
 @dataclass(slots=True)
@@ -193,6 +200,57 @@ def update_metrics(
             state_gauge.labels(exchange=label, state=candidate).set(
                 1.0 if candidate == state else 0.0
             )
+
+
+def _record_latest_health(
+    snapshots: Mapping[str, AccountHealthSnapshot],
+    states: Mapping[str, AccountHealthState],
+    ts: float,
+) -> None:
+    global _LAST_SNAPSHOTS
+    global _LAST_STATES
+    global _LAST_WORST_STATE
+    global _LAST_WORST_EXCHANGES
+    global _LAST_TS
+
+    normalised_states: dict[str, AccountHealthState] = {}
+    for exchange, state in states.items():
+        label = str(exchange)
+        value = str(state or "OK").upper()
+        if value not in _STATE_LABELS:
+            value = "OK"
+        normalised_states[label] = value  # type: ignore[assignment]
+
+    worst_state, worst_exchanges = _determine_worst_state(normalised_states)
+
+    _LAST_SNAPSHOTS = {str(key): value for key, value in snapshots.items()}
+    _LAST_STATES = normalised_states
+    _LAST_WORST_STATE = worst_state
+    _LAST_WORST_EXCHANGES = worst_exchanges
+    _LAST_TS = float(ts)
+
+
+def _determine_worst_state(
+    states: Mapping[str, AccountHealthState]
+) -> tuple[AccountHealthState, list[str]]:
+    worst_state: AccountHealthState = "OK"
+    worst_exchanges: list[str] = []
+    for exchange, state in states.items():
+        severity = _STATE_SEVERITY.get(state, 0)
+        worst_severity = _STATE_SEVERITY.get(worst_state, 0)
+        if severity > worst_severity:
+            worst_state = state
+            worst_exchanges = [exchange]
+        elif severity == worst_severity:
+            worst_exchanges.append(exchange)
+    return worst_state, worst_exchanges
+
+
+def _critical_reason(exchanges: Sequence[str]) -> str:
+    if not exchanges:
+        return "ACCOUNT_HEALTH::CRITICAL::UNKNOWN"
+    exchange = str(exchanges[0] or "UNKNOWN").upper()
+    return f"ACCOUNT_HEALTH::CRITICAL::{exchange}"
 
 
 def _iter_exchanges(*parts: Iterable[str]) -> set[str]:
@@ -374,6 +432,7 @@ def collect_account_health(ctx: object) -> dict[str, AccountHealthSnapshot]:
     adapters = _resolve_adapters(ctx)
     if not adapters:
         update_metrics({}, {})
+        _record_latest_health({}, {}, time.time())
         return {}
 
     timestamp = time.time()
@@ -390,7 +449,33 @@ def collect_account_health(ctx: object) -> dict[str, AccountHealthSnapshot]:
         states[exchange] = evaluate_health(snapshot, cfg_scope)
 
     update_metrics(snapshots, states)
+    _record_latest_health(snapshots, states, timestamp)
     return snapshots
+
+
+def get_account_health() -> dict[str, object]:
+    """Return the latest collected account health snapshot."""
+
+    per_exchange: dict[str, dict[str, object]] = {}
+    for exchange, snapshot in _LAST_SNAPSHOTS.items():
+        state = _LAST_STATES.get(exchange, "OK")
+        per_exchange[exchange] = {
+            "state": state,
+            "margin_ratio": _resolve_margin_ratio(snapshot),
+            "free_collateral": float(snapshot.free_collateral_usdt),
+            "ts": float(snapshot.ts),
+        }
+
+    worst_state = _LAST_WORST_STATE
+    reason: str | None = None
+    if worst_state == "CRITICAL":
+        reason = _critical_reason(_LAST_WORST_EXCHANGES)
+
+    return {
+        "per_exchange": per_exchange,
+        "worst_state": worst_state,
+        "reason": reason,
+    }
 
 
 __all__ = [
@@ -400,4 +485,5 @@ __all__ = [
     "evaluate_health",
     "register_metrics",
     "update_metrics",
+    "get_account_health",
 ]

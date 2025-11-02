@@ -906,3 +906,53 @@ def test_dashboard_html_renders_router_preview() -> None:
     assert "Router preview" in html
     assert "binance-um" in html
     assert "Score (USDT)" in html
+
+
+def test_dashboard_shows_account_health_banner(monkeypatch, client) -> None:
+    monkeypatch.setattr(
+        "app.health.account_health.get_account_health",
+        lambda: {
+            "per_exchange": {
+                "binance": {
+                    "state": "CRITICAL",
+                    "margin_ratio": 0.95,
+                    "free_collateral": 5.0,
+                },
+                "okx": {
+                    "state": "WARN",
+                    "margin_ratio": 0.8,
+                    "free_collateral": 120.0,
+                },
+            },
+            "worst_state": "CRITICAL",
+            "reason": "ACCOUNT_HEALTH::CRITICAL::BINANCE",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.operator_dashboard.get_account_health",
+        lambda: {
+            "per_exchange": {
+                "binance": {
+                    "state": "CRITICAL",
+                    "margin_ratio": 0.95,
+                    "free_collateral": 5.0,
+                },
+                "okx": {
+                    "state": "WARN",
+                    "margin_ratio": 0.8,
+                    "free_collateral": 120.0,
+                },
+            },
+            "worst_state": "CRITICAL",
+            "reason": "ACCOUNT_HEALTH::CRITICAL::BINANCE",
+        },
+    )
+
+    response = client.get("/ui/dashboard")
+    assert response.status_code == 200
+    html = response.text
+
+    assert 'ACCOUNT HEALTH:</span> CRITICAL' in html
+    assert 'class="account-health-banner"' in html
+    assert 'ACCOUNT_HEALTH::CRITICAL::BINANCE' in html
+    assert 'title="BINANCE: ratio=0.9500, free=5.00 USD' in html

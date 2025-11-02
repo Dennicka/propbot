@@ -5,6 +5,7 @@ from .account_health import (
     AccountHealthState,
     collect_account_health,
     evaluate_health,
+    get_account_health,
     register_metrics,
     update_metrics,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "AccountHealthState",
     "collect_account_health",
     "evaluate_health",
+    "get_account_health",
     "register_metrics",
     "update_metrics",
 ]

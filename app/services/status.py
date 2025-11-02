@@ -6,6 +6,7 @@ from typing import Dict, List, Mapping, Tuple
 
 from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
 from .partial_hedge_runner import get_partial_hedge_status
+from ..health.account_health import get_account_health
 from ..utils import redact_sensitive_data
 from ..version import APP_VERSION
 from ..watchdog.broker_watchdog import get_broker_watchdog
@@ -728,6 +729,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
         "last_success_ts": auto_payload.get("last_success_ts"),
     }
     snapshot["watchdog"] = get_broker_watchdog().snapshot()
+    snapshot["account_health"] = get_account_health()
     return redact_sensitive_data(snapshot)
 
 
