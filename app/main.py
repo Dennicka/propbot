@@ -36,11 +36,18 @@ from .routers import ui_pnl_attrib
 from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
 from .api.ui import pretrade as ui_pretrade
+from .api.ui import readiness as ui_readiness
 from .utils.idem import IdempotencyCache, IdempotencyMiddleware
 from .utils.static import CachedStaticFiles
 from .middlewares.rate import RateLimitMiddleware, RateLimiter
 from .telebot import setup_telegram_bot
 from .telemetry import observe_ui_latency, setup_slo_monitor
+from .readiness import (
+    DEFAULT_POLL_INTERVAL as READINESS_POLL_INTERVAL,
+    READINESS_AGGREGATOR,
+    collect_readiness_signals,
+    wait_for_live_readiness,
+)
 from .metrics.observability import observe_api_latency, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
@@ -63,6 +70,34 @@ def _should_guard(request: Request) -> bool:
 
 
 logger = logging.getLogger("propbot.startup")
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _startup_timeout_seconds(state) -> float:
+    default_timeout = 120.0
+    config = getattr(getattr(state, "config", None), "data", None)
+    if config is not None:
+        readiness_cfg = getattr(config, "readiness", None)
+        if readiness_cfg is not None:
+            value = getattr(readiness_cfg, "startup_timeout_sec", None)
+            if value is not None:
+                try:
+                    return max(float(value), 1.0)
+                except (TypeError, ValueError):  # pragma: no cover - defensive
+                    logger.debug("invalid readiness.startup_timeout_sec=%r", value)
+    raw = os.getenv("READINESS_STARTUP_TIMEOUT_SEC")
+    if raw:
+        try:
+            return max(float(raw), 1.0)
+        except ValueError:  # pragma: no cover - defensive
+            logger.debug("invalid READINESS_STARTUP_TIMEOUT_SEC=%s", raw)
+    return default_timeout
 
 
 def create_app() -> FastAPI:
@@ -150,6 +185,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_trades.router)
     app.include_router(ui_risk.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_pretrade.router)
+    app.include_router(ui_readiness.router)
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
     from .opsbot import setup_notifier as setup_ops_notifier
@@ -172,6 +208,38 @@ def create_app() -> FastAPI:
             runtime_service.setup_signal_handlers(asyncio.get_running_loop())
         except RuntimeError:  # pragma: no cover - no running loop
             logger.debug("signal handler installation skipped: no running loop")
+
+    @app.on_event("startup")
+    async def _wait_for_readiness_gate() -> None:
+        state = runtime_service.get_state()
+        control = getattr(state, "control", None)
+        environment = str(
+            getattr(control, "environment", None)
+            or getattr(control, "deployment_mode", "")
+            or ""
+        ).lower()
+        default_wait = environment in {"live", "testnet"}
+        if not _env_flag("WAIT_FOR_LIVE_READINESS_ON_START", default_wait):
+            return
+        mode = str(getattr(control, "mode", "HOLD") or "HOLD").upper()
+        if mode != "RUN":
+            return
+        timeout_s = _startup_timeout_seconds(state)
+        target_safe_mode = bool(getattr(control, "safe_mode", True))
+        runtime_service.engage_safety_hold("startup:wait_for_readiness", source="bootstrap")
+        ready = await wait_for_live_readiness(
+            READINESS_AGGREGATOR,
+            collect_readiness_signals,
+            interval_s=READINESS_POLL_INTERVAL,
+            timeout_s=timeout_s,
+            log=logger,
+        )
+        if ready:
+            runtime_service.autopilot_apply_resume(safe_mode=target_safe_mode)
+        else:
+            logger.warning(
+                "wait-for-readiness timeout reached; system remains in HOLD",
+            )
 
     return app
 

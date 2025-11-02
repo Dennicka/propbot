@@ -199,6 +199,10 @@
         letter-spacing: 0.06em;
         text-transform: uppercase;
       }
+      .badge-success {
+        background: rgba(74, 222, 128, 0.2);
+        color: #4ade80;
+      }
       .code-block {
         background: rgba(15, 23, 42, 0.65);
         border-radius: 8px;
@@ -219,6 +223,13 @@
       .badge-error {
         background: rgba(239, 68, 68, 0.2);
         color: #f87171;
+      }
+      .status-badges {
+        margin-top: 0.35rem;
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        flex-wrap: wrap;
       }
       .events-list {
         display: flex;
@@ -464,6 +475,15 @@
       <div>
         <h1>PropBot System Status</h1>
         <p id="mode">Loading...</p>
+        <div class="status-badges">
+          <span
+            class="badge badge-warning"
+            id="readinessBadge"
+            title="Readiness status is loading"
+          >
+            Readiness: UNKNOWN
+          </span>
+        </div>
       </div>
       <div class="actions">
         <button id="editConfigBtn" class="secondary">Edit Config</button>
@@ -737,6 +757,7 @@
       const autopilotStatusEl = document.getElementById('autopilotStatus');
       const loopStatusEl = document.getElementById('loopStatus');
       const loopConfigEl = document.getElementById('loopConfig');
+      const readinessBadgeEl = document.getElementById('readinessBadge');
       const loopCountersEl = document.getElementById('loopCounters');
       const loopSummaryEl = document.getElementById('loopSummary');
       const openOrdersBody = document.getElementById('openOrders');
@@ -1394,6 +1415,39 @@
         });
       };
 
+      const renderReadiness = (payload) => {
+        if (!readinessBadgeEl) return;
+        const defaultTitle = 'Readiness data unavailable';
+        let badgeClass = 'badge badge-warning';
+        let statusText = 'UNKNOWN';
+        let titleText = defaultTitle;
+        let reasonsText = '';
+        if (payload && typeof payload === 'object') {
+          statusText = String(payload.status || 'UNKNOWN').toUpperCase();
+          const reasons = Array.isArray(payload.reasons) ? payload.reasons : [];
+          reasonsText = reasons.join(', ');
+          if (statusText === 'GREEN') {
+            badgeClass = 'badge badge-success';
+            titleText = 'All readiness checks passed';
+          } else if (statusText === 'YELLOW') {
+            badgeClass = 'badge badge-warning';
+            titleText = reasons.length ? reasons.join(', ') : 'Non-blocking readiness issues';
+          } else if (statusText === 'RED') {
+            badgeClass = 'badge badge-error';
+            titleText = reasons.length ? reasons.join(', ') : 'Blocking readiness issues';
+          } else {
+            badgeClass = 'badge badge-warning';
+            titleText = reasons.length ? reasons.join(', ') : defaultTitle;
+          }
+        }
+        readinessBadgeEl.className = badgeClass;
+        readinessBadgeEl.textContent = `Readiness: ${statusText}`;
+        readinessBadgeEl.title = titleText;
+        if (reasonsText !== undefined) {
+          readinessBadgeEl.dataset.reasons = reasonsText;
+        }
+      };
+
       const renderPositions = (positions) => {
         const rows = Array.isArray(positions) ? positions : [];
         positionsBody.innerHTML = rows.length
@@ -1549,11 +1603,12 @@
 
       const fetchState = async () => {
         try {
-          const [stateResp, secretResp, ordersResp, dailyLossResp] = await Promise.all([
+          const [stateResp, secretResp, ordersResp, dailyLossResp, readinessResp] = await Promise.all([
             fetch('/api/ui/state'),
             fetch('/api/ui/secret'),
             fetch('/api/ui/orders'),
             fetch('/api/ui/daily_loss_status'),
+            fetch('/live/readiness'),
           ]);
           if (!stateResp.ok) {
             throw new Error('failed to load state');
@@ -1562,6 +1617,10 @@
           let dailyLossSnapshot = null;
           if (dailyLossResp.ok) {
             dailyLossSnapshot = await dailyLossResp.json();
+          }
+          let readinessSnapshot = null;
+          if (readinessResp && readinessResp.ok) {
+            readinessSnapshot = await readinessResp.json().catch(() => null);
           }
           state.control = data.control || state.control;
           const eventsBlock = data.events || {};
@@ -1592,6 +1651,7 @@
             .join('');
           document.getElementById('flags').innerHTML = flagLines;
           renderControlSnapshot(state.control);
+          renderReadiness(readinessSnapshot);
           renderAutopilot(data.autopilot || {});
           renderRisk(data.risk);
           const lossCapSnapshot =
@@ -1634,6 +1694,7 @@
         } catch (error) {
           console.error('Failed to refresh state', error);
           showToast('Failed to refresh state', 'error');
+          renderReadiness(null);
         }
       };
 

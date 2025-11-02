@@ -69,6 +69,10 @@ risk:
     max_order_error_rate: 0.01
     min_broker_state: UP
     hold_after_windows: 2
+recon:
+  max_divergence: 0.0
+readiness:
+  startup_timeout_sec: 120
 status_thresholds_file: status_thresholds.yaml
 derivatives:
   venues:
