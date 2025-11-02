@@ -23,7 +23,7 @@ from ..watchdog.broker_watchdog import (
     STATE_DOWN,
 )
 from ..metrics import set_auto_trade_state, slo
-from ..risk.risk_governor import configure_risk_governor
+from ..risk.risk_governor import configure_pretrade_risk_governor, configure_risk_governor
 from ..persistence import state_store
 from ..runtime import leader_lock
 from ..runtime_state_store import (
@@ -859,6 +859,7 @@ def _bootstrap_runtime() -> RuntimeState:
     else:
         governor_payload = None
     configure_risk_governor(clock=time.time, config=governor_payload)
+    configure_pretrade_risk_governor(clock=time.time)
     runaway_guard_state = RunawayGuardV2State(
         max_cancels_per_min=runaway_guard_config["max_cancels_per_min"],
         cooldown_sec=runaway_guard_config["cooldown_sec"],
