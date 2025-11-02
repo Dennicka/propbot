@@ -52,10 +52,15 @@ from .orders import (
 )
 from .risk_governor import (
     increment_window as increment_risk_window,
+    record_blocked_order,
+    record_risk_check,
     set_error_rate as set_risk_error_rate,
     set_success_rate as set_risk_success_rate,
     set_throttled as set_risk_throttled,
+    set_velocity,
 )
+
+set_risk_velocity = set_velocity
 
 __all__ = [
     "AUTO_TRADE_GAUGE",
@@ -104,4 +109,8 @@ __all__ = [
     "set_risk_error_rate",
     "set_risk_throttled",
     "increment_risk_window",
+    "record_risk_check",
+    "record_blocked_order",
+    "set_velocity",
+    "set_risk_velocity",
 ]

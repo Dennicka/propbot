@@ -25,6 +25,7 @@ from ..services.runtime import (
 )
 from ..runtime.pre_trade_gate import enforce_pre_trade
 from ..risk.risk_governor import (
+    get_pretrade_risk_governor,
     record_order_error as record_risk_order_error,
     record_order_success as record_risk_order_success,
 )
@@ -243,7 +244,22 @@ class ExecutionRouter:
                     venue=venue, symbol=symbol, side=side, original=price_to_use
                 )
             try:
-                enforce_pre_trade(venue)
+                price_for_notional = price_to_use if price_to_use is not None else price
+                try:
+                    notional_value = abs(float(qty) * float(price_for_notional or 0.0))
+                except (TypeError, ValueError):
+                    notional_value = 0.0
+                order_context = {
+                    "operation": "order",
+                    "venue": venue,
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": price_to_use,
+                    "notional": notional_value,
+                    "positions_delta": 0 if reduce_only else 1,
+                }
+                enforce_pre_trade(venue, order_context)
                 if self._watchdog.should_block_orders(venue):
                     raise HoldActiveError("WATCHDOG_DOWN")
                 self._watchdog.record_order_submit(venue)
@@ -408,6 +424,10 @@ class ExecutionRouter:
         return order
 
     async def cancel_order(self, *, venue: str, order_id: int) -> None:
+        governor = get_pretrade_risk_governor()
+        ok, reason = governor.check_and_account(None, {"operation": "cancel", "venue": venue})
+        if not ok:
+            raise HoldActiveError(reason or "RISK_THROTTLED")
         broker = self.broker_for_venue(venue)
         await broker.cancel(venue=venue, order_id=order_id)
         await self._refresh_open_orders()
@@ -436,6 +456,23 @@ class ExecutionRouter:
         if qty_value <= 0:
             raise ValueError("qty must be positive")
         broker = self.broker_for_venue(venue)
+        governor = get_pretrade_risk_governor()
+        try:
+            notional_value = abs(float(qty_value) * float(price))
+        except (TypeError, ValueError):
+            notional_value = 0.0
+        ok, reason = governor.check_and_account(
+            None,
+            {
+                "operation": "replace",
+                "venue": venue,
+                "symbol": symbol_value,
+                "notional": notional_value,
+                "positions_delta": 0,
+            },
+        )
+        if not ok:
+            raise HoldActiveError(reason or "RISK_THROTTLED")
         await broker.cancel(venue=venue, order_id=order_id)
         replacement_id = client_order_id or f"{existing.get('idemp_key') or order_id}:replace"
         order = await broker.create_order(

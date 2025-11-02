@@ -3,17 +3,21 @@ from __future__ import annotations
 """Sliding-window risk governor with throttling and auto-hold escalation."""
 
 import math
+import os
 import threading
 import time
 from collections import Counter, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Deque, Dict, Mapping
 
 from ..metrics import (
     increment_risk_window,
+    record_blocked_order,
+    record_risk_check,
     set_risk_error_rate,
     set_risk_success_rate,
     set_risk_throttled,
+    set_velocity,
 )
 from ..services import runtime
 from ..watchdog.core import (
@@ -33,6 +37,675 @@ _DEFAULT_MIN_SUCCESS = 0.985
 _DEFAULT_MAX_ERROR = 0.01
 _DEFAULT_MIN_STATE = STATE_UP
 _DEFAULT_HOLD_AFTER = 2
+
+
+_INF = float("inf")
+
+
+def _positive_float(value: float | int | None) -> float | None:
+    try:
+        numeric = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    if numeric is None or numeric <= 0:
+        return None
+    return numeric
+
+
+def _positive_int(value: int | float | None) -> int | None:
+    try:
+        numeric = int(float(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    if numeric is None or numeric <= 0:
+        return None
+    return numeric
+
+
+def _normalise_strategy(name: str | None) -> str | None:
+    if not name:
+        return None
+    value = str(name).strip().lower()
+    return value or None
+
+
+def _normalise_symbol(name: str | None) -> str | None:
+    if not name:
+        return None
+    value = str(name).strip().upper()
+    return value or None
+
+
+@dataclass(slots=True)
+class RiskCaps:
+    """Container describing the configured caps enforced pre-trade."""
+
+    global_notional: float | None = None
+    per_strategy_notional: Dict[str, float] = field(default_factory=dict)
+    per_symbol_notional: Dict[str, float] = field(default_factory=dict)
+    max_open_positions_global: int | None = None
+    per_strategy_positions: Dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.global_notional = _positive_float(self.global_notional)
+        self.max_open_positions_global = _positive_int(self.max_open_positions_global)
+
+        strategy_notional: Dict[str, float] = {}
+        for raw, value in dict(self.per_strategy_notional).items():
+            limit = _positive_float(value)
+            key = _normalise_strategy(raw)
+            if key and limit is not None:
+                strategy_notional[key] = limit
+        self.per_strategy_notional = strategy_notional
+
+        symbol_notional: Dict[str, float] = {}
+        for raw, value in dict(self.per_symbol_notional).items():
+            limit = _positive_float(value)
+            key = _normalise_symbol(raw)
+            if key and limit is not None:
+                symbol_notional[key] = limit
+        self.per_symbol_notional = symbol_notional
+
+        strategy_positions: Dict[str, int] = {}
+        for raw, value in dict(self.per_strategy_positions).items():
+            limit = _positive_int(value)
+            key = _normalise_strategy(raw)
+            if key and limit is not None:
+                strategy_positions[key] = limit
+        self.per_strategy_positions = strategy_positions
+
+    def strategy_notional_limit(self, strategy: str | None) -> float | None:
+        if not self.per_strategy_notional:
+            return None
+        key = _normalise_strategy(strategy)
+        if key is None:
+            return self.per_strategy_notional.get("__default__")
+        return self.per_strategy_notional.get(key) or self.per_strategy_notional.get("__default__")
+
+    def symbol_notional_limit(self, symbol: str | None) -> float | None:
+        if not self.per_symbol_notional:
+            return None
+        key = _normalise_symbol(symbol)
+        if key is None:
+            return self.per_symbol_notional.get("__default__")
+        return self.per_symbol_notional.get(key) or self.per_symbol_notional.get("__default__")
+
+    def strategy_position_limit(self, strategy: str | None) -> int | None:
+        if not self.per_strategy_positions:
+            return None
+        key = _normalise_strategy(strategy)
+        if key is None:
+            return self.per_strategy_positions.get("__default__")
+        return self.per_strategy_positions.get(key) or self.per_strategy_positions.get("__default__")
+
+
+class VelocityWindow:
+    """Track order placement velocity within a sliding time window."""
+
+    def __init__(self, *, bucket_s: int = 60, clock: Callable[[], float] | None = None) -> None:
+        self.bucket_s = max(int(bucket_s or 60), 1)
+        self._clock = clock or time.time
+        self._events: Deque[tuple[float, int, int, float]] = deque()
+        self._lock = threading.RLock()
+
+    # ------------------------------------------------------------------
+    def _prune_locked(self, now: float) -> None:
+        threshold = now - self.bucket_s
+        while self._events and self._events[0][0] < threshold:
+            self._events.popleft()
+
+    def _aggregate_locked(self) -> tuple[int, int, float]:
+        orders = 0
+        cancels = 0
+        notional = 0.0
+        for _, o_count, c_count, notional_value in self._events:
+            orders += o_count
+            cancels += c_count
+            notional += notional_value
+        return orders, cancels, notional
+
+    # ------------------------------------------------------------------
+    def record(self, *, orders: int = 0, cancels: int = 0, notional: float = 0.0) -> tuple[int, int, float]:
+        now = self._clock()
+        entry = (
+            now,
+            max(int(orders), 0),
+            max(int(cancels), 0),
+            max(float(notional), 0.0),
+        )
+        with self._lock:
+            self._events.append(entry)
+            self._prune_locked(now)
+            return self._aggregate_locked()
+
+    def totals(self) -> tuple[int, int, float]:
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            return self._aggregate_locked()
+
+    def bucket_for(self, timestamp: float | None = None) -> float:
+        if timestamp is None:
+            timestamp = self._clock()
+        bucket = math.floor(timestamp / self.bucket_s) * self.bucket_s
+        return float(bucket)
+
+
+class RiskGovernor:
+    """Pre-trade risk governor enforcing caps and velocity limits."""
+
+    def __init__(
+        self,
+        caps: RiskCaps,
+        *,
+        velocity_limits: Mapping[str, float | int | None] | None = None,
+        bucket_s: int = 60,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self._caps = caps
+        self._velocity_limits = {
+            "orders": _positive_float((velocity_limits or {}).get("orders")) or _INF,
+            "cancels": _positive_float((velocity_limits or {}).get("cancels")) or _INF,
+            "notional": _positive_float((velocity_limits or {}).get("notional")) or _INF,
+        }
+        self._clock = clock or time.time
+        self._velocity = VelocityWindow(bucket_s=bucket_s, clock=self._clock)
+        self._lock = threading.RLock()
+        self.throttled: bool = False
+        self.last_reason: str | None = None
+        self.last_violation: Dict[str, object] = {}
+        self._current_bucket: float | None = None
+        self._bucket_violation: bool = False
+        self._completed_buckets: Deque[bool] = deque(maxlen=4)
+
+    # ------------------------------------------------------------------
+    def check_and_account(
+        self,
+        ctx: Mapping[str, object] | None,
+        order_req: Mapping[str, object] | None,
+    ) -> tuple[bool, str | None]:
+        """Evaluate risk caps/velocity for the supplied order request."""
+
+        order_payload = dict(order_req or {})
+        operation = str(order_payload.get("operation") or "order").strip().lower() or "order"
+        strategy = _normalise_strategy(order_payload.get("strategy"))
+        symbol = _normalise_symbol(order_payload.get("symbol"))
+        try:
+            notional = max(float(order_payload.get("notional", 0.0) or 0.0), 0.0)
+        except (TypeError, ValueError):
+            notional = 0.0
+        try:
+            positions_delta = int(float(order_payload.get("positions_delta", 0) or 0))
+        except (TypeError, ValueError):
+            positions_delta = 0
+        if positions_delta < 0:
+            positions_delta = 0
+
+        context = self._build_context(ctx)
+        violation_reason: str | None = None
+        violation_details: Dict[str, object] = {}
+
+        with self._lock:
+            now = self._clock()
+            self._rotate_bucket(now)
+
+            reason, details = self._check_caps(context, strategy, symbol, notional, positions_delta)
+            if reason is None:
+                reason, details = self._check_velocity(operation, notional)
+
+            if reason is None:
+                self._record_success(operation, notional)
+                record_risk_check("allow", None)
+                self.reset_throttle_if_ok()
+                return True, None
+
+            violation_reason = reason
+            violation_details = details
+            self._record_violation(reason, details)
+            record_risk_check("block", reason)
+            record_blocked_order(reason)
+            return False, violation_reason
+
+    # ------------------------------------------------------------------
+    def reset_throttle_if_ok(self) -> None:
+        """Clear the throttle after two consecutive violation-free windows."""
+
+        with self._lock:
+            if not self.throttled:
+                return
+            tail = list(self._completed_buckets)[-2:]
+            if len(tail) < 2:
+                return
+            if any(tail):
+                return
+            self.throttled = False
+            self.last_reason = None
+            self.last_violation = {}
+            set_risk_throttled(False, None)
+
+    def kill_switch(self, reason: str = "KILL_SWITCH::MANUAL") -> None:
+        """Engage the kill switch and trip the throttle."""
+
+        with self._lock:
+            self.throttled = True
+            self.last_reason = reason
+            self.last_violation = {"kill_switch": reason}
+            self._bucket_violation = True
+        set_risk_throttled(True, reason)
+        try:
+            runtime.update_risk_throttle(True, reason=reason, source="risk_governor_v2")
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    # ------------------------------------------------------------------
+    def _build_context(self, ctx: Mapping[str, object] | None) -> Dict[str, object]:
+        context: Dict[str, object] = {
+            "global_notional": 0.0,
+            "global_positions": 0,
+            "per_strategy_notional": {},
+            "per_strategy_positions": {},
+            "per_symbol_notional": {},
+        }
+        if isinstance(ctx, Mapping):
+            try:
+                context.update({
+                    "global_notional": float(ctx.get("global_notional", 0.0) or 0.0),
+                    "global_positions": int(float(ctx.get("global_positions", 0) or 0)),
+                })
+            except (TypeError, ValueError):
+                pass
+            per_strategy_notional = ctx.get("per_strategy_notional")
+            if isinstance(per_strategy_notional, Mapping):
+                context["per_strategy_notional"] = {
+                    key: max(float(value or 0.0), 0.0)
+                    for key, value in per_strategy_notional.items()
+                }
+            per_strategy_positions = ctx.get("per_strategy_positions")
+            if isinstance(per_strategy_positions, Mapping):
+                context["per_strategy_positions"] = {
+                    key: max(int(float(value or 0)), 0)
+                    for key, value in per_strategy_positions.items()
+                }
+            per_symbol_notional = ctx.get("per_symbol_notional")
+            if isinstance(per_symbol_notional, Mapping):
+                context["per_symbol_notional"] = {
+                    _normalise_symbol(key) or key: max(float(value or 0.0), 0.0)
+                    for key, value in per_symbol_notional.items()
+                }
+
+        if not context["per_strategy_notional"] or not context["per_strategy_positions"]:
+            from . import accounting  # local import to avoid cycle
+
+            snapshot = accounting.get_risk_snapshot()
+            totals = snapshot.get("totals") if isinstance(snapshot, Mapping) else {}
+            if isinstance(totals, Mapping):
+                try:
+                    context["global_notional"] = float(totals.get("open_notional", context["global_notional"]))
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    context["global_positions"] = int(
+                        float(totals.get("open_positions", context["global_positions"]))
+                    )
+                except (TypeError, ValueError):
+                    pass
+            per_strategy = snapshot.get("per_strategy") if isinstance(snapshot, Mapping) else {}
+            if isinstance(per_strategy, Mapping):
+                strategy_notional: Dict[str, float] = {}
+                strategy_positions: Dict[str, int] = {}
+                for name, payload in per_strategy.items():
+                    if not isinstance(payload, Mapping):
+                        continue
+                    key = _normalise_strategy(name)
+                    if key is None:
+                        continue
+                    try:
+                        strategy_notional[key] = max(float(payload.get("open_notional", 0.0) or 0.0), 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    try:
+                        strategy_positions[key] = max(int(float(payload.get("open_positions", 0) or 0)), 0)
+                    except (TypeError, ValueError):
+                        strategy_positions[key] = 0
+                if strategy_notional:
+                    context["per_strategy_notional"].update(strategy_notional)
+                if strategy_positions:
+                    context["per_strategy_positions"].update(strategy_positions)
+
+        if not context["per_symbol_notional"]:
+            state = runtime.get_state()
+            per_symbol = getattr(getattr(state, "risk", None), "current", None)
+            positions = getattr(per_symbol, "position_usdt", {}) if per_symbol else {}
+            if isinstance(positions, Mapping):
+                context["per_symbol_notional"] = {
+                    _normalise_symbol(symbol) or symbol: max(float(value or 0.0), 0.0)
+                    for symbol, value in positions.items()
+                }
+
+        return context
+
+    def _rotate_bucket(self, now: float) -> None:
+        bucket = self._velocity.bucket_for(now)
+        if self._current_bucket is None:
+            self._current_bucket = bucket
+            return
+        if bucket != self._current_bucket:
+            self._completed_buckets.append(self._bucket_violation)
+            self._current_bucket = bucket
+            self._bucket_violation = False
+
+    def _check_caps(
+        self,
+        context: Mapping[str, object],
+        strategy: str | None,
+        symbol: str | None,
+        notional: float,
+        positions_delta: int,
+    ) -> tuple[str | None, Dict[str, object]]:
+        totals_notional = float(context.get("global_notional", 0.0) or 0.0)
+        totals_positions = int(float(context.get("global_positions", 0) or 0))
+        projected_notional = totals_notional + notional
+        projected_positions = totals_positions + positions_delta
+
+        limit = self._caps.global_notional
+        if limit is not None and projected_notional > limit:
+            return "CAP::GLOBAL_NOTIONAL", {
+                "current": totals_notional,
+                "projected": projected_notional,
+                "limit": limit,
+            }
+
+        limit_positions = self._caps.max_open_positions_global
+        if limit_positions is not None and projected_positions > limit_positions:
+            return "CAP::GLOBAL_POSITIONS", {
+                "current": totals_positions,
+                "projected": projected_positions,
+                "limit": limit_positions,
+            }
+
+        if strategy:
+            per_strategy_notional = context.get("per_strategy_notional", {})
+            current_strategy_notional = max(
+                float(per_strategy_notional.get(strategy, 0.0) or 0.0),
+                0.0,
+            )
+            limit_strategy_notional = self._caps.strategy_notional_limit(strategy)
+            projected_strategy_notional = current_strategy_notional + notional
+            if limit_strategy_notional is not None and projected_strategy_notional > limit_strategy_notional:
+                return "CAP::STRATEGY_NOTIONAL", {
+                    "strategy": strategy,
+                    "current": current_strategy_notional,
+                    "projected": projected_strategy_notional,
+                    "limit": limit_strategy_notional,
+                }
+
+            per_strategy_positions = context.get("per_strategy_positions", {})
+            current_positions = max(int(float(per_strategy_positions.get(strategy, 0) or 0)), 0)
+            limit_strategy_positions = self._caps.strategy_position_limit(strategy)
+            projected_strategy_positions = current_positions + positions_delta
+            if limit_strategy_positions is not None and projected_strategy_positions > limit_strategy_positions:
+                return "CAP::STRATEGY_POSITIONS", {
+                    "strategy": strategy,
+                    "current": current_positions,
+                    "projected": projected_strategy_positions,
+                    "limit": limit_strategy_positions,
+                }
+
+        if symbol:
+            per_symbol_notional = context.get("per_symbol_notional", {})
+            current_symbol_notional = max(
+                float(per_symbol_notional.get(symbol, 0.0) or 0.0),
+                0.0,
+            )
+            limit_symbol = self._caps.symbol_notional_limit(symbol)
+            projected_symbol_notional = current_symbol_notional + notional
+            if limit_symbol is not None and projected_symbol_notional > limit_symbol:
+                return "CAP::SYMBOL_NOTIONAL", {
+                    "symbol": symbol,
+                    "current": current_symbol_notional,
+                    "projected": projected_symbol_notional,
+                    "limit": limit_symbol,
+                }
+
+        return None, {}
+
+    def _check_velocity(self, operation: str, notional: float) -> tuple[str | None, Dict[str, object]]:
+        delta_orders = 0
+        delta_cancels = 0
+        delta_notional = 0.0
+
+        if operation == "cancel":
+            delta_cancels = 1
+        elif operation == "replace":
+            delta_orders = 1
+            delta_cancels = 1
+            delta_notional = max(notional, 0.0)
+        else:
+            delta_orders = 1
+            delta_notional = max(notional, 0.0)
+
+        current_orders, current_cancels, current_notional = self._velocity.totals()
+        projected_orders = current_orders + delta_orders
+        projected_cancels = current_cancels + delta_cancels
+        projected_notional = current_notional + delta_notional
+
+        limit_orders = self._velocity_limits["orders"]
+        if projected_orders > limit_orders:
+            return "VELOCITY::ORDERS", {
+                "current": current_orders,
+                "projected": projected_orders,
+                "limit": limit_orders,
+            }
+
+        limit_cancels = self._velocity_limits["cancels"]
+        if projected_cancels > limit_cancels:
+            return "VELOCITY::CANCELS", {
+                "current": current_cancels,
+                "projected": projected_cancels,
+                "limit": limit_cancels,
+            }
+
+        limit_notional = self._velocity_limits["notional"]
+        if projected_notional > limit_notional:
+            return "VELOCITY::NOTIONAL", {
+                "current": current_notional,
+                "projected": projected_notional,
+                "limit": limit_notional,
+            }
+
+        totals = self._velocity.record(
+            orders=delta_orders,
+            cancels=delta_cancels,
+            notional=delta_notional,
+        )
+        self._update_velocity_metrics(*totals)
+        return None, {}
+
+    def _update_velocity_metrics(self, orders: int, cancels: int, notional: float) -> None:
+        set_velocity("orders", orders)
+        set_velocity("cancels", cancels)
+        set_velocity("notional", notional)
+
+    def _record_success(self, operation: str, notional: float) -> None:
+        if operation != "cancel":
+            totals = self._velocity.totals()
+            self._update_velocity_metrics(*totals)
+
+    def _record_violation(self, reason: str, details: Mapping[str, object]) -> None:
+        self.throttled = True
+        self.last_reason = reason
+        self.last_violation = dict(details)
+        self._bucket_violation = True
+        set_risk_throttled(True, reason)
+        try:
+            runtime.update_risk_throttle(True, reason=reason, source="risk_governor_v2")
+        except Exception:  # pragma: no cover - defensive
+            pass
+        totals = self._velocity.totals()
+        self._update_velocity_metrics(*totals)
+
+
+# ----------------------------------------------------------------------
+# Pre-trade governor configuration helpers
+# ----------------------------------------------------------------------
+
+
+def _env_float_cap(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _env_int_cap(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        value = int(float(text))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _strategy_scope(value: str) -> str | None:
+    return _normalise_strategy(value.replace("__", ":"))
+
+
+def _symbol_scope(value: str) -> str | None:
+    return _normalise_symbol(value.replace("__", ":"))
+
+
+def _env_float_map(prefix: str, *, normaliser: Callable[[str], str | None]) -> Dict[str, float]:
+    mapping: Dict[str, float] = {}
+    base = _env_float_cap(prefix)
+    if base is not None:
+        mapping["__default__"] = base
+    marker = f"{prefix}__"
+    for key, value in os.environ.items():
+        if not key.startswith(marker):
+            continue
+        scope_raw = key[len(marker) :]
+        scope = normaliser(scope_raw)
+        if not scope:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            mapping[scope] = numeric
+    return mapping
+
+
+def _env_int_map(prefix: str, *, normaliser: Callable[[str], str | None]) -> Dict[str, int]:
+    mapping: Dict[str, int] = {}
+    base = _env_int_cap(prefix)
+    if base is not None:
+        mapping["__default__"] = base
+    marker = f"{prefix}__"
+    for key, value in os.environ.items():
+        if not key.startswith(marker):
+            continue
+        scope_raw = key[len(marker) :]
+        scope = normaliser(scope_raw)
+        if not scope:
+            continue
+        try:
+            numeric = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0:
+            mapping[scope] = numeric
+    return mapping
+
+
+def _caps_from_env() -> RiskCaps:
+    return RiskCaps(
+        global_notional=_env_float_cap("RISK_CAP_GLOBAL_NOTIONAL_USDT"),
+        per_strategy_notional=_env_float_map(
+            "RISK_CAP_PER_STRATEGY_NOTIONAL", normaliser=_strategy_scope
+        ),
+        per_symbol_notional=_env_float_map(
+            "RISK_CAP_PER_SYMBOL_NOTIONAL", normaliser=_symbol_scope
+        ),
+        max_open_positions_global=_env_int_cap("RISK_CAP_MAX_OPEN_POSITIONS"),
+        per_strategy_positions=_env_int_map(
+            "RISK_CAP_PER_STRATEGY_POSITIONS", normaliser=_strategy_scope
+        ),
+    )
+
+
+def _velocity_limits_from_env() -> Dict[str, float | None]:
+    return {
+        "orders": _env_float_cap("RISK_VELOCITY_MAX_ORDERS_PER_MIN"),
+        "cancels": _env_float_cap("RISK_VELOCITY_MAX_CANCELS_PER_MIN"),
+        "notional": _env_float_cap("RISK_VELOCITY_MAX_NOTIONAL_PER_MIN_USDT"),
+    }
+
+
+def _velocity_window_from_env(default: int = 60) -> int:
+    raw = os.getenv("RISK_VELOCITY_WINDOW_SEC")
+    if raw is None:
+        return default
+    try:
+        numeric = int(float(str(raw).strip() or default))
+    except (TypeError, ValueError):
+        return default
+    return max(numeric, 1)
+
+
+_PRETRADE_GOVERNOR: RiskGovernor | None = None
+_PRETRADE_LOCK = threading.RLock()
+
+
+def _build_pretrade_governor_from_env() -> RiskGovernor:
+    caps = _caps_from_env()
+    limits = _velocity_limits_from_env()
+    bucket = _velocity_window_from_env()
+    return RiskGovernor(caps, velocity_limits=limits, bucket_s=bucket)
+
+
+def configure_pretrade_risk_governor(
+    *,
+    caps: RiskCaps | None = None,
+    velocity_limits: Mapping[str, float | int | None] | None = None,
+    bucket_s: int | None = None,
+    clock: Callable[[], float] | None = None,
+) -> None:
+    governor = RiskGovernor(
+        caps or _caps_from_env(),
+        velocity_limits=velocity_limits or _velocity_limits_from_env(),
+        bucket_s=bucket_s or _velocity_window_from_env(),
+        clock=clock,
+    )
+    with _PRETRADE_LOCK:
+        global _PRETRADE_GOVERNOR
+        _PRETRADE_GOVERNOR = governor
+
+
+def get_pretrade_risk_governor() -> RiskGovernor:
+    with _PRETRADE_LOCK:
+        global _PRETRADE_GOVERNOR
+        if _PRETRADE_GOVERNOR is None:
+            _PRETRADE_GOVERNOR = _build_pretrade_governor_from_env()
+        return _PRETRADE_GOVERNOR
+
+
+def reset_pretrade_risk_governor_for_tests() -> None:
+    with _PRETRADE_LOCK:
+        global _PRETRADE_GOVERNOR
+        _PRETRADE_GOVERNOR = None
 
 
 @dataclass(frozen=True)
@@ -358,11 +1031,17 @@ def evaluate_pre_trade(*, venue: str | None = None) -> RiskDecision:
 
 
 __all__ = [
+    "RiskCaps",
+    "VelocityWindow",
+    "RiskGovernor",
     "RiskDecision",
     "RiskGovernorConfig",
     "SlidingRiskGovernor",
+    "configure_pretrade_risk_governor",
     "configure_risk_governor",
+    "get_pretrade_risk_governor",
     "get_risk_governor",
+    "reset_pretrade_risk_governor_for_tests",
     "reset_risk_governor_for_tests",
     "record_order_success",
     "record_order_error",
