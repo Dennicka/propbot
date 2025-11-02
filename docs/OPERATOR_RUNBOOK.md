@@ -127,6 +127,24 @@ Pre-Trade Gate — это тонкая прослойка перед risk-govern
 Для ручной проверки можно вызвать `runtime.get_pre_trade_gate_status()` из REPL или
 посмотреть snapshot в `/api/ui/state` — там появляется блок `pre_trade_gate`.
 
+## Exposure Caps
+
+Лимиты экспозиции (глобальные, по направлению и по бирже) задаются в
+`exposure_caps` конфигурации и применяются перед risk governor. Runtime берёт
+текущие позиции из ledger, строит `ExposureCapsSnapshot` и блокирует только те
+ордера, которые увеличивают абсолютную позицию сверх ближайшего лимита. 【F:app/risk/exposure_caps.py†L1-L399】
+
+* При превышении pre-trade возвращает `EXPOSURE_CAPS::GLOBAL|SIDE|VENUE`,
+  запись фиксируется в `/api/ui/system_status`, Prometheus (`propbot_exposure_*`)
+  и журнале `exposure_caps_block`. UI дублирует событие в секции Risk/Status и
+  подсвечивает бейдж «EXPOSURE THROTTLED». 【F:app/router/order_router.py†L274-L375】【F:app/services/status.py†L680-L705】【F:app/services/operator_dashboard.py†L2406-L2440】
+* Reduce-only ордера (сокращающие позицию) проходят даже при превышенных капах —
+  используйте ручные закрытия для ликвидации лишних плечей. 【F:app/router/order_router.py†L248-L333】
+* Для разблокировки либо уменьшите позицию вручную, либо скорректируйте капы в
+  `configs/config.*.yaml` и перезагрузите runtime. Поднимайте лимиты только после
+  согласования с риск-менеджером. После обновления конфигурации убедитесь, что
+  `/api/ui/system_status` и дашборд показывают актуальные значения. 【F:configs/config.live.yaml†L19-L33】
+
 ## Account Health & Reduce-Only Mode
 
 Account health guard собирает маржинальные снапшоты с брокерских адаптеров и

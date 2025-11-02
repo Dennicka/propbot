@@ -1428,8 +1428,8 @@ async def reset() -> dict:
 async def _cancel_all_payload(request: CancelAllPayload | None = None) -> dict:
     state = get_state()
     environment = str(state.control.environment or "").lower()
-    if environment != "testnet":
-        raise HTTPException(status_code=403, detail="Cancel-all only available on testnet")
+    if environment not in {"testnet", "paper"}:
+        raise HTTPException(status_code=403, detail="Cancel-all only available on non-live envs")
     venue = request.venue if request else None
     correlation_id = request.correlation_id if request else None
     try:
@@ -1566,12 +1566,10 @@ async def kill_switch(request: Request, payload: KillConfirmPayload) -> dict:
 @router.post("/close_exposure")
 async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     state = get_state()
+    hold_detail: dict[str, object] | None = None
     if is_hold_active():
         safety = get_safety_status()
-        raise HTTPException(
-            status_code=status.HTTP_423_LOCKED,
-            detail={"error": "hold_active", "reason": safety.get("hold_reason")},
-        )
+        hold_detail = {"error": "hold_active", "reason": safety.get("hold_reason")}
     runtime = state.derivatives
     if not runtime:
         raise HTTPException(status_code=404, detail="derivatives runtime unavailable")
@@ -1582,6 +1580,8 @@ async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
             "venue": payload.venue,
             "symbol": payload.symbol,
         })
+    if hold_detail:
+        event_payload["hold_state"] = hold_detail
     ledger.record_event(level="INFO", code="flatten_requested", payload=event_payload)
     _emit_ops_alert("flatten_requested", "Exposure flatten requested", event_payload)
     return {"result": result, "ts": _ts()}

@@ -30,6 +30,7 @@
 * Runaway breaker: `MAX_ORDERS_PER_MIN`, `MAX_CANCELS_PER_MIN` и YAML-конфиг `guards.runaway_breaker`. Превышение переводит систему в HOLD через runaway guard. 【F:.env.example†L21-L36】【F:configs/config.live.yaml†L5-L10】
 * Дневной убыток: `DAILY_LOSS_CAP_USDT` (`ENFORCE_DAILY_LOSS_CAP`, `DAILY_LOSS_CAP_AUTO_HOLD`). Снапшот хранит `enabled`, `blocking` и `breached`; AutopilotGuard переводит режим в HOLD при пробое. 【F:.env.example†L31-L42】【F:app/risk/daily_loss.py†L45-L183】【F:app/services/autopilot_guard.py†L35-L145】
 * Стратегические бюджеты: менеджер инициализируется из runtime state и валидации сред через `StrategyBudgetManager`; автопилот не разрешит RUN, если стратегия заблокирована бюджетом. 【F:app/strategy_budget.py†L62-L162】【F:app/services/autopilot.py†L23-L72】
+* Exposure caps: раздел `exposure_caps` в `configs/config.*.yaml` задаёт глобальные, по-стороне и по-бирже лимиты в USDT. Перед запуском убедитесь, что значения соответствуют продовым ограничениям, а runtime отображает корректные капы в `/api/ui/system_status`. 【F:configs/config.live.yaml†L19-L33】【F:app/risk/exposure_caps.py†L340-L399】
 
 ### Наблюдаемость и защита
 

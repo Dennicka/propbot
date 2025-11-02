@@ -24,6 +24,7 @@ from .approvals_store import list_requests as list_pending_requests
 from .audit_log import list_recent_events
 from . import risk_alerts, risk_guard
 from .backtest_reports import load_latest_summary as load_latest_backtest_summary
+from ..risk.exposure_caps import build_status_payload as build_exposure_caps_status
 from .runtime import (
     get_auto_hedge_state,
     get_chaos_state,
@@ -849,6 +850,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "positions": positions_payload.get("positions", []),
         "exposure": positions_payload.get("exposure", {}),
         "position_totals": positions_payload.get("totals", {}),
+        "exposure_caps": build_exposure_caps_status(state.config.data),
         "health_checks": health_checks,
         "autopilot": autopilot_state,
         "pending_approvals": approvals,
@@ -1119,6 +1121,44 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
     liquidity_reason = liquidity.get("reason") or ""
     liquidity_snapshot = liquidity.get("per_venue") or {}
+    exposure_caps_payload = context.get("exposure_caps", {}) or {}
+    if not isinstance(exposure_caps_payload, Mapping):
+        exposure_caps_payload = {}
+    exposure_caps_enabled = bool(exposure_caps_payload.get("enabled"))
+    nearest_symbol: str | None = None
+    nearest_ratio: float = 0.0
+    nearest_cap: float | None = None
+    nearest_current: float | None = None
+    if exposure_caps_enabled:
+        by_symbol = exposure_caps_payload.get("by_symbol") or {}
+        if isinstance(by_symbol, Mapping):
+            for sym, payload in by_symbol.items():
+                if not isinstance(payload, Mapping):
+                    continue
+                cap_value = _coerce_float(payload.get("global_cap"))
+                current_value = _coerce_float(payload.get("current_abs"))
+                if cap_value <= 0:
+                    continue
+                ratio = current_value / cap_value if cap_value else 0.0
+                if nearest_symbol is None or ratio > nearest_ratio:
+                    nearest_symbol = str(sym)
+                    nearest_ratio = ratio
+                    nearest_cap = cap_value
+                    nearest_current = current_value
+    exposure_caps_summary: str | None = None
+    if exposure_caps_enabled and nearest_symbol is not None and nearest_cap is not None:
+        try:
+            ratio_pct = nearest_ratio * 100.0
+        except Exception:  # pragma: no cover - defensive
+            ratio_pct = 0.0
+        exposure_caps_summary = (
+            f"{nearest_symbol}: {_fmt(nearest_current)} / {_fmt(nearest_cap)} ({ratio_pct:.1f}% of cap)"
+        )
+    last_pretrade_block = safety.get("last_pretrade_block") if isinstance(safety, Mapping) else None
+    exposure_blocked = False
+    if isinstance(last_pretrade_block, Mapping):
+        reason_value = str(last_pretrade_block.get("reason") or "").strip().upper()
+        exposure_blocked = reason_value.startswith("EXPOSURE_CAPS::")
     env_flags = context.get("env", {}) or {}
     show_recon_widget = bool(env_flags.get("SHOW_RECON_STATUS", True))
     reconciliation = context.get("reconciliation", {}) or {}
@@ -2413,6 +2453,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     pnl_parts.append(
         f"<p class=\"metric\"><strong>Total exposure (USDT):</strong> {_fmt(total_exposure_value)}</p>"
     )
+    if exposure_caps_enabled:
+        badge_html = _tag("EXPOSURE THROTTLED", color="#b00020") if exposure_blocked else ""
+        summary_text = exposure_caps_summary or "Caps configured"
+        if badge_html:
+            summary_text = f"{summary_text} {badge_html}"
+        pnl_parts.append(
+            "<p class=\"metric\"><strong>Exposure caps:</strong> {summary}</p>".format(
+                summary=summary_text
+            )
+        )
+    else:
+        pnl_parts.append("<p class=\"note\">Exposure caps disabled.</p>")
     if headroom_map:
         pnl_parts.append(
             "<table><thead><tr><th>Strategy</th><th>Headroom (USDT)</th><th>Limit</th><th>Open notional</th></tr></thead><tbody>"
