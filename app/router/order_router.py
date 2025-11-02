@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping
+from types import SimpleNamespace
+from typing import Any, Dict, Mapping, Tuple
 
 from ..audit_log import log_operator_action
+from .. import ledger
 from ..metrics import (
     IDEMPOTENCY_HIT_TOTAL,
     ORDER_INTENT_TOTAL,
@@ -24,6 +26,104 @@ from ..utils.identifiers import generate_request_id
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+_CRITICAL_CAUSE = "ACCOUNT_HEALTH_CRITICAL"
+_REDUCE_ONLY_BLOCK = "blocked: reduce-only due to ACCOUNT_HEALTH::CRITICAL"
+
+
+def _coerce_float(value: object) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _resolve_gate(ctx: object) -> object | None:
+    runtime_scope = getattr(ctx, "runtime", ctx)
+    gate = getattr(runtime_scope, "pre_trade_gate", None)
+    if gate is not None:
+        return gate
+    getter = getattr(runtime_scope, "get_pre_trade_gate", None)
+    if callable(getter):
+        try:
+            return getter()
+        except TypeError:
+            pass
+    return None
+
+
+def enforce_reduce_only(
+    ctx: object,
+    symbol: str,
+    side: str,
+    qty: float | int | str | None,
+    current_position: object,
+) -> Tuple[bool, bool, str | None]:
+    """Allow reduce-only orders when the pre-trade gate is health-critical."""
+
+    gate = _resolve_gate(ctx)
+    if gate is None:
+        return True, False, None
+    is_critical = False
+    check = getattr(gate, "is_throttled_by", None)
+    if callable(check):
+        try:
+            is_critical = bool(check(_CRITICAL_CAUSE))
+        except Exception:  # pragma: no cover - defensive
+            is_critical = False
+    else:
+        is_critical = bool(getattr(gate, "is_throttled", False)) and (
+            (getattr(gate, "reason", "") or "").strip() == _CRITICAL_CAUSE
+        )
+    if not is_critical:
+        return True, False, None
+
+    qty_value = _coerce_float(qty)
+    if qty_value <= 0:
+        native_supported = bool(getattr(ctx, "native_reduce_only", False))
+        return True, native_supported, None
+
+    position_value: float
+    if isinstance(current_position, Mapping):
+        for key in ("qty", "base_qty", "position", "value"):
+            if key in current_position:
+                position_value = _coerce_float(current_position.get(key))
+                break
+        else:
+            position_value = 0.0
+    elif hasattr(current_position, "qty"):
+        position_value = _coerce_float(getattr(current_position, "qty"))
+    else:
+        position_value = _coerce_float(current_position)
+
+    if abs(position_value) <= 1e-9:
+        return False, False, _REDUCE_ONLY_BLOCK
+
+    side_value = str(side or "").lower()
+    if side_value not in {"buy", "sell"}:
+        return False, False, _REDUCE_ONLY_BLOCK
+
+    if side_value == "buy":
+        projected = position_value + qty_value
+    else:
+        projected = position_value - qty_value
+
+    native_supported = bool(getattr(ctx, "native_reduce_only", False))
+
+    # Allow reductions to zero without flipping to the opposite side.
+    if position_value > 0:
+        if projected < -1e-9:
+            return False, False, _REDUCE_ONLY_BLOCK
+        if abs(projected) > abs(position_value) + 1e-9:
+            return False, False, _REDUCE_ONLY_BLOCK
+    elif position_value < 0:
+        if projected > 1e-9:
+            return False, False, _REDUCE_ONLY_BLOCK
+        if abs(projected) > abs(position_value) + 1e-9:
+            return False, False, _REDUCE_ONLY_BLOCK
+
+    return True, native_supported, None
 
 
 class OrderRouterError(RuntimeError):
@@ -52,6 +152,54 @@ class OrderRouter:
     def __init__(self, broker) -> None:
         self._broker = broker
 
+    def _supports_native_reduce_only(self, venue: str) -> bool:
+        support = getattr(self._broker, "supports_reduce_only", None)
+        if isinstance(support, Mapping):
+            key = str(venue or "").lower()
+            return bool(support.get(key) or support.get(str(venue or "")))
+        if callable(support):
+            try:
+                return bool(support(venue=venue))
+            except TypeError:
+                try:
+                    return bool(support(venue))
+                except TypeError:
+                    return bool(support())
+        if isinstance(support, (set, frozenset, list, tuple)):
+            candidates = {str(item).lower() for item in support}
+            return str(venue or "").lower() in candidates
+        if isinstance(support, bool):
+            return support
+        attr = getattr(self._broker, "native_reduce_only_venues", None)
+        if isinstance(attr, (set, frozenset, list, tuple)):
+            candidates = {str(item).lower() for item in attr}
+            return str(venue or "").lower() in candidates
+        if isinstance(attr, Mapping):
+            key = str(venue or "").lower()
+            return bool(attr.get(key) or attr.get(str(venue or "")))
+        return False
+
+    def _current_position(self, venue: str, symbol: str) -> float:
+        try:
+            rows = ledger.fetch_positions()
+        except Exception:  # pragma: no cover - defensive read
+            return 0.0
+        symbol_key = str(symbol or "").upper()
+        venue_key = str(venue or "").lower()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            row_symbol = str(row.get("symbol") or "").upper()
+            row_venue = str(row.get("venue") or "").lower()
+            if row_symbol != symbol_key or row_venue != venue_key:
+                continue
+            value = row.get("base_qty")
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
     async def submit_order(
         self,
         *,
@@ -79,23 +227,40 @@ class OrderRouter:
         }
         gate = runtime.get_pre_trade_gate()
         allowed, gate_reason = gate.check_allowed(order_payload)
+        reduce_only_flag = False
         if not allowed:
-            reason_text = (gate_reason or "PRETRADE_BLOCKED").strip() or "PRETRADE_BLOCKED"
-            PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
-            runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
-            log_operator_action(
-                "system",
-                "system",
-                "PRETRADE_BLOCKED",
-                details={
-                    "reason": reason_text,
-                    "venue": venue,
-                    "symbol": symbol,
-                    "qty": qty,
-                    "price": price,
-                },
+            ctx = SimpleNamespace(
+                runtime=runtime,
+                native_reduce_only=self._supports_native_reduce_only(venue),
             )
-            raise PretradeGateThrottled(reason_text, details=order_payload)
+            current_position = self._current_position(venue, symbol)
+            reduce_allowed, native_supported, reduce_reason = enforce_reduce_only(
+                ctx, symbol, side, qty, current_position
+            )
+            if reduce_allowed:
+                allowed = True
+                gate_reason = None
+                reduce_only_flag = native_supported
+            else:
+                reason_text = (
+                    (reduce_reason or gate_reason or "PRETRADE_BLOCKED").strip()
+                    or "PRETRADE_BLOCKED"
+                )
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                log_operator_action(
+                    "system",
+                    "system",
+                    "PRETRADE_BLOCKED",
+                    details={
+                        "reason": reason_text,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "qty": qty,
+                        "price": price,
+                    },
+                )
+                raise PretradeGateThrottled(reason_text, details=order_payload)
         ok, reason, fixed = validator.validate(order_payload)
         if not ok:
             raise PretradeValidationError(reason or "PRETRADE_INVALID", details=order_payload)
@@ -162,6 +327,7 @@ class OrderRouter:
                     tif=tif,
                     strategy=strategy,
                     idemp_key=intent_id,
+                    reduce_only=reduce_only_flag,
                 )
             except Exception as exc:  # pragma: no cover - broker errors propagate
                 LOGGER.exception(
@@ -391,5 +557,5 @@ def _replacement_depth(session, intent_id: str) -> int:
     return depth + 1
 
 
-__all__ = ["OrderRouter", "OrderRef", "OrderRouterError"]
+__all__ = ["OrderRouter", "OrderRef", "OrderRouterError", "enforce_reduce_only"]
 
