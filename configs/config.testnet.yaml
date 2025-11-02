@@ -6,6 +6,7 @@ control:
   post_only: true
   reduce_only: false
 health:
+  guard_enabled: true
   margin_ratio_warn: 0.75
   margin_ratio_critical: 0.85
   free_collateral_warn_usd: 100.0

@@ -311,6 +311,7 @@ class ReadinessConfig(BaseModel):
 
 
 class HealthConfig(BaseModel):
+    guard_enabled: bool = Field(True)
     margin_ratio_warn: float = Field(0.75, ge=0.0, le=1.0)
     margin_ratio_critical: float = Field(0.85, ge=0.0, le=1.0)
     free_collateral_warn_usd: float = Field(100.0, ge=0.0)
