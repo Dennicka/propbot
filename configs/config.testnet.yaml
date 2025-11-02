@@ -16,6 +16,17 @@ guards:
   runaway_breaker: { place_per_min: 300, cancel_per_min: 600 }
   maintenance_calendar: []
 watchdog:
+market:
+  ws:
+    hb_timeout_s: 3.0
+    backoff_base_s: 0.25
+    backoff_max_s: 30.0
+    stable_window_s: 60.0
+  resync:
+    max_snapshot_depth: 1000
+    retry_policy:
+      max_attempts: 3
+      backoff_s: 1.0
   auto_hold_on_down: true
   block_on_down: true
   error_budget_window_s: 600

@@ -158,6 +158,17 @@ def capital_snapshot(request: Request) -> dict[str, Any]:
     return manager.snapshot()
 
 
+@router.get("/market_status")
+def market_status_endpoint(request: Request) -> dict[str, Any]:
+    """Expose websocket market data status for UI polling."""
+
+    require_token(request)
+    from ..services.market_ws import market_status_snapshot
+
+    snapshot = market_status_snapshot()
+    return {"markets": snapshot}
+
+
 @router.get("/tca/preview")
 def tca_preview_endpoint(
     request: Request,
