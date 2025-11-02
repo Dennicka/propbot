@@ -48,8 +48,11 @@ acceptance: acceptance_smoke acceptance_trading acceptance_chaos
 
 smoke: acceptance_smoke
 
+smoke_health:
+	$(PYTEST) -q tests/acceptance/test_health_smoke.py
+
 run:
-	$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
 
 dryrun.once:
 	$(PY) -m app.cli exec --profile paper

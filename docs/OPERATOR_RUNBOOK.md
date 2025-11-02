@@ -127,6 +127,40 @@ Pre-Trade Gate — это тонкая прослойка перед risk-govern
 Для ручной проверки можно вызвать `runtime.get_pre_trade_gate_status()` из REPL или
 посмотреть snapshot в `/api/ui/state` — там появляется блок `pre_trade_gate`.
 
+## Account Health & Reduce-Only Mode
+
+Account health guard собирает маржинальные снапшоты с брокерских адаптеров и
+классифицирует каждую биржу по трём уровням: `OK` (запас свободного
+коллатерала выше `health.free_collateral_warn_usd` и margin-ratio меньше
+`health.margin_ratio_warn`), `WARN` (достигнут мягкий порог) и `CRITICAL`
+(жёсткие пороги по margin-ratio или свободному коллатералу). 【F:app/health/account_health.py†L87-L125】【F:app/config/schema.py†L286-L327】
+
+* При `WARN` guard включает `risk_throttled` с причиной
+  `ACCOUNT_HEALTH_WARN`, но не трогает pre-trade gate и HOLD. 【F:app/risk/guards/health_guard.py†L120-L156】
+* При `CRITICAL` guard блокирует pre-trade gate с причиной
+  `ACCOUNT_HEALTH_CRITICAL`, переводит runtime в HOLD с
+  `ACCOUNT_HEALTH::CRITICAL::<EXCHANGE>` и продлевает риск-троттлинг. Router в
+  этом режиме пропускает только reduce-only заявки: любые ордера, увеличивающие
+  абсолютную позицию, блокируются, а reduce-only отмечаются флагом, если биржа
+  его поддерживает. 【F:app/risk/guards/health_guard.py†L158-L210】【F:app/router/order_router.py†L56-L111】
+* После двух последовательных окон `OK` guard автоматически снимает
+  троттлинг, очищает pre-trade gate и, если HOLD был выставлен им же,
+  инициирует `autopilot_apply_resume`. 【F:app/risk/guards/health_guard.py†L212-L274】
+
+### Что делать оператору
+
+1. **Понять причину.** На `/ui/dashboard` появится бейдж «ACCOUNT HEALTH» и,
+   при критике, красный баннер с причиной — например,
+   `ACCOUNT_HEALTH::CRITICAL::BINANCE`. 【F:app/services/operator_dashboard.py†L1038-L1116】
+2. **Пополнить счёт.** Если margin-ratio достиг жёсткого порога, приоритет —
+   пополнение USDT/USDC на соответствующей бирже.
+3. **Снизить экспозицию.** Закрыть часть позиций вручную или через reduce-only
+   заявки (они разрешены router'ом даже при критике) до возвращения в `WARN/OK`.
+4. **Мониторить окна.** Guard снимает HOLD и троттлинг автоматически после двух
+   стабильных окон `OK`; вручную дергать resume не требуется, если причина
+   осталась `ACCOUNT_HEALTH`. Проверяйте `/api/ui/system_status` и бейдж на
+   дашборде, чтобы убедиться в возвращении к `OK`.
+
 ## Операционные сценарии
 
 ### Включить автоторговлю
