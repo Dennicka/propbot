@@ -41,6 +41,22 @@ class PretradeConfig(BaseModel):
     default_tz: str = "UTC"
 
 
+class ExposureSideCapsConfig(BaseModel):
+    LONG: float | None = None
+    SHORT: float | None = None
+
+
+class ExposureCapsEntry(BaseModel):
+    max_abs_usdt: float | None = None
+    per_side_max_abs_usdt: ExposureSideCapsConfig | None = None
+
+
+class ExposureCapsConfig(BaseModel):
+    default: ExposureCapsEntry = Field(default_factory=ExposureCapsEntry)
+    per_symbol: Dict[str, ExposureCapsEntry] = Field(default_factory=dict)
+    per_venue: Dict[str, Dict[str, ExposureCapsEntry]] = Field(default_factory=dict)
+
+
 class MaintenanceScheduleWindow(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     start: str = Field(alias="from")
@@ -340,6 +356,7 @@ class AppConfig(BaseModel):
     guardrails: GuardrailsConfig | None = None
     maintenance: MaintenanceConfig | None = None
     pretrade: PretradeConfig | None = None
+    exposure_caps: ExposureCapsConfig | None = None
     control: ControlConfig | None = None
     derivatives: DerivativesConfig | None = None
     tca: TcaConfig | None = None
@@ -366,6 +383,9 @@ __all__ = [
     "MaintenanceWindow",
     "TradeWindowConfig",
     "PretradeConfig",
+    "ExposureSideCapsConfig",
+    "ExposureCapsEntry",
+    "ExposureCapsConfig",
     "MaintenanceScheduleWindow",
     "MaintenanceConfig",
     "GuardrailsConfig",

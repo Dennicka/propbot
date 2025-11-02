@@ -31,6 +31,14 @@ guards:
 pretrade:
   allow_autofix: true
   default_tz: "UTC"
+exposure_caps:
+  default:
+    max_abs_usdt: 2000
+    per_side_max_abs_usdt:
+      LONG: 1500
+      SHORT: 1500
+  per_symbol: {}
+  per_venue: {}
 maintenance:
   windows:
     - from: "02:00"

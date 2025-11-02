@@ -6,6 +6,7 @@ import json
 import pytest
 
 from app import ledger
+from app.config.schema import ExposureCapsConfig, ExposureCapsEntry, ExposureSideCapsConfig
 from app.broker.binance import BinanceTestnetBroker
 from app.services import runtime
 from app.services.runtime import get_state
@@ -198,6 +199,68 @@ def test_ui_state_and_controls(client, monkeypatch):
         ts=ts_testnet,
     )
 
+
+def test_system_status_exposes_exposure_caps(client):
+    runtime.reset_for_tests()
+    ledger.reset()
+    state = get_state()
+    state.control.environment = "paper"
+    state.config.data = state.config.data.model_copy(
+        update={
+            "exposure_caps": ExposureCapsConfig(
+                default=ExposureCapsEntry(
+                    max_abs_usdt=2000,
+                    per_side_max_abs_usdt=ExposureSideCapsConfig(LONG=1500, SHORT=1500),
+                ),
+                per_symbol={
+                    "ETHUSDT": ExposureCapsEntry(
+                        max_abs_usdt=2200,
+                        per_side_max_abs_usdt=ExposureSideCapsConfig(LONG=1600, SHORT=1600),
+                    )
+                },
+                per_venue={
+                    "okx": {
+                        "ETHUSDT": ExposureCapsEntry(max_abs_usdt=1200),
+                    }
+                },
+            )
+        }
+    )
+    ts_now = datetime.now(timezone.utc).isoformat()
+    order_id = ledger.record_order(
+        venue="okx",
+        symbol="ETHUSDT",
+        side="buy",
+        qty=1.0,
+        price=1900.0,
+        status="filled",
+        client_ts=ts_now,
+        exchange_ts=ts_now,
+        idemp_key="status-exposure",
+    )
+    ledger.record_fill(
+        order_id=order_id,
+        venue="okx",
+        symbol="ETHUSDT",
+        side="buy",
+        qty=1.0,
+        price=1900.0,
+        fee=0.0,
+        ts=ts_now,
+    )
+
+    response = client.get("/api/ui/system_status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["exposure_caps"]["enabled"] is True
+    symbol_entry = payload["exposure_caps"]["by_symbol"]["ETHUSDT"]
+    assert symbol_entry["global_cap"] == 2200
+    assert symbol_entry["per_side"]["LONG"]["cap"] == 1600
+    assert symbol_entry["per_side"]["LONG"]["current_abs"] > 0
+    venue_entry = payload["exposure_caps"]["by_venue"]["okx"]["ETHUSDT"]
+    assert venue_entry["cap"] == 1200
+    assert venue_entry["current_abs"] > 0
+
     testnet_state = client.get("/api/ui/state")
     assert testnet_state.status_code == 200
     testnet_payload = testnet_state.json()
@@ -236,7 +299,7 @@ def test_ui_state_and_controls(client, monkeypatch):
     assert close_resp.status_code in {200, 404, 429}
 
     # stop background loop to avoid leaking tasks between tests
-    runtime_state.control.environment = "paper"
+    state.control.environment = "paper"
     client.post("/api/ui/hold")
 
 

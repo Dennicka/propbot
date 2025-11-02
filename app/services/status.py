@@ -11,6 +11,7 @@ from ..utils import redact_sensitive_data
 from ..version import APP_VERSION
 from ..watchdog.broker_watchdog import get_broker_watchdog
 from positions import list_open_positions
+from ..risk.exposure_caps import build_status_payload as build_exposure_caps_status
 
 
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
@@ -730,6 +731,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     }
     snapshot["watchdog"] = get_broker_watchdog().snapshot()
     snapshot["account_health"] = get_account_health()
+    snapshot["exposure_caps"] = build_exposure_caps_status(state.config.data)
     return redact_sensitive_data(snapshot)
 
 

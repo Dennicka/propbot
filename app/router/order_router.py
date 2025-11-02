@@ -23,6 +23,12 @@ from ..persistence import order_store
 from ..runtime import locks
 from ..services import runtime
 from ..utils.identifiers import generate_request_id
+from ..risk.exposure_caps import (
+    check_open_allowed,
+    collect_snapshot,
+    resolve_caps,
+    snapshot_entry,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -269,6 +275,137 @@ class OrderRouter:
         qty = float(order_payload.get("qty", qty))
         price_value = order_payload.get("price", price)
         price = float(price_value) if price_value is not None else None
+
+        snapshot = collect_snapshot()
+        entry, _, _ = snapshot_entry(snapshot, symbol=symbol, venue=venue)
+        current_base_qty = _coerce_float(entry.get("base_qty"))
+        side_value = str(order_payload.get("side") or side or "").lower()
+        if side_value == "buy":
+            delta_qty = qty
+        elif side_value == "sell":
+            delta_qty = -qty
+        else:
+            delta_qty = 0.0
+        new_base_qty = current_base_qty + delta_qty
+        target_side: str | None
+        if new_base_qty > 1e-9:
+            target_side = "LONG"
+        elif new_base_qty < -1e-9:
+            target_side = "SHORT"
+        else:
+            target_side = None
+        projected_price = price if price is not None and price > 0 else 0.0
+        if projected_price <= 0:
+            notional_value = _coerce_float(order_payload.get("notional"))
+            if abs(qty) > 1e-9 and notional_value > 0:
+                projected_price = notional_value / abs(qty)
+            else:
+                projected_price = _coerce_float(entry.get("avg_price"))
+        price_reference = projected_price
+        if price_reference <= 0 and abs(qty) > 1e-9:
+            price_reference = _coerce_float(order_payload.get("notional")) / abs(qty)
+        if price_reference <= 0:
+            price_reference = _coerce_float(entry.get("avg_price"))
+        price_reference = max(price_reference, 0.0)
+        current_long_abs = _coerce_float(entry.get("LONG"))
+        current_short_abs = _coerce_float(entry.get("SHORT"))
+        notional_value = _coerce_float(order_payload.get("notional"))
+        new_abs_position = 0.0
+        current_side_abs = 0.0
+        if target_side == "LONG":
+            current_side_abs = current_long_abs
+            if current_base_qty >= -1e-9:
+                increment = 0.0
+                if delta_qty > 0:
+                    increment = (
+                        notional_value
+                        if notional_value > 0
+                        else delta_qty * price_reference
+                    )
+                new_abs_position = current_long_abs + max(increment, 0.0)
+            else:
+                new_abs_position = abs(new_base_qty) * price_reference
+        elif target_side == "SHORT":
+            current_side_abs = current_short_abs
+            if current_base_qty <= 1e-9:
+                increment = 0.0
+                if delta_qty < 0:
+                    increment = (
+                        notional_value
+                        if notional_value > 0
+                        else (-delta_qty) * price_reference
+                    )
+                new_abs_position = current_short_abs + max(increment, 0.0)
+            else:
+                new_abs_position = abs(new_base_qty) * price_reference
+        increasing = bool(target_side) and (
+            new_abs_position > current_side_abs + 1e-6
+        )
+        if increasing and target_side is not None:
+            state = runtime.get_state()
+            caps_ctx: Dict[str, object] = {
+                "config": state.config.data,
+                "snapshot": snapshot,
+            }
+            allowed, cap_reason = check_open_allowed(
+                caps_ctx,
+                symbol,
+                target_side,
+                venue,
+                new_abs_position,
+            )
+            if not allowed:
+                reason_text = cap_reason or "EXPOSURE_CAPS::UNKNOWN"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                projection = caps_ctx.get("projection")
+                caps_payload = resolve_caps(state.config.data, symbol, target_side, venue)
+                ledger.record_event(
+                    level="WARNING",
+                    code="exposure_caps_block",
+                    payload={
+                        "symbol": symbol,
+                        "venue": venue,
+                        "side": target_side,
+                        "reason": reason_text,
+                        "qty": qty,
+                        "price": price,
+                        "projected_global": projection.get("global", {}).get("projected")
+                        if isinstance(projection, Mapping)
+                        else None,
+                        "projected_side": projection.get("side", {}).get("projected")
+                        if isinstance(projection, Mapping)
+                        else None,
+                        "projected_venue": projection.get("venue_total", {}).get("projected")
+                        if isinstance(projection, Mapping)
+                        else None,
+                        "cap_global": caps_payload.get("global_max_abs"),
+                        "cap_side": caps_payload.get("side_max_abs"),
+                        "cap_venue": caps_payload.get("venue_max_abs"),
+                    },
+                )
+                LOGGER.warning(
+                    "pretrade_blocked exposure caps",
+                    extra={
+                        "symbol": symbol,
+                        "venue": venue,
+                        "side": target_side,
+                        "reason": reason_text,
+                    },
+                )
+                log_operator_action(
+                    "system",
+                    "system",
+                    "PRETRADE_BLOCKED",
+                    details={
+                        "reason": reason_text,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "qty": qty,
+                        "price": price,
+                    },
+                )
+                raise PretradeValidationError(reason_text, details=order_payload)
 
         intent_id = request_id or generate_request_id()
         async with locks.intent_lock(intent_id):
