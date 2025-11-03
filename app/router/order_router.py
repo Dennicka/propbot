@@ -218,6 +218,7 @@ class OrderRouter:
         price: float | None = None,
         tif: str | None = None,
         strategy: str | None = None,
+        intent_id: str | None = None,
         request_id: str | None = None,
     ) -> OrderRef:
         validator = get_pretrade_validator()
@@ -407,13 +408,22 @@ class OrderRouter:
                 )
                 raise PretradeValidationError(reason_text, details=order_payload)
 
-        intent_id = request_id or generate_request_id()
-        async with locks.intent_lock(intent_id):
+        intent_key = intent_id or request_id or generate_request_id()
+        client_request_id = request_id or intent_key
+        async with locks.intent_lock(intent_key):
+            prev_state: order_store.OrderIntentState | None = None
+            prev_request_id: str | None = None
+            prev_broker_order_id: str | None = None
             with order_store.session_scope() as session:
+                existing = order_store.load_intent(session, intent_key)
+                if existing is not None:
+                    prev_state = existing.state
+                    prev_request_id = existing.request_id
+                    prev_broker_order_id = existing.broker_order_id
                 intent = order_store.ensure_order_intent(
                     session,
-                    intent_id=intent_id,
-                    request_id=intent_id,
+                    intent_id=intent_key,
+                    request_id=client_request_id,
                     account=account,
                     venue=venue,
                     symbol=symbol,
@@ -424,7 +434,11 @@ class OrderRouter:
                     tif=tif,
                     strategy=strategy,
                 )
-                if intent.state in order_store.TERMINAL_STATES and intent.broker_order_id:
+                if (
+                    prev_state in order_store.TERMINAL_STATES
+                    and prev_broker_order_id
+                    and prev_request_id == client_request_id
+                ):
                     IDEMPOTENCY_HIT_TOTAL.labels(operation="submit").inc()
                     LOGGER.info(
                         "duplicate order suppressed",
@@ -440,7 +454,10 @@ class OrderRouter:
                         broker_order_id=intent.broker_order_id,
                         state=intent.state,
                     )
-                if intent.state == order_store.OrderIntentState.SENT:
+                if (
+                    prev_state == order_store.OrderIntentState.SENT
+                    and prev_request_id == client_request_id
+                ):
                     IDEMPOTENCY_HIT_TOTAL.labels(operation="submit").inc()
                     return OrderRef(
                         intent_id=intent.intent_id,
@@ -463,16 +480,16 @@ class OrderRouter:
                     type=order_type,
                     tif=tif,
                     strategy=strategy,
-                    idemp_key=intent_id,
+                    idemp_key=client_request_id,
                     reduce_only=reduce_only_flag,
                 )
             except Exception as exc:  # pragma: no cover - broker errors propagate
                 LOGGER.exception(
                     "order submit failed",
-                    extra={"intent_id": intent_id, "venue": venue, "error": str(exc)},
+                    extra={"intent_id": intent_key, "venue": venue, "error": str(exc)},
                 )
                 with order_store.session_scope() as session:
-                    intent = order_store.load_intent(session, intent_id)
+                    intent = order_store.load_intent(session, intent_key)
                     if intent:
                         order_store.update_intent_state(
                             session, intent, state=order_store.OrderIntentState.REJECTED
@@ -484,7 +501,7 @@ class OrderRouter:
 
             broker_order_id = _extract_order_id(payload)
             with order_store.session_scope() as session:
-                intent = order_store.load_intent(session, intent_id)
+                intent = order_store.load_intent(session, intent_key)
                 if not intent:
                     raise OrderRouterError("intent missing after submit")
                 order_store.update_intent_state(
@@ -496,8 +513,8 @@ class OrderRouter:
                 ORDER_INTENT_TOTAL.labels(state=intent.state.value).inc()
                 record_open_intents(order_store.open_intent_count(session))
             return OrderRef(
-                intent_id=intent_id,
-                request_id=intent_id,
+                intent_id=intent_key,
+                request_id=client_request_id,
                 broker_order_id=broker_order_id,
                 state=order_store.OrderIntentState.ACKED,
             )

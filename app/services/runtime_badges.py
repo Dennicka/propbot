@@ -72,6 +72,25 @@ def _partial_status() -> str:
     return BADGE_PARTIAL
 
 
+def _stuck_resolver_status() -> str:
+    state = get_state()
+    execution = getattr(state, "execution", None)
+    resolver = getattr(execution, "stuck_resolver", None)
+    if resolver is None or not getattr(resolver, "enabled", False):
+        return BADGE_OFF
+    snapshot = {}
+    try:
+        snapshot = resolver.snapshot()
+    except Exception:  # pragma: no cover - defensive
+        snapshot = {}
+    retries = snapshot.get("retries_last_hour")
+    try:
+        retries_value = int(retries)
+    except (TypeError, ValueError):
+        retries_value = 0
+    return f"ON (retries 1h: {retries_value})"
+
+
 def get_runtime_badges() -> Dict[str, str]:
     """Return the aggregated runtime status badges for operator views."""
 
@@ -81,6 +100,7 @@ def get_runtime_badges() -> Dict[str, str]:
         "daily_loss": _daily_loss_status(),
         "watchdog": _watchdog_status(),
         "partial_hedges": _partial_status(),
+        "stuck_resolver": _stuck_resolver_status(),
     }
 
 

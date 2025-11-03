@@ -272,6 +272,31 @@ class ControlConfig(BaseModel):
     reduce_only: bool = False
 
 
+class StuckResolverConfig(BaseModel):
+    enabled: bool = True
+    pending_timeout_sec: float = Field(8.0, ge=0.0)
+    cancel_grace_sec: float = Field(3.0, ge=0.0)
+    max_retries: int = Field(3, ge=0)
+    backoff_sec: List[float] = Field(default_factory=lambda: [1.0, 2.0, 5.0])
+
+    @field_validator("backoff_sec", mode="after")
+    def _normalise_backoff(cls, values: List[float]) -> List[float]:
+        cleaned: List[float] = []
+        for entry in values:
+            try:
+                value = float(entry)
+            except (TypeError, ValueError):
+                continue
+            if value < 0:
+                continue
+            cleaned.append(value)
+        return cleaned or [1.0]
+
+
+class ExecutionConfig(BaseModel):
+    stuck_resolver: StuckResolverConfig = Field(default_factory=StuckResolverConfig)
+
+
 class DerivativesConfig(BaseModel):
     venues: List[DerivVenueConfig]
     arbitrage: ArbitrageConfig
@@ -358,6 +383,7 @@ class AppConfig(BaseModel):
     pretrade: PretradeConfig | None = None
     exposure_caps: ExposureCapsConfig | None = None
     control: ControlConfig | None = None
+    execution: ExecutionConfig | None = None
     derivatives: DerivativesConfig | None = None
     tca: TcaConfig | None = None
     obs: Dict[str, object] | None = None
@@ -410,6 +436,8 @@ __all__ = [
     "TcaImpactConfig",
     "TcaTierEntry",
     "ControlConfig",
+    "StuckResolverConfig",
+    "ExecutionConfig",
     "DerivativesConfig",
     "StatusThresholds",
     "ChaosConfig",

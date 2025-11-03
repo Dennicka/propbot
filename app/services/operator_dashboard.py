@@ -1765,6 +1765,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "risk_checks": "Risk checks",
             "daily_loss": "Daily loss",
             "watchdog": "Watchdog",
+            "partial_hedges": "Partial hedges",
+            "stuck_resolver": "Stuck resolver",
         }
         status_classes = {
             "ON": "runtime-badge-on",
@@ -1774,14 +1776,23 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "DEGRADED": "runtime-badge-degraded",
             "AUTO_HOLD": "runtime-badge-auto_hold",
         }
-        badge_order = ("auto_trade", "risk_checks", "daily_loss", "watchdog")
+        badge_order = (
+            "auto_trade",
+            "risk_checks",
+            "daily_loss",
+            "watchdog",
+            "partial_hedges",
+            "stuck_resolver",
+        )
         badge_nodes: list[str] = []
         for key in badge_order:
             if key not in runtime_badges_payload:
                 continue
             value_raw = runtime_badges_payload.get(key)
-            value_text = str(value_raw or "").strip().upper() or "UNKNOWN"
-            css_class = status_classes.get(value_text, "")
+            value_text_raw = str(value_raw or "").strip()
+            value_text = value_text_raw or "UNKNOWN"
+            status_key = value_text_raw.upper().split()[0] if value_text_raw else "UNKNOWN"
+            css_class = status_classes.get(status_key, "")
             label = badge_labels.get(key, key.replace("_", " ").title())
             badge_nodes.append(
                 "<div class=\"runtime-badge {cls}\">"

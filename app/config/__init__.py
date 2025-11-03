@@ -8,6 +8,7 @@ from .schema import (
     ArbitragePolicies,
     ControlConfig,
     ChaosConfig,
+    ExecutionConfig,
     ExposureCapsConfig,
     ExposureCapsEntry,
     ExposureSideCapsConfig,
@@ -35,6 +36,7 @@ from .schema import (
     RateLimitConfig,
     RiskConfig,
     RunawayBreakerConfig,
+    StuckResolverConfig,
     StatusThresholds,
 )
 from .loader import LoadedConfig, load_app_config, load_yaml
@@ -46,6 +48,7 @@ __all__ = [
     "ArbitragePairConfig",
     "ArbitragePolicies",
     "ControlConfig",
+    "ExecutionConfig",
     "BrokerWatchdogConfig",
     "BrokerWatchdogThresholds",
     "DerivRoutingConfig",
@@ -75,6 +78,7 @@ __all__ = [
     "ExposureSideCapsConfig",
     "ExposureCapsEntry",
     "ExposureCapsConfig",
+    "StuckResolverConfig",
     "LoadedConfig",
     "load_app_config",
     "load_yaml",

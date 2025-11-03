@@ -42,6 +42,11 @@ from .observability import (
     set_watchdog_health,
     set_watchdog_state_metric,
 )
+from .execution import (
+    OPEN_ORDERS_GAUGE,
+    ORDER_RETRIES_TOTAL,
+    STUCK_ORDERS_TOTAL,
+)
 from .orders import (
     IDEMPOTENCY_HIT_TOTAL,
     OPEN_INTENTS_GAUGE,
@@ -84,7 +89,10 @@ __all__ = [
     "ORDER_INTENT_TOTAL",
     "IDEMPOTENCY_HIT_TOTAL",
     "OPEN_INTENTS_GAUGE",
+    "OPEN_ORDERS_GAUGE",
     "ORDER_SUBMIT_LATENCY",
+    "ORDER_RETRIES_TOTAL",
+    "STUCK_ORDERS_TOTAL",
     "observe_replace_chain",
     "record_open_intents",
     "PRETRADE_CHECKS_TOTAL",

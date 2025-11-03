@@ -732,6 +732,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     snapshot["watchdog"] = get_broker_watchdog().snapshot()
     snapshot["account_health"] = get_account_health()
     snapshot["exposure_caps"] = build_exposure_caps_status(state.config.data)
+    snapshot["stuck_resolver"] = state.execution.stuck_resolver.snapshot()
     return redact_sensitive_data(snapshot)
 
 

@@ -61,6 +61,7 @@ from .services.autopilot_guard import setup_autopilot_guard
 from .services.partial_hedge_runner import setup_partial_hedge_runner
 from .services.recon_runner import setup_recon_runner
 from .services import runtime as runtime_service
+from .execution.stuck_order_resolver import setup_stuck_resolver
 
 
 def _should_guard(request: Request) -> bool:
@@ -202,6 +203,7 @@ def create_app() -> FastAPI:
     setup_exchange_watchdog(app)
     setup_recon_runner(app)
     setup_partial_hedge_runner(app)
+    setup_stuck_resolver(app)
     setup_slo_monitor(app)
 
     @app.on_event("startup")
