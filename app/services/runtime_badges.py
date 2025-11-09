@@ -5,7 +5,7 @@ from typing import Dict, Mapping
 from ..risk.core import FeatureFlags
 from ..risk.daily_loss import get_daily_loss_cap_state
 from ..watchdog.exchange_watchdog import get_exchange_watchdog
-from .runtime import get_state
+from .runtime import get_state, get_stuck_resolver_instance
 from .status import get_partial_rebalance_summary
 
 
@@ -72,17 +72,33 @@ def _partial_status() -> str:
 
 
 def _stuck_resolver_status() -> tuple[bool, str | None]:
+    resolver_instance = get_stuck_resolver_instance()
+    if resolver_instance is not None:
+        try:
+            enabled_flag = bool(getattr(resolver_instance, "enabled"))
+        except Exception:  # pragma: no cover - defensive
+            enabled_flag = False
+        if enabled_flag:
+            try:
+                badge = str(resolver_instance.get_status_badge())
+            except Exception:  # pragma: no cover - defensive
+                badge = ""
+            if badge:
+                return True, badge
+        else:
+            return False, None
+
     state = get_state()
     execution = getattr(state, "execution", None)
-    resolver = getattr(execution, "stuck_resolver", None)
-    if resolver is None:
+    resolver_state = getattr(execution, "stuck_resolver", None)
+    if resolver_state is None:
         return False, None
-    enabled = bool(getattr(resolver, "enabled", False))
+    enabled = bool(getattr(resolver_state, "enabled", False))
     if not enabled:
         return False, None
     snapshot = {}
     try:
-        snapshot = resolver.snapshot()
+        snapshot = resolver_state.snapshot()
     except Exception:  # pragma: no cover - defensive
         snapshot = {}
     retries = snapshot.get("retries_last_hour")

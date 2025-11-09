@@ -178,6 +178,42 @@ class StuckOrderResolver:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    @property
+    def enabled(self) -> bool:
+        config = self._resolver_config()
+        return config.enabled
+
+    def retries_last_hour(self) -> int:
+        state = self._resolver_state()
+        if state is None:
+            return 0
+        counter = getattr(state, "retries_last_hour", None)
+        if callable(counter):
+            try:
+                return int(counter())
+            except Exception:  # pragma: no cover - defensive
+                return 0
+        snapshot_getter = getattr(state, "snapshot", None)
+        if callable(snapshot_getter):
+            try:
+                snapshot = snapshot_getter()
+            except Exception:  # pragma: no cover - defensive
+                snapshot = {}
+            if isinstance(snapshot, Mapping):
+                try:
+                    return int(snapshot.get("retries_last_hour", 0))
+                except (TypeError, ValueError):  # pragma: no cover - defensive
+                    return 0
+        return 0
+
+    def get_status_badge(self) -> str:
+        if not self.enabled:
+            return ""
+        retries = self.retries_last_hour()
+        if retries < 0:
+            retries = 0
+        return f"ON (retries 1h: {retries})"
+
     async def start(self) -> None:
         config = self._resolver_config()
         if not config.enabled:
@@ -484,14 +520,21 @@ def setup_stuck_resolver(app) -> None:
     """Register FastAPI lifecycle hooks for the stuck order resolver."""
 
     resolver = get_resolver()
+    runtime.register_stuck_resolver_instance(resolver)
 
     @app.on_event("startup")
     async def _on_startup() -> None:  # pragma: no cover - lifecycle glue
+        runtime.register_stuck_resolver_instance(resolver)
+        if not resolver.enabled:
+            return
         await resolver.start()
 
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:  # pragma: no cover - lifecycle glue
-        await resolver.stop()
+        try:
+            await resolver.stop()
+        finally:
+            runtime.register_stuck_resolver_instance(None)
 
 
 __all__ = ["StuckOrderResolver", "get_resolver", "setup_stuck_resolver"]

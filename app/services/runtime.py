@@ -64,6 +64,7 @@ _UNSET = object()
 
 
 _STATE_LOCK = threading.RLock()
+_STUCK_RESOLVER_INSTANCE: object | None = None
 
 
 def _resolve_config_path() -> str:
@@ -987,6 +988,15 @@ def _bootstrap_runtime() -> RuntimeState:
 
 def get_state() -> RuntimeState:
     return _STATE
+
+
+def register_stuck_resolver_instance(resolver: object | None) -> None:
+    global _STUCK_RESOLVER_INSTANCE
+    _STUCK_RESOLVER_INSTANCE = resolver
+
+
+def get_stuck_resolver_instance() -> object | None:
+    return _STUCK_RESOLVER_INSTANCE
 
 
 def get_market_data() -> MarketDataAggregator:
@@ -1968,6 +1978,7 @@ def reset_for_tests() -> None:
     if _reset_positions_store is not None:
         _reset_positions_store()
     globals()["_STATE"] = _STATE
+    register_stuck_resolver_instance(None)
     _persist_safety_snapshot(_STATE.safety.as_dict())
     _persist_autopilot_snapshot(_STATE.autopilot.as_dict())
     update_auto_hedge_state(

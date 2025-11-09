@@ -103,7 +103,7 @@ risk:
     hold_after_windows: 2
 execution:
   stuck_resolver:
-    enabled: true
+    enabled: false
     pending_timeout_sec: 8
     cancel_grace_sec: 3
     max_retries: 3
