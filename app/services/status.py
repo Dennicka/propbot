@@ -12,6 +12,7 @@ from ..version import APP_VERSION
 from ..watchdog.broker_watchdog import get_broker_watchdog
 from positions import list_open_positions
 from ..risk.exposure_caps import build_status_payload as build_exposure_caps_status
+from ..risk.freeze import get_freeze_registry
 
 
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
@@ -716,6 +717,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
             "reason": safety_snapshot.get("risk_throttle_reason"),
             "success_rate_1h": None,
         }
+    snapshot["freeze"] = get_freeze_registry().snapshot()
     snapshot["partial_rebalance"] = _partial_rebalance_summary()
     snapshot["partial_hedge"] = get_partial_hedge_status()
     snapshot["autopilot"] = state.autopilot.as_dict()
