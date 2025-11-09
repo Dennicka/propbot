@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 from .services.runtime import get_state
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class UniverseManager:
@@ -52,7 +56,7 @@ class UniverseManager:
             "spread_bps": None,
             "mark_price": None,
             "index_price": None,
-            "depth": {"bid_qty": None, "ask_qty": None},  # TODO: integrate depth snapshots
+            "depth": {"bid_qty": None, "ask_qty": None},  # depth data propagated only when venues expose snapshots
             "filters": {
                 "min_qty": None,
                 "max_qty": None,
@@ -143,18 +147,32 @@ class UniverseManager:
                     mid = (bid + ask) / 2.0
                     if mid > 0:
                         entry["spread_bps"] = abs(ask - bid) / mid * 10_000
-            except Exception:
-                # leave placeholders as None if the venue cannot provide book data
-                pass
+            except Exception as exc:
+                LOGGER.warning(
+                    "universe_manager.book_fetch_failed",
+                    extra={
+                        "venue": venue,
+                        "symbol": symbol,
+                        "venue_symbol": venue_symbol,
+                    },
+                    exc_info=exc,
+                )
             try:
                 mark = client.get_mark_price(venue_symbol)
                 if isinstance(mark, Mapping):
                     price = mark.get("price")
                     entry["mark_price"] = float(price) if price is not None else None
-                    # TODO: expose explicit index price once client surfaces it
                     entry["index_price"] = mark.get("index_price")
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.warning(
+                    "universe_manager.mark_fetch_failed",
+                    extra={
+                        "venue": venue,
+                        "symbol": symbol,
+                        "venue_symbol": venue_symbol,
+                    },
+                    exc_info=exc,
+                )
             try:
                 filters = client.get_filters(venue_symbol)
                 entry["filters"] = {
@@ -163,9 +181,16 @@ class UniverseManager:
                     "min_notional": filters.get("min_notional"),
                     "step_size": filters.get("step_size"),
                 }
-            except Exception:
-                # keep filters as placeholder if unavailable
-                pass
+            except Exception as exc:
+                LOGGER.warning(
+                    "universe_manager.filters_fetch_failed",
+                    extra={
+                        "venue": venue,
+                        "symbol": symbol,
+                        "venue_symbol": venue_symbol,
+                    },
+                    exc_info=exc,
+                )
             results[symbol] = entry
         return results
 
@@ -175,8 +200,9 @@ class UniverseManager:
     def score_pair(self, data_for_symbol: Mapping[str, Mapping[str, Any]]) -> float:
         """Return a coarse score for a symbol using venue metrics.
 
-        TODO: Replace the heuristic with a data-driven score once depth &
-        volatility metrics are available.
+        This intentionally conservative heuristic favours tight spreads
+        and liquid majors until richer analytics (depth/volatility) become
+        available in runtime telemetry.
         """
 
         symbol = next(

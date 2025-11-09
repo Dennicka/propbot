@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -12,6 +13,9 @@ from typing import Any, Iterable, List, Mapping
 _STORE_ENV = "PNL_HISTORY_PATH"
 _DEFAULT_PATH = Path("data/pnl_history.json")
 _LOCK = threading.RLock()
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _store_path() -> Path:
@@ -30,8 +34,12 @@ def get_store_path() -> Path:
 def _ensure_parent(path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "pnl_history.parent_mkdir_failed",
+            extra={"path": str(path.parent)},
+            exc_info=exc,
+        )
 
 
 def _load_entries(path: Path) -> List[dict[str, Any]]:
@@ -39,13 +47,23 @@ def _load_entries(path: Path) -> List[dict[str, Any]]:
         return []
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        LOGGER.warning(
+            "pnl_history.read_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
         return []
     if not raw.strip():
         return []
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        LOGGER.error(
+            "pnl_history.invalid_json",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
         return []
     if not isinstance(payload, list):
         return []
@@ -62,8 +80,12 @@ def _write_entries(path: Path, entries: Iterable[Mapping[str, Any]]) -> None:
     try:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(snapshot, handle, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "pnl_history.write_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
 
 
 def append_snapshot(snapshot: Mapping[str, Any], *, max_entries: int | None = 288) -> dict[str, Any]:

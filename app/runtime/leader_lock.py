@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import errno
+import json
+import logging
 import os
 import socket
 import sqlite3
 import threading
 import time
 import uuid
-import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -121,8 +126,12 @@ def _connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.DatabaseError:
-        pass
+    except sqlite3.DatabaseError as exc:
+        LOGGER.warning(
+            "leader_lock.pragma_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
     try:
         yield conn
     finally:
@@ -171,9 +180,19 @@ def _reset_db_on_error(exc: Exception) -> None:
     path = _db_path()
     try:
         path.unlink()
-    except OSError:
-        pass
+    except OSError as unlink_exc:
+        if unlink_exc.errno != errno.ENOENT:
+            LOGGER.error(
+                "leader_lock.reset_unlink_failed",
+                extra={"path": str(path)},
+                exc_info=unlink_exc,
+            )
     _record_local_state(owner=None, expires_at=0.0, acquired=False, error=str(exc), fencing_id=None)
+    LOGGER.error(
+        "leader_lock.reset_due_to_error",
+        extra={"path": str(path)},
+        exc_info=exc,
+    )
 
 
 def _write_heartbeat(data: Heartbeat) -> None:
@@ -182,8 +201,13 @@ def _write_heartbeat(data: Heartbeat) -> None:
     path = _heartbeat_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "leader_lock.heartbeat_parent_failed",
+            extra={"path": str(path.parent)},
+            exc_info=exc,
+        )
+        return
     payload = {
         "pid": data.pid,
         "fencing_id": data.fencing_id,
@@ -191,8 +215,12 @@ def _write_heartbeat(data: Heartbeat) -> None:
     }
     try:
         path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "leader_lock.heartbeat_write_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
 
 
 def beat(*, fencing_id: str | None = None, now: float | None = None) -> Heartbeat:
@@ -220,13 +248,24 @@ def last_heartbeat() -> Heartbeat:
     path = _heartbeat_path()
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        if exc.errno != errno.ENOENT:
+            LOGGER.warning(
+                "leader_lock.heartbeat_read_failed",
+                extra={"path": str(path)},
+                exc_info=exc,
+            )
         return Heartbeat()
     if not raw.strip():
         return Heartbeat()
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        LOGGER.error(
+            "leader_lock.heartbeat_invalid_json",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
         return Heartbeat()
     if not isinstance(payload, dict):
         return Heartbeat()
@@ -373,10 +412,16 @@ def release() -> bool:
         _reset_db_on_error(exc)
         return False
     _record_local_state(owner=None, expires_at=0.0, acquired=False, error=None, fencing_id=None)
+    heartbeat_path = _heartbeat_path()
     try:
-        _heartbeat_path().unlink()
-    except OSError:
-        pass
+        heartbeat_path.unlink()
+    except OSError as exc:
+        if exc.errno != errno.ENOENT:
+            LOGGER.warning(
+                "leader_lock.heartbeat_unlink_failed",
+                extra={"path": str(heartbeat_path)},
+                exc_info=exc,
+            )
     return True
 
 
@@ -419,13 +464,23 @@ def reset_for_tests() -> None:
     path = _db_path()
     try:
         path.unlink()
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno != errno.ENOENT:
+            LOGGER.warning(
+                "leader_lock.reset_db_unlink_failed",
+                extra={"path": str(path)},
+                exc_info=exc,
+            )
     hb_path = _heartbeat_path()
     try:
         hb_path.unlink()
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno != errno.ENOENT:
+            LOGGER.warning(
+                "leader_lock.reset_heartbeat_unlink_failed",
+                extra={"path": str(hb_path)},
+                exc_info=exc,
+            )
 
 
 __all__ = [
