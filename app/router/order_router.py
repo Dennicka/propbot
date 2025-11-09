@@ -670,17 +670,23 @@ class OrderRouter:
 
     async def recover_inflight(self) -> None:
         with order_store.session_scope() as session:
-            inflight = list(order_store.inflight_intents(session))
-        for intent in inflight:
-            request_id = intent.intent_id
-            async with locks.intent_lock(request_id):
+            inflight_ids = [intent.intent_id for intent in order_store.inflight_intents(session)]
+        for intent_id in inflight_ids:
+            async with locks.intent_lock(intent_id):
+                with order_store.session_scope() as session:
+                    current = order_store.load_intent(session, intent_id)
+                    if current is None:
+                        continue
+                    request_id = current.request_id
+                if not request_id:
+                    continue
                 info = await self._broker.get_order_by_client_id(request_id)
                 if not info:
                     continue
                 broker_order_id = _extract_order_id(info)
                 state = order_store.OrderIntentState.ACKED
                 with order_store.session_scope() as session:
-                    current = order_store.load_intent(session, request_id)
+                    current = order_store.load_intent(session, intent_id)
                     if current:
                         order_store.update_intent_state(
                             session,

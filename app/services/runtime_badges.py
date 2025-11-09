@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Dict
+from typing import Dict, Mapping
 
 from ..risk.core import FeatureFlags
 from ..risk.daily_loss import get_daily_loss_cap_state

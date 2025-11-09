@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from app.services.runtime import get_state
@@ -7,7 +9,7 @@ from app.watchdog.exchange_watchdog import (
 )
 
 
-def test_runtime_badges_endpoint_reflects_live_state(client, monkeypatch):
+def test_non_report_includes_badges(client, monkeypatch):
     reset_exchange_watchdog_for_tests()
     state = get_state()
     state.control.auto_loop = True
@@ -31,14 +33,22 @@ def test_runtime_badges_endpoint_reflects_live_state(client, monkeypatch):
     response = client.get("/api/ui/runtime_badges")
     assert response.status_code == 200
     payload = response.json()
-    assert payload == {
+    expected = {
         "auto_trade": "ON",
         "risk_checks": "ON",
         "daily_loss": "OK",
         "watchdog": "OK",
         "partial_hedges": "OK",
-        "stuck_resolver": "OFF",
+        "stuck_resolver": re.compile(r"^ON \(retries 1h: \d+\)$|^OFF$"),
     }
+
+    assert set(payload.keys()) == set(expected.keys())
+    for key, matcher in expected.items():
+        value = payload[key]
+        if isinstance(matcher, re.Pattern):
+            assert matcher.match(value), f"unexpected badge value for {key}: {value}"
+        else:
+            assert value == matcher
 
     # Dry-run mode should force auto trade badge to OFF even if toggled on.
     monkeypatch.setenv("DRY_RUN_MODE", "true")

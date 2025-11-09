@@ -10,6 +10,8 @@ class DummyBroker:
     def __init__(self) -> None:
         self.submits: list[str] = []
         self.orders: dict[str, str] = {}
+        self.lookup: dict[str, dict[str, str]] = {}
+        self.client_queries: list[str] = []
 
     async def create_order(self, *, idemp_key: str | None = None, **_):
         assert idemp_key is not None
@@ -18,10 +20,16 @@ class DummyBroker:
         if broker_id is None:
             broker_id = f"BRK-{len(self.orders) + 1}"
             self.orders[idemp_key] = broker_id
-        return {"broker_order_id": broker_id, "idemp_key": idemp_key}
+        record = {"broker_order_id": broker_id, "idemp_key": idemp_key}
+        self.lookup[idemp_key] = record
+        return record
 
     async def cancel(self, **_):  # pragma: no cover - not used
         return None
+
+    async def get_order_by_client_id(self, client_id: str):
+        self.client_queries.append(client_id)
+        return self.lookup.get(client_id)
 
 
 @pytest.fixture(autouse=True)
@@ -74,4 +82,25 @@ async def test_retry_keeps_same_intent_id():
     assert intent is not None
     assert intent.intent_id == ref1.intent_id
     assert intent.request_id == "retry-1"
+
+    with order_store.session_scope() as session:
+        intent = order_store.load_intent(session, ref1.intent_id)
+        assert intent is not None
+        intent.request_id = "retry-2"
+        intent.state = order_store.OrderIntentState.SENT
+        intent.broker_order_id = None
+        session.add(intent)
+
+    broker.lookup["retry-2"] = {"broker_order_id": "BRK-77"}
+
+    await router.recover_inflight()
+
+    assert broker.client_queries == ["retry-2"]
+
+    with order_store.session_scope() as session:
+        recovered = order_store.load_intent(session, ref1.intent_id)
+    assert recovered is not None
+    assert recovered.request_id == "retry-2"
+    assert recovered.broker_order_id == "BRK-77"
+    assert recovered.state == order_store.OrderIntentState.ACKED
 
