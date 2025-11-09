@@ -140,10 +140,19 @@ def _load_funding_events(limit: int = 200) -> list[dict[str, Any]]:
             payload.get("venue") or payload.get("exchange") or event.get("venue"), "unknown"
         )
         simulated = bool(payload.get("simulated") or payload.get("dry_run"))
+        symbol = _normalise_name(
+            payload.get("symbol")
+            or payload.get("pair")
+            or payload.get("instrument")
+            or payload.get("asset")
+            or event.get("symbol"),
+            "unknown",
+        )
         funding_rows.append(
             {
                 "strategy": strategy,
                 "venue": venue,
+                "symbol": symbol,
                 "amount": amount,
                 "ts": event.get("ts"),
                 "simulated": simulated,

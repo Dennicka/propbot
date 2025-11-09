@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.metrics import observability
 from app.metrics import execution as execution_metrics
+from app.metrics import pnl as pnl_metrics
 
 
 def test_metrics_exposed_and_incremented(client: TestClient, monkeypatch) -> None:
@@ -40,3 +41,28 @@ def test_stuck_order_metrics_exposed(client: TestClient) -> None:
     assert 'open_orders_gauge{status="status",symbol="symbol",venue="venue"} 2.0' in body
     assert 'stuck_resolver_retries_total{reason="reason",symbol="symbol",venue="venue"} 1.0' in body
     assert 'stuck_resolver_active_intents 3.0' in body
+
+
+def test_pnl_metrics_exposed(client: TestClient) -> None:
+    pnl_metrics.reset_for_tests()
+    pnl_metrics.update_pnl_metrics(
+        profile="paper",
+        realized={"BTCUSDT": 5.0},
+        unrealized={"BTCUSDT": 1.25},
+        fees={"BTCUSDT": 0.1},
+        funding={"BTCUSDT": -0.05},
+        total_realized=5.0,
+        total_unrealized=1.25,
+        total_fees=0.1,
+        total_funding=-0.05,
+    )
+
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    body = metrics.text
+
+    assert 'pnl_realized_usd{profile="paper",symbol="BTCUSDT"} 5.0' in body
+    assert 'pnl_unrealized_usd{profile="paper",symbol="BTCUSDT"} 1.25' in body
+    assert 'fees_paid_usd{profile="paper",symbol="BTCUSDT"} 0.1' in body
+    assert 'funding_paid_usd{profile="paper",symbol="BTCUSDT"} -0.05' in body
+    assert 'pnl_realized_usd{profile="paper",symbol="__total__"} 5.0' in body

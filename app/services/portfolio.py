@@ -1,17 +1,115 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from .. import ledger
+from ..metrics import pnl as pnl_metrics
+from ..risk.core import FeatureFlags
 from ..services.runtime import get_state
-from .pnl import Fill, Position, compute_realized_pnl, compute_unrealized_pnl
+from .pnl import (
+    Fill,
+    Position,
+    RealizedPnLBreakdown,
+    compute_realized_breakdown,
+    compute_realized_breakdown_by_symbol,
+    compute_unrealized_pnl,
+)
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
+def _exclude_simulated_entries() -> bool:
+    try:
+        return FeatureFlags.exclude_dry_run_from_pnl()
+    except Exception:
+        return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
+
+
+def _load_funding_events(limit: int = 200) -> List[dict[str, Any]]:
+    try:
+        events = ledger.fetch_events(limit=limit, order="desc")
+    except Exception:
+        return []
+    funding_rows: List[dict[str, Any]] = []
+    for event in events:
+        code = str(event.get("code") or event.get("type") or "").lower()
+        if code not in {"funding", "funding_payment", "funding_settlement"}:
+            continue
+        payload_raw = event.get("payload")
+        if isinstance(payload_raw, Mapping):
+            payload = dict(payload_raw)
+        elif isinstance(payload_raw, str):
+            try:
+                payload = json.loads(payload_raw)
+            except json.JSONDecodeError:
+                payload = {}
+        else:
+            payload = {}
+        amount = float(
+            payload.get("amount")
+            or payload.get("pnl")
+            or event.get("amount")
+            or 0.0
+        )
+        if amount == 0.0:
+            continue
+        strategy = str(payload.get("strategy") or payload.get("strategy_name") or "unknown")
+        venue = str(payload.get("venue") or payload.get("exchange") or event.get("venue") or "unknown")
+        simulated = bool(payload.get("simulated") or payload.get("dry_run"))
+        symbol_value = (
+            payload.get("symbol")
+            or payload.get("pair")
+            or payload.get("instrument")
+            or payload.get("asset")
+            or event.get("symbol")
+            or "unknown"
+        )
+        symbol = str(symbol_value).upper() or "UNKNOWN"
+        funding_rows.append(
+            {
+                "strategy": strategy or "unknown",
+                "venue": venue or "unknown",
+                "symbol": symbol,
+                "amount": amount,
+                "ts": event.get("ts"),
+                "simulated": simulated,
+            }
+        )
+    return funding_rows
+
+
+def _funding_breakdown(exclude_simulated: bool) -> tuple[dict[str, float], float]:
+    funding_events = _load_funding_events()
+    totals: Dict[str, float] = defaultdict(float)
+    for entry in funding_events:
+        if exclude_simulated and entry.get("simulated"):
+            continue
+        try:
+            amount = float(entry.get("amount") or 0.0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount == 0.0:
+            continue
+        symbol = str(entry.get("symbol") or "UNKNOWN").upper() or "UNKNOWN"
+        totals[symbol] += amount
+    return dict(sorted(totals.items())), sum(totals.values())
 
 
 @dataclass(frozen=True)
@@ -25,6 +123,8 @@ class PortfolioPosition:
     mark_px: float
     upnl: float
     rpnl: float
+    fees_paid: float = 0.0
+    funding: float = 0.0
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -37,6 +137,8 @@ class PortfolioPosition:
             "mark_px": self.mark_px,
             "upnl": self.upnl,
             "rpnl": self.rpnl,
+            "fees_paid": self.fees_paid,
+            "funding": self.funding,
         }
 
     def as_legacy_exposure(self) -> Dict[str, object]:
@@ -73,6 +175,8 @@ class PortfolioSnapshot:
     balances: List[PortfolioBalance] = field(default_factory=list)
     pnl_totals: Dict[str, float] = field(default_factory=dict)
     notional_total: float = 0.0
+    profile: str | None = None
+    exclude_simulated: bool = True
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -80,6 +184,8 @@ class PortfolioSnapshot:
             "balances": [balance.as_dict() for balance in self.balances],
             "pnl_totals": dict(self.pnl_totals),
             "notional_total": self.notional_total,
+            "profile": self.profile,
+            "exclude_simulated": self.exclude_simulated,
         }
 
     def exposures(self) -> List[Dict[str, object]]:
@@ -93,6 +199,8 @@ async def snapshot(since: datetime | None = None) -> PortfolioSnapshot:
     dry_run = bool(state.control.dry_run)
     use_testnet_brokers = environment in {"testnet", "live"}
 
+    exclude_simulated = _exclude_simulated_entries()
+
     if use_testnet_brokers:
         exposures, fills = await _collect_testnet_snapshot(state, since)
         balances = await _collect_testnet_balances(state)
@@ -103,33 +211,80 @@ async def snapshot(since: datetime | None = None) -> PortfolioSnapshot:
 
     fills_payload = [Fill.from_mapping(row) for row in fills]
     marks = await _resolve_mark_prices(state, exposures)
-    unrealized_total = compute_unrealized_pnl(
-        [Position.from_mapping(row) for row in exposures], marks
-    )
-    realized_total = compute_realized_pnl(fills_payload)
+    positions_payload = [Position.from_mapping(row) for row in exposures]
+    unrealized_total = compute_unrealized_pnl(positions_payload, marks)
 
-    realized_by_symbol: Dict[str, float] = {}
-    fills_by_symbol: Dict[str, List[Fill]] = defaultdict(list)
-    for fill in fills_payload:
-        if fill.symbol:
-            fills_by_symbol[fill.symbol].append(fill)
-    for symbol, symbol_fills in fills_by_symbol.items():
-        realized_by_symbol[symbol] = compute_realized_pnl(symbol_fills)
+    realized_breakdown = compute_realized_breakdown(fills_payload)
+    symbol_breakdowns = compute_realized_breakdown_by_symbol(fills_payload)
+    realized_total = realized_breakdown.net
+    trading_total = realized_breakdown.trading
+    fees_total = realized_breakdown.fees
 
-    positions = _build_positions(exposures, marks, realized_by_symbol)
+    funding_by_symbol, funding_total = _funding_breakdown(exclude_simulated)
+
+    positions = _build_positions(exposures, marks, symbol_breakdowns, funding_by_symbol)
     balances_payload = _normalise_balances(balances)
     notional_total = sum(position.notional for position in positions)
     pnl_totals = {
         "realized": realized_total,
+        "realized_trading": trading_total,
         "unrealized": unrealized_total,
+        "fees": -fees_total,
+        "funding": funding_total,
         "total": realized_total + unrealized_total,
+        "net": realized_total + unrealized_total + funding_total,
     }
+
+    realized_by_symbol_net: Dict[str, float] = {
+        symbol: breakdown.net for symbol, breakdown in symbol_breakdowns.items()
+    }
+    fees_by_symbol: Dict[str, float] = {
+        symbol: breakdown.fees for symbol, breakdown in symbol_breakdowns.items()
+    }
+    if "UNKNOWN" in symbol_breakdowns and "UNKNOWN" not in realized_by_symbol_net:
+        realized_by_symbol_net["UNKNOWN"] = 0.0
+    unrealized_by_symbol: Dict[str, float] = defaultdict(float)
+    for position in positions:
+        unrealized_by_symbol[position.symbol] += position.upnl
+
+    try:
+        pnl_metrics.update_pnl_metrics(
+            profile=environment,
+            realized=realized_by_symbol_net,
+            unrealized=unrealized_by_symbol,
+            fees=fees_by_symbol,
+            funding=funding_by_symbol,
+            total_realized=realized_total,
+            total_unrealized=unrealized_total,
+            total_fees=fees_total,
+            total_funding=funding_total,
+        )
+    except Exception:  # pragma: no cover - metrics must not break snapshot
+        LOGGER.exception(
+            "failed to update pnl metrics",
+            extra={"profile": environment, "exclude_simulated": exclude_simulated},
+        )
+
+    LOGGER.debug(
+        "portfolio.pnl_snapshot",
+        extra={
+            "profile": environment,
+            "exclude_simulated": exclude_simulated,
+            "realized": realized_total,
+            "realized_trading": trading_total,
+            "unrealized": unrealized_total,
+            "fees_paid": fees_total,
+            "funding": funding_total,
+        },
+    )
 
     return PortfolioSnapshot(
         positions=positions,
         balances=balances_payload,
         pnl_totals=pnl_totals,
         notional_total=notional_total,
+        profile=environment,
+        exclude_simulated=exclude_simulated,
     )
 
 
@@ -229,7 +384,8 @@ async def _collect_testnet_balances(state) -> List[Dict[str, object]]:
 def _build_positions(
     exposures: Iterable[Mapping[str, object]],
     marks: Mapping[str, float],
-    realized_by_symbol: Mapping[str, float],
+    realized_by_symbol: Mapping[str, RealizedPnLBreakdown],
+    funding_by_symbol: Mapping[str, float],
 ) -> List[PortfolioPosition]:
     positions: List[PortfolioPosition] = []
     for row in exposures:
@@ -250,7 +406,10 @@ def _build_positions(
             mark = entry
         notional = abs(qty) * mark
         upnl = (mark - entry) * qty
-        rpnl = float(realized_by_symbol.get(symbol, 0.0))
+        breakdown = realized_by_symbol.get(symbol)
+        rpnl = float(breakdown.net) if breakdown else 0.0
+        fees_paid = float(breakdown.fees) if breakdown else 0.0
+        funding = float(funding_by_symbol.get(symbol, 0.0))
         venue_type = str(row.get("venue_type") or venue or "paper")
         positions.append(
             PortfolioPosition(
@@ -263,6 +422,8 @@ def _build_positions(
                 mark_px=mark,
                 upnl=upnl,
                 rpnl=rpnl,
+                fees_paid=fees_paid,
+                funding=funding,
             )
         )
     positions.sort(key=lambda item: (item.venue, item.symbol))

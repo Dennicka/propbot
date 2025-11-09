@@ -6,6 +6,20 @@ from typing import Iterable, Mapping, Sequence
 
 
 @dataclass(frozen=True)
+class RealizedPnLBreakdown:
+    """Breakdown of realised trading PnL and associated fees."""
+
+    trading: float = 0.0
+    fees: float = 0.0
+
+    @property
+    def net(self) -> float:
+        """Return realised PnL net of fees."""
+
+        return self.trading - self.fees
+
+
+@dataclass(frozen=True)
 class Fill:
     symbol: str
     qty: float
@@ -53,12 +67,13 @@ def _sort_key(fill: Fill) -> tuple[int, float]:
     return (0, fill.ts.timestamp())
 
 
-def compute_realized_pnl(fills: Sequence[Fill]) -> float:
+def _compute_realized_state(fills: Sequence[Fill]) -> RealizedPnLBreakdown:
     state: dict[str, dict[str, float]] = {}
-    realized = 0.0
+    trading = 0.0
+    fees = 0.0
     for fill in sorted(fills, key=_sort_key):
+        fees += float(fill.fee or 0.0)
         if not fill.symbol or fill.qty <= 0:
-            realized -= fill.fee
             continue
         symbol_state = state.setdefault(fill.symbol, {"qty": 0.0, "avg": 0.0})
         signed_qty = fill.qty if fill.side == "buy" else -fill.qty
@@ -76,7 +91,7 @@ def compute_realized_pnl(fills: Sequence[Fill]) -> float:
         else:
             close_qty = min(abs(position_qty), abs(signed_qty))
             direction = 1.0 if position_qty > 0 else -1.0
-            realized += (fill.price - avg_price) * close_qty * direction
+            trading += (fill.price - avg_price) * close_qty * direction
             new_qty = position_qty + signed_qty
             if new_qty == 0.0:
                 symbol_state["qty"] = 0.0
@@ -87,8 +102,38 @@ def compute_realized_pnl(fills: Sequence[Fill]) -> float:
             else:
                 symbol_state["qty"] = new_qty
                 symbol_state["avg"] = fill.price
-        realized -= fill.fee
-    return realized
+    return RealizedPnLBreakdown(trading=trading, fees=fees)
+
+
+def compute_realized_breakdown(fills: Sequence[Fill]) -> RealizedPnLBreakdown:
+    """Compute realised trading PnL and fees for ``fills``."""
+
+    return _compute_realized_state(fills)
+
+
+def compute_realized_breakdown_by_symbol(
+    fills: Sequence[Fill],
+) -> dict[str, RealizedPnLBreakdown]:
+    """Return realised PnL breakdown grouped by symbol."""
+
+    by_symbol: dict[str, list[Fill]] = {}
+    unknown_fees = 0.0
+    for fill in fills:
+        symbol = str(fill.symbol or "").upper()
+        if symbol:
+            by_symbol.setdefault(symbol, []).append(fill)
+        else:
+            unknown_fees += float(fill.fee or 0.0)
+    breakdowns: dict[str, RealizedPnLBreakdown] = {}
+    for symbol, symbol_fills in by_symbol.items():
+        breakdowns[symbol] = _compute_realized_state(symbol_fills)
+    if unknown_fees:
+        breakdowns["UNKNOWN"] = RealizedPnLBreakdown(trading=0.0, fees=unknown_fees)
+    return breakdowns
+
+
+def compute_realized_pnl(fills: Sequence[Fill]) -> float:
+    return _compute_realized_state(fills).net
 
 
 def compute_unrealized_pnl(positions: Iterable[Position], marks: Mapping[str, float]) -> float:

@@ -91,9 +91,17 @@ async def test_portfolio_snapshot_from_ledger():
     assert position.mark_px == pytest.approx(100.0)
     assert position.upnl == pytest.approx(0.0)
     assert position.rpnl == pytest.approx(20.0)
+    assert position.fees_paid == pytest.approx(0.0)
+    assert position.funding == pytest.approx(0.0)
     assert snapshot.notional_total == pytest.approx(abs(position.qty) * position.mark_px)
     assert snapshot.pnl_totals["realized"] == pytest.approx(20.0)
+    assert snapshot.pnl_totals["realized_trading"] == pytest.approx(20.0)
     assert snapshot.pnl_totals["unrealized"] == pytest.approx(0.0)
     assert snapshot.pnl_totals["total"] == pytest.approx(20.0)
+    assert snapshot.pnl_totals["fees"] == pytest.approx(0.0)
+    assert snapshot.pnl_totals["funding"] == pytest.approx(0.0)
+    assert snapshot.pnl_totals["net"] == pytest.approx(20.0)
+    assert snapshot.profile == "paper"
+    assert snapshot.exclude_simulated is True
     assert snapshot.balances
     assert any(balance.asset == "USDT" for balance in snapshot.balances)
