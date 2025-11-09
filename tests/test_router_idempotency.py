@@ -87,7 +87,7 @@ async def test_retry_keeps_same_intent_id():
         intent = order_store.load_intent(session, ref1.intent_id)
         assert intent is not None
         intent.request_id = "retry-2"
-        intent.state = order_store.OrderIntentState.SENT
+        intent.state = order_store.OrderIntentState.PENDING
         intent.broker_order_id = None
         session.add(intent)
 

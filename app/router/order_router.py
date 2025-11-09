@@ -45,6 +45,86 @@ def _coerce_float(value: object) -> float:
         return 0.0
 
 
+_FILLED_STATUSES = {"FILLED", "DONE", "COMPLETED", "CLOSED"}
+_PARTIAL_STATUSES = {"PARTIALLY_FILLED", "PARTIAL", "PARTIAL_FILL"}
+_CANCELED_STATUSES = {"CANCELED", "CANCELLED", "CANCELLED_BY_USER", "USER_CANCELED"}
+_REJECTED_STATUSES = {"REJECTED", "FAILED", "ERROR"}
+_EXPIRED_STATUSES = {"EXPIRED", "DEAD", "ABANDONED"}
+
+
+def _extract_filled_qty(payload: Mapping[str, object]) -> float:
+    for key in (
+        "filled_qty",
+        "filled",
+        "executed_qty",
+        "executedQty",
+        "cum_exec_qty",
+        "cumExecQty",
+    ):
+        if key in payload:
+            return _coerce_float(payload.get(key))
+    return 0.0
+
+
+def _extract_remaining_qty(payload: Mapping[str, object]) -> float | None:
+    for key in ("remaining_qty", "leaves_qty", "leavesQty", "remaining"):
+        if key in payload:
+            return _coerce_float(payload.get(key))
+    return None
+
+
+def _extract_avg_price(payload: Mapping[str, object]) -> float | None:
+    for key in ("avg_fill_price", "avg_price", "price_avg", "fill_price"):
+        if key in payload:
+            value = _coerce_float(payload.get(key))
+            if value > 0:
+                return value
+    return None
+
+
+def _resolve_remote_state(
+    intent: order_store.OrderIntent,
+    payload: Mapping[str, object],
+) -> tuple[order_store.OrderIntentState, float, float | None, float | None]:
+    status_text = str(
+        payload.get("status")
+        or payload.get("state")
+        or payload.get("order_status")
+        or ""
+    ).upper()
+    filled_qty = _extract_filled_qty(payload)
+    remaining_qty = _extract_remaining_qty(payload)
+    avg_price = _extract_avg_price(payload)
+    qty = float(intent.qty)
+
+    if status_text in _FILLED_STATUSES:
+        target_state = order_store.OrderIntentState.FILLED
+    elif status_text in _CANCELED_STATUSES:
+        target_state = order_store.OrderIntentState.CANCELED
+    elif status_text in _REJECTED_STATUSES:
+        target_state = order_store.OrderIntentState.REJECTED
+    elif status_text in _EXPIRED_STATUSES:
+        target_state = order_store.OrderIntentState.EXPIRED
+    elif status_text in _PARTIAL_STATUSES:
+        target_state = order_store.OrderIntentState.PARTIAL
+    else:
+        target_state = order_store.OrderIntentState.ACKED
+
+    if qty > 0:
+        if filled_qty >= qty - 1e-6:
+            target_state = order_store.OrderIntentState.FILLED
+        elif filled_qty > 0 and target_state == order_store.OrderIntentState.ACKED:
+            target_state = order_store.OrderIntentState.PARTIAL
+
+    if remaining_qty is None:
+        if target_state == order_store.OrderIntentState.FILLED:
+            remaining_qty = 0.0
+        elif qty > 0:
+            remaining_qty = max(qty - filled_qty, 0.0)
+
+    return target_state, filled_qty, remaining_qty, avg_price
+
+
 def _resolve_gate(ctx: object) -> object | None:
     runtime_scope = getattr(ctx, "runtime", ctx)
     gate = getattr(runtime_scope, "pre_trade_gate", None)
@@ -434,10 +514,10 @@ class OrderRouter:
                     tif=tif,
                     strategy=strategy,
                 )
+                current_state = intent.state
                 if (
-                    prev_state in order_store.TERMINAL_STATES
-                    and prev_broker_order_id
-                    and prev_request_id == client_request_id
+                    prev_request_id == client_request_id
+                    and current_state in order_store.COMPLETED_FOR_IDEMPOTENCY
                 ):
                     IDEMPOTENCY_HIT_TOTAL.labels(operation="submit").inc()
                     LOGGER.info(
@@ -455,8 +535,12 @@ class OrderRouter:
                         state=intent.state,
                     )
                 if (
-                    prev_state == order_store.OrderIntentState.SENT
-                    and prev_request_id == client_request_id
+                    prev_request_id == client_request_id
+                    and current_state
+                    in (
+                        order_store.OrderIntentState.PENDING,
+                        order_store.OrderIntentState.SENT,
+                    )
                 ):
                     IDEMPOTENCY_HIT_TOTAL.labels(operation="submit").inc()
                     return OrderRef(
@@ -465,9 +549,22 @@ class OrderRouter:
                         broker_order_id=intent.broker_order_id,
                         state=intent.state,
                     )
-                order_store.update_intent_state(
-                    session, intent, state=order_store.OrderIntentState.SENT
-                )
+                try:
+                    order_store.update_intent_state(
+                        session,
+                        intent,
+                        state=order_store.OrderIntentState.PENDING,
+                    )
+                except order_store.OrderStateTransitionError as exc:
+                    LOGGER.exception(
+                        "order intent transition failed",
+                        extra={
+                            "intent_id": intent.intent_id,
+                            "from_state": prev_state.value if prev_state else None,
+                            "to_state": order_store.OrderIntentState.PENDING.value,
+                        },
+                    )
+                    raise OrderRouterError("order state transition failed") from exc
 
             start = time.perf_counter()
             try:
@@ -491,9 +588,17 @@ class OrderRouter:
                 with order_store.session_scope() as session:
                     intent = order_store.load_intent(session, intent_key)
                     if intent:
-                        order_store.update_intent_state(
-                            session, intent, state=order_store.OrderIntentState.REJECTED
-                        )
+                        try:
+                            order_store.update_intent_state(
+                                session,
+                                intent,
+                                state=order_store.OrderIntentState.REJECTED,
+                            )
+                        except order_store.OrderStateTransitionError:
+                            LOGGER.exception(
+                                "order intent reject transition failed",
+                                extra={"intent_id": intent_key},
+                            )
                 raise OrderRouterError("order submit failed") from exc
             finally:
                 duration_ms = (time.perf_counter() - start) * 1000.0
@@ -504,12 +609,22 @@ class OrderRouter:
                 intent = order_store.load_intent(session, intent_key)
                 if not intent:
                     raise OrderRouterError("intent missing after submit")
-                order_store.update_intent_state(
-                    session,
-                    intent,
-                    state=order_store.OrderIntentState.ACKED,
-                    broker_order_id=broker_order_id,
-                )
+                try:
+                    order_store.update_intent_state(
+                        session,
+                        intent,
+                        state=order_store.OrderIntentState.ACKED,
+                        broker_order_id=broker_order_id,
+                    )
+                except order_store.OrderStateTransitionError as exc:
+                    LOGGER.exception(
+                        "order intent ack failed",
+                        extra={
+                            "intent_id": intent.intent_id,
+                            "requested_state": order_store.OrderIntentState.ACKED.value,
+                        },
+                    )
+                    raise OrderRouterError("order state transition failed") from exc
                 ORDER_INTENT_TOTAL.labels(state=intent.state.value).inc()
                 record_open_intents(order_store.open_intent_count(session))
             return OrderRef(
@@ -634,9 +749,21 @@ class OrderRouter:
                     replaced_by=None,
                 )
                 existing.replaced_by = replacement_id
-                existing.state = order_store.OrderIntentState.REPLACED
-                session.add(existing)
-                session.flush()
+                try:
+                    order_store.update_intent_state(
+                        session,
+                        existing,
+                        state=order_store.OrderIntentState.REPLACED,
+                    )
+                except order_store.OrderStateTransitionError as exc:
+                    LOGGER.exception(
+                        "replace order transition failed",
+                        extra={
+                            "intent_id": existing.intent_id,
+                            "requested_state": order_store.OrderIntentState.REPLACED.value,
+                        },
+                    )
+                    raise OrderRouterError("order state transition failed") from exc
 
         async with locks.symbol_lock(account, venue, symbol, side):
             new_ref = await self.submit_order(
@@ -677,23 +804,63 @@ class OrderRouter:
                     current = order_store.load_intent(session, intent_id)
                     if current is None:
                         continue
-                    request_id = current.request_id
+                    ledger_request_id = order_store.active_request_id(session, intent_id)
+                    request_id = current.request_id or ledger_request_id
+                if not request_id:
+                    request_id = ledger_request_id
                 if not request_id:
                     continue
                 info = await self._broker.get_order_by_client_id(request_id)
-                if not info:
+                if not isinstance(info, Mapping):
+                    LOGGER.warning(
+                        "inflight order missing on venue",
+                        extra={"intent_id": intent_id, "request_id": request_id},
+                    )
+                    with order_store.session_scope() as session:
+                        current = order_store.load_intent(session, intent_id)
+                        if current and current.state not in order_store.TERMINAL_STATES:
+                            try:
+                                order_store.update_intent_state(
+                                    session,
+                                    current,
+                                    state=order_store.OrderIntentState.EXPIRED,
+                                )
+                            except order_store.OrderStateTransitionError:
+                                LOGGER.exception(
+                                    "failed to expire missing inflight intent",
+                                    extra={"intent_id": intent_id},
+                                )
                     continue
-                broker_order_id = _extract_order_id(info)
-                state = order_store.OrderIntentState.ACKED
+                broker_order_id = _extract_order_id(info) or None
                 with order_store.session_scope() as session:
                     current = order_store.load_intent(session, intent_id)
-                    if current:
+                    if not current:
+                        continue
+                    target_state, filled_qty, remaining_qty, avg_price = _resolve_remote_state(
+                        current, info
+                    )
+                    try:
                         order_store.update_intent_state(
                             session,
                             current,
-                            state=state,
-                            broker_order_id=broker_order_id,
+                            state=target_state,
+                            broker_order_id=broker_order_id or current.broker_order_id,
+                            filled_qty=filled_qty,
+                            remaining_qty=remaining_qty,
+                            avg_fill_price=avg_price,
                         )
+                    except order_store.OrderStateTransitionError:
+                        LOGGER.exception(
+                            "recovery state transition failed",
+                            extra={
+                                "intent_id": intent_id,
+                                "state": target_state.value,
+                                "request_id": request_id,
+                            },
+                        )
+                        continue
+                    ORDER_INTENT_TOTAL.labels(state=current.state.value).inc()
+                    record_open_intents(order_store.open_intent_count(session))
 
 
 def _extract_order_id(payload: Mapping[str, Any] | None) -> str | None:

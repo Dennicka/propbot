@@ -17,16 +17,29 @@ ORDER_RETRIES_TOTAL = Counter(
     labelnames=("venue", "symbol"),
 )
 
+STUCK_RESOLVER_RETRIES_TOTAL = Counter(
+    "stuck_resolver_retries_total",
+    "Number of retries performed by the stuck order resolver",
+    labelnames=("venue", "symbol", "reason"),
+)
+
 OPEN_ORDERS_GAUGE = Gauge(
     "open_orders_gauge",
     "Open orders grouped by venue, symbol, and status",
     labelnames=("venue", "symbol", "status"),
 )
 
+STUCK_RESOLVER_ACTIVE_INTENTS = Gauge(
+    "stuck_resolver_active_intents",
+    "Number of order intents currently monitored by the stuck resolver",
+)
+
 
 __all__ = [
     "ORDER_RETRIES_TOTAL",
     "OPEN_ORDERS_GAUGE",
+    "STUCK_RESOLVER_ACTIVE_INTENTS",
+    "STUCK_RESOLVER_RETRIES_TOTAL",
     "STUCK_ORDERS_TOTAL",
 ]
 

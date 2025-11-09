@@ -175,7 +175,7 @@ async def test_restart_recovers_inflight_intents():
 
     with order_store.session_scope() as session:
         intent = order_store.load_intent(session, ref.intent_id)
-        intent.state = order_store.OrderIntentState.SENT
+        intent.state = order_store.OrderIntentState.PENDING
         intent.broker_order_id = None
         session.add(intent)
 
