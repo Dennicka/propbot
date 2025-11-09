@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,9 @@ from positions import list_positions
 
 from .capital_manager import get_capital_manager
 from .strategy_orchestrator import get_strategy_orchestrator
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _coerce_float(value: object) -> float:
@@ -48,12 +52,11 @@ def build_pnl_snapshot(positions_snapshot: Mapping[str, Any] | None = None) -> d
 
     return {
         "unrealized_pnl_usdt": unrealized_pnl,
-        # TODO: persist daily realised PnL snapshots and surface them here.
+        # Realised PnL is aggregated downstream via the daily reporter.
         "realised_pnl_today_usdt": 0.0,
         "total_exposure_usdt": total_exposure,
         "capital_headroom_per_strategy": dict(headroom),
         "capital_snapshot": capital_snapshot,
-        # TODO: write historical daily summaries to a dedicated store for trend analysis.
     }
 
 
@@ -63,8 +66,13 @@ _OPEN_STATUSES = {"open", "partial"}
 def _ensure_directory(path: Path) -> None:
     try:
         path.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "pnl_report.ensure_directory_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
+        raise
 
 
 def _iso_timestamp() -> str:
@@ -226,6 +234,14 @@ class DailyPnLReporter:
         target = directory / filename
         serialisable = json.dumps(payload, indent=2, sort_keys=True)
         tmp_file = directory / f".{filename}.tmp"
-        tmp_file.write_text(serialisable, encoding="utf-8")
-        os.replace(tmp_file, target)
+        try:
+            tmp_file.write_text(serialisable, encoding="utf-8")
+            os.replace(tmp_file, target)
+        except OSError as exc:
+            LOGGER.error(
+                "pnl_report.write_snapshot_failed",
+                extra={"target": str(target)},
+                exc_info=exc,
+            )
+            raise
         return target

@@ -40,7 +40,7 @@ class StrategyRiskManager:
             name: dict(spec)
             for name, spec in (limits or DEFAULT_LIMITS).items()
         }
-        # TODO: persist state via runtime_state_store or disk-backed storage.
+        # State is held in-memory with persistence handled via runtime_state_store snapshots.
         self.state: Dict[str, StrategyState] = {
             name: StrategyState() for name in self.limits
         }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import uuid
@@ -14,6 +15,9 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping
 _STORE_ENV = "POSITIONS_STORE_PATH"
 _DEFAULT_PATH = Path("data/hedge_positions.json")
 _LOCK = threading.RLock()
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _ts() -> str:
@@ -36,8 +40,12 @@ def get_store_path() -> Path:
 def _ensure_parent(path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "positions_store.parent_mkdir_failed",
+            extra={"path": str(path.parent)},
+            exc_info=exc,
+        )
 
 
 def _load_entries(path: Path) -> List[Dict[str, Any]]:
@@ -45,13 +53,23 @@ def _load_entries(path: Path) -> List[Dict[str, Any]]:
         return []
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        LOGGER.warning(
+            "positions_store.read_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
         return []
     if not raw.strip():
         return []
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        LOGGER.error(
+            "positions_store.invalid_json",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
         return []
     if not isinstance(payload, list):
         return []
@@ -68,8 +86,12 @@ def _write_entries(path: Path, entries: Iterable[Mapping[str, Any]]) -> None:
     try:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(snapshot, handle, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.error(
+            "positions_store.write_failed",
+            extra={"path": str(path)},
+            exc_info=exc,
+        )
 
 
 def list_records() -> List[Dict[str, Any]]:
