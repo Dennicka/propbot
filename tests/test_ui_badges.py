@@ -39,16 +39,21 @@ def test_non_report_includes_badges(client, monkeypatch):
         "daily_loss": "OK",
         "watchdog": "OK",
         "partial_hedges": "OK",
-        "stuck_resolver": re.compile(r"^ON \(retries 1h: \d+\)$|^OFF$"),
     }
 
     assert set(payload.keys()) == set(expected.keys())
     for key, matcher in expected.items():
         value = payload[key]
-        if isinstance(matcher, re.Pattern):
-            assert matcher.match(value), f"unexpected badge value for {key}: {value}"
-        else:
-            assert value == matcher
+        assert value == matcher
+
+    assert "stuck_resolver" not in payload
+
+    state.execution.stuck_resolver.enabled = True
+    rerun_enabled = client.get("/api/ui/runtime_badges")
+    assert rerun_enabled.status_code == 200
+    enabled_payload = rerun_enabled.json()
+    assert "stuck_resolver" in enabled_payload
+    assert re.match(r"^ON \(retries 1h: \d+\)$", enabled_payload["stuck_resolver"])
 
     # Dry-run mode should force auto trade badge to OFF even if toggled on.
     monkeypatch.setenv("DRY_RUN_MODE", "true")
@@ -91,7 +96,7 @@ def test_runtime_badges_endpoint_failure_modes(client, monkeypatch):
     assert payload["daily_loss"] == "BREACH"
     assert payload["watchdog"] == "DEGRADED"
     assert payload["partial_hedges"] == "OK"
-    assert payload["stuck_resolver"] == "OFF"
+    assert "stuck_resolver" not in payload
 
     watchdog.mark_auto_hold("binance", reason="auto-hold")
     follow_up = client.get("/api/ui/runtime_badges")

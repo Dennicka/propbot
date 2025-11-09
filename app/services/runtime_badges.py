@@ -71,12 +71,15 @@ def _partial_status() -> str:
     return BADGE_PARTIAL
 
 
-def _stuck_resolver_status() -> str:
+def _stuck_resolver_status() -> tuple[bool, str | None]:
     state = get_state()
     execution = getattr(state, "execution", None)
     resolver = getattr(execution, "stuck_resolver", None)
-    if resolver is None or not getattr(resolver, "enabled", False):
-        return BADGE_OFF
+    if resolver is None:
+        return False, None
+    enabled = bool(getattr(resolver, "enabled", False))
+    if not enabled:
+        return False, None
     snapshot = {}
     try:
         snapshot = resolver.snapshot()
@@ -87,20 +90,25 @@ def _stuck_resolver_status() -> str:
         retries_value = int(retries)
     except (TypeError, ValueError):
         retries_value = 0
-    return f"ON (retries 1h: {retries_value})"
+    return True, f"ON (retries 1h: {retries_value})"
 
 
 def get_runtime_badges() -> Dict[str, str]:
     """Return the aggregated runtime status badges for operator views."""
 
-    return {
+    badges = {
         "auto_trade": _auto_trade_status(),
         "risk_checks": _risk_checks_status(),
         "daily_loss": _daily_loss_status(),
         "watchdog": _watchdog_status(),
         "partial_hedges": _partial_status(),
-        "stuck_resolver": _stuck_resolver_status(),
     }
+
+    resolver_enabled, resolver_value = _stuck_resolver_status()
+    if resolver_enabled and resolver_value:
+        badges["stuck_resolver"] = resolver_value
+
+    return badges
 
 
 __all__ = ["get_runtime_badges"]
