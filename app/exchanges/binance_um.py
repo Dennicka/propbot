@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import time
 from typing import Any, Dict, Optional, TYPE_CHECKING
@@ -9,6 +10,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 import httpx
 try:  # pragma: no cover - shim used when requests is unavailable
     import requests
+    RequestError = requests.RequestException
 except ImportError:  # pragma: no cover
     class _RequestsShim:
         @staticmethod
@@ -16,6 +18,7 @@ except ImportError:  # pragma: no cover
             return httpx.get(url, params=params, timeout=timeout)
 
     requests = _RequestsShim()
+    RequestError = Exception
 
 from . import InMemoryDerivClient, build_in_memory_client
 from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
@@ -23,6 +26,9 @@ from app.watchdog.broker_watchdog import get_broker_watchdog
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from ..core.config import DerivVenueConfig
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class BinanceUMClient:
@@ -323,14 +329,26 @@ def get_book(symbol: str) -> Dict[str, float]:
     """Fetch top-of-book quotes from Binance UM public endpoint."""
 
     url = "https://fapi.binance.com/fapi/v1/ticker/bookTicker"
+    symbol_upper = symbol.upper()
     try:
-        response = requests.get(url, params={"symbol": symbol.upper()}, timeout=2.0)
+        response = requests.get(url, params={"symbol": symbol_upper}, timeout=2.0)
         response.raise_for_status()
         data = response.json()
         bid = float(data.get("bidPrice", 0.0))
         ask = float(data.get("askPrice", 0.0))
         ts = int(data.get("time") or data.get("E") or time.time() * 1000)
         return {"bid": bid, "ask": ask, "ts": ts}
-    except Exception:
-        client = build_in_memory_client("binance_um", [symbol.upper()])
-        return client.get_orderbook_top(symbol.upper())
+    except RequestError:
+        LOGGER.warning(
+            "binance UM public ticker request failed; using in-memory fallback",
+            extra={"symbol": symbol_upper},
+            exc_info=True,
+        )
+    except (ValueError, TypeError, KeyError):
+        LOGGER.warning(
+            "binance UM ticker payload invalid; using in-memory fallback",
+            extra={"symbol": symbol_upper},
+            exc_info=True,
+        )
+    client = build_in_memory_client("binance_um", [symbol_upper])
+    return client.get_orderbook_top(symbol_upper)

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from pathlib import Path
 from typing import Any, Mapping
+
+
+LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_STATE = {
     "total_capital_usdt": 0.0,
@@ -124,12 +128,21 @@ class CapitalManager:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
-            pass
+            LOGGER.error(
+                "unable to create capital state directory; persistence skipped",
+                extra={"state_path": str(self._path)},
+                exc_info=True,
+            )
+            return
         try:
             with self._path.open("w", encoding="utf-8") as handle:
                 json.dump(serialisable, handle, indent=2, sort_keys=True)
         except OSError:
-            pass
+            LOGGER.error(
+                "failed to persist capital state",
+                extra={"state_path": str(self._path)},
+                exc_info=True,
+            )
 
     def _resolve_limit(self, strategy: str) -> float | None:
         limits = self._state.get("per_strategy_limits", {})

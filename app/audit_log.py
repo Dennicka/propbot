@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections import deque
 from datetime import datetime, timezone
@@ -14,6 +15,9 @@ _AUDIT_LOG_PATH = Path(os.getenv("AUDIT_LOG_PATH") or "data/audit.log")
 _IN_MEMORY_LIMIT = 500
 _IN_MEMORY_LOG: deque[dict[str, Any]] = deque(maxlen=_IN_MEMORY_LIMIT)
 _LOCK = Lock()
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _sanitize_mapping(details: Mapping[str, Any]) -> Dict[str, Any]:
@@ -83,6 +87,11 @@ def _load_in_memory_log(path: Path) -> None:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError:
+        LOGGER.error(
+            "failed to read audit log snapshot; continuing with empty buffer",
+            extra={"path": str(path)},
+            exc_info=True,
+        )
         return
     if not raw.strip():
         return
@@ -93,6 +102,11 @@ def _load_in_memory_log(path: Path) -> None:
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
+            LOGGER.warning(
+                "invalid audit log entry skipped",
+                extra={"path": str(path)},
+                exc_info=True,
+            )
             continue
         if not isinstance(payload, MutableMapping):
             continue
@@ -125,13 +139,21 @@ def log_operator_action(
         try:
             _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         except OSError:
-            pass
+            LOGGER.error(
+                "failed to ensure audit log directory",
+                extra={"path": str(_AUDIT_LOG_PATH)},
+                exc_info=True,
+            )
+            return
         try:
             with _AUDIT_LOG_PATH.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except OSError:
-            # Persisting the log should not block operational flow; ignore write errors.
-            pass
+            LOGGER.error(
+                "failed to append to audit log",
+                extra={"path": str(_AUDIT_LOG_PATH)},
+                exc_info=True,
+            )
 
 
 def list_recent_operator_actions(limit: int = 100) -> list[dict[str, Any]]:
