@@ -20,6 +20,9 @@ jobs:
           PYTHONPATH: .
           CI_TESTING: "1"
         run: python -m pytest -q
+      - name: Golden replay check
+        if: hashFiles('data/golden/baseline.jsonl') != ''
+        run: make golden-check
   acceptance:
     needs: test
     runs-on: ubuntu-latest

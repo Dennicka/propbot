@@ -1,4 +1,4 @@
-.PHONY: venv fmt lint typecheck test run kill \
+.PHONY: venv fmt lint typecheck test run kill golden-check \
         alembic-init alembic-rev alembic-up dryrun.once dryrun.loop \
         docker-login docker-build docker-push docker-run-image docker-release \
         up down logs curl-health release \
@@ -34,6 +34,9 @@ typecheck:
 
 test:
 	$(PYTEST) -q --maxfail=1
+
+golden-check:
+	PYTHONPATH=. python -m app.cli_golden check
 
 acceptance_smoke:
 	$(PYTEST) -q tests/acceptance/test_smoke.py

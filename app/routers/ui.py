@@ -28,6 +28,7 @@ from ..tca.preview import compute_tca_preview, feature_enabled as tca_feature_en
 from ..capital_manager import get_capital_manager
 from ..pnl_report import DailyPnLReporter
 from ..rbac import Action, can_execute_action
+from ..golden.logger import get_golden_logger
 from ..services.loop import (
     cancel_all_orders,
     hold_loop,
@@ -1543,6 +1544,16 @@ async def _execute_kill(*, reason: str | None = None, request_id: str | None = N
         response["reason"] = reason
     if request_id:
         response["request_id"] = request_id
+    logger = get_golden_logger()
+    if logger.enabled:
+        logger.log(
+            "kill_switch",
+            {
+                "reason": reason,
+                "request_id": request_id,
+                "result": result,
+            },
+        )
     return response
 
 

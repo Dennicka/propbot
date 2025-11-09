@@ -18,6 +18,7 @@ from ...metrics.risk_governor import set_throttled as set_risk_throttled
 from ...services import runtime as runtime_service
 from ...audit_log import log_operator_action
 from ...risk.freeze import FreezeRule, get_freeze_registry
+from ...golden.logger import get_golden_logger
 
 try:  # pragma: no cover - import guard for optional bootstrap contexts
     from ...config.schema import HealthConfig
@@ -84,7 +85,18 @@ class AccountHealthGuard:
         runtime = getattr(ctx, "runtime", self._runtime_fallback)
         snapshots = self._collect_snapshots(ctx)
         states, worst_state, worst_exchanges = self._classify_snapshots(snapshots)
+        previous_state = self._last_status
         self._apply_state(runtime, worst_state, worst_exchanges)
+        if previous_state != worst_state:
+            logger = get_golden_logger()
+            if logger.enabled:
+                logger.log(
+                    "health_guard",
+                    {
+                        "state": worst_state,
+                        "exchanges": sorted({str(exchange) for exchange in worst_exchanges}),
+                    },
+                )
         self._update_guard(runtime, states, worst_state)
         self._last_status = worst_state
         return states, worst_state
