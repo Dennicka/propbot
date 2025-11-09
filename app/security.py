@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from typing import Optional
@@ -8,6 +9,8 @@ from fastapi import HTTPException, Request, status
 
 from .secrets_store import SecretsStore
 
+
+LOGGER = logging.getLogger(__name__)
 
 def _truthy(value: str | None) -> bool:
     if value is None:
@@ -37,6 +40,7 @@ def _load_secrets_store() -> Optional[SecretsStore]:
     try:
         return SecretsStore()
     except Exception:
+        LOGGER.error("failed to load secrets store", exc_info=True)
         return None
 
 

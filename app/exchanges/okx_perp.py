@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, TYPE_CHECKING
@@ -11,6 +12,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 import httpx
 try:  # pragma: no cover - shim used when requests is unavailable
     import requests
+    RequestError = requests.RequestException
 except ImportError:  # pragma: no cover
     class _RequestsShim:
         @staticmethod
@@ -18,6 +20,7 @@ except ImportError:  # pragma: no cover
             return httpx.get(url, params=params, timeout=timeout)
 
     requests = _RequestsShim()
+    RequestError = Exception
 
 from . import InMemoryDerivClient, build_in_memory_client
 from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
@@ -25,6 +28,9 @@ from app.watchdog.broker_watchdog import get_broker_watchdog
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..core.config import DerivVenueConfig
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class OKXPerpClient:
@@ -382,6 +388,23 @@ def get_book(symbol: str) -> Dict[str, float]:
         ts_raw = entry.get("ts") or entry.get("tsPx") or payload.get("ts")
         ts = int(ts_raw) if ts_raw is not None else 0
         return {"bid": bid, "ask": ask, "ts": ts}
-    except Exception:
-        client = build_in_memory_client("okx_perp", list(_SYMBOL_MAP.values()))
-        return client.get_orderbook_top(inst_id)
+    except RequestError:
+        LOGGER.warning(
+            "okx public ticker request failed; using in-memory fallback",
+            extra={"inst_id": inst_id},
+            exc_info=True,
+        )
+    except (ValueError, TypeError, KeyError):
+        LOGGER.warning(
+            "okx ticker payload invalid; using in-memory fallback",
+            extra={"inst_id": inst_id},
+            exc_info=True,
+        )
+    except RuntimeError:
+        LOGGER.warning(
+            "okx returned empty ticker data; using in-memory fallback",
+            extra={"inst_id": inst_id},
+            exc_info=True,
+        )
+    client = build_in_memory_client("okx_perp", list(_SYMBOL_MAP.values()))
+    return client.get_orderbook_top(inst_id)

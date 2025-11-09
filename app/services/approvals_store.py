@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableSequence
+
+
+LOGGER = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 
@@ -44,8 +48,18 @@ def _load_records(path: Path) -> List[Dict[str, Any]]:
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except json.JSONDecodeError:
+        LOGGER.error(
+            "invalid approvals store payload; ignoring corrupted data",
+            extra={"path": str(path)},
+            exc_info=True,
+        )
         return []
     except OSError:
+        LOGGER.error(
+            "failed to read approvals store",
+            extra={"path": str(path)},
+            exc_info=True,
+        )
         return []
     if not isinstance(payload, list):
         return []
@@ -65,7 +79,11 @@ def _write_records(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(snapshot, handle, indent=2, sort_keys=True)
     except OSError:
-        pass
+        LOGGER.error(
+            "failed to persist approvals store",
+            extra={"path": str(path), "record_count": len(snapshot)},
+            exc_info=True,
+        )
 
 
 def _find_record(records: MutableSequence[Dict[str, Any]], request_id: str) -> Dict[str, Any] | None:
@@ -136,7 +154,4 @@ def list_requests(*, status: str | None = None) -> List[Dict[str, Any]]:
 
 def reset_for_tests() -> None:
     path = _approvals_path()
-    try:
-        path.unlink()
-    except OSError:
-        pass
+    path.unlink(missing_ok=True)
