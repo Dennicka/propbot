@@ -6,6 +6,8 @@ import threading
 from dataclasses import asdict, dataclass
 from typing import Iterable, Literal
 
+from ..golden.logger import get_golden_logger
+
 
 ScopeLiteral = Literal["global", "venue", "symbol", "strategy"]
 
@@ -35,6 +37,7 @@ class FreezeRegistry:
             scope=rule.scope,
             ts=float(rule.ts or 0.0),
         )
+        applied = False
         with self._lock:
             existing = self._rules.get(normalised.reason)
             if existing is not None and existing.scope == normalised.scope:
@@ -42,6 +45,14 @@ class FreezeRegistry:
                     self._rules[normalised.reason] = normalised
                 return False
             self._rules[normalised.reason] = normalised
+            applied = True
+        if applied:
+            logger = get_golden_logger()
+            if logger.enabled:
+                logger.log(
+                    "freeze_applied",
+                    {"reason": normalised.reason, "scope": normalised.scope, "ts": normalised.ts},
+                )
         return True
 
     # ------------------------------------------------------------------

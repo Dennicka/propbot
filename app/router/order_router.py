@@ -10,6 +10,7 @@ from typing import Any, Dict, Mapping, Tuple
 
 from ..audit_log import log_operator_action
 from .. import ledger
+from ..golden.logger import get_golden_logger
 from ..metrics import (
     IDEMPOTENCY_HIT_TOTAL,
     ORDER_INTENT_TOTAL,
@@ -668,6 +669,26 @@ class OrderRouter:
                     raise OrderRouterError("order state transition failed") from exc
                 ORDER_INTENT_TOTAL.labels(state=intent.state.value).inc()
                 record_open_intents(order_store.open_intent_count(session))
+            logger = get_golden_logger()
+            if logger.enabled:
+                logger.log(
+                    "order_submit",
+                    {
+                        "intent_id": intent_key,
+                        "request_id": client_request_id,
+                        "broker_order_id": broker_order_id,
+                        "account": account,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "side": side,
+                        "type": order_type,
+                        "qty": float(qty),
+                        "price": float(price) if price is not None else None,
+                        "tif": tif,
+                        "strategy": strategy,
+                        "reduce_only": bool(reduce_only_flag),
+                    },
+                )
             return OrderRef(
                 intent_id=intent_key,
                 request_id=client_request_id,

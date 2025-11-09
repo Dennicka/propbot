@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping, Sequence
 
+from ..golden.logger import get_golden_logger
 from ..services.runtime import (
     get_liquidity_status,
     get_market_data,
@@ -351,6 +352,32 @@ class SmartRouter:
             elif best is not None and math.isclose(score_value, best.score, rel_tol=1e-9, abs_tol=1e-9):
                 if canonical < best.venue:
                     best = _ScoreResult(canonical, score_value, result)
+        logger = get_golden_logger()
+        if logger.enabled:
+            summary: Dict[str, Dict[str, object]] = {}
+            for venue_key, payload in scores.items():
+                summary_payload: Dict[str, object] = {}
+                for key in ("score", "price", "qty", "notional", "latency_bps", "error"):
+                    if key in payload and payload.get(key) is not None:
+                        value = payload.get(key)
+                        if isinstance(value, (int, float)):
+                            summary_payload[key] = float(value)
+                        else:
+                            try:
+                                summary_payload[key] = float(value)  # type: ignore[arg-type]
+                            except (TypeError, ValueError):
+                                summary_payload[key] = value
+                summary[venue_key] = summary_payload
+            logger.log(
+                "route_decision",
+                {
+                    "symbol": symbol,
+                    "side": str(side),
+                    "qty": float(qty) if isinstance(qty, (int, float)) else qty,
+                    "best": best.venue if best else None,
+                    "scores": summary,
+                },
+            )
         return (best.venue if best else None, scores)
 
     # ------------------------------------------------------------------

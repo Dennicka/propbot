@@ -16,6 +16,7 @@ from ..broker.router import ExecutionRouter
 from ..metrics.recon import RECON_DIFF_ABS_USD_GAUGE, RECON_DIFF_STATE_GAUGE
 from ..services import runtime
 from ..risk.freeze import FreezeRule, get_freeze_registry
+from ..golden.logger import get_golden_logger
 from .service import ReconDiff, collect_recon_snapshot
 
 LOGGER = logging.getLogger(__name__)
@@ -197,6 +198,35 @@ async def run_recon_cycle(
             LOGGER.warning("recon.diff_warning", extra=payload)
 
     _reset_missing_metric_labels(active_labels)
+
+    logger = get_golden_logger()
+    if logger.enabled:
+        summary_diffs: list[dict[str, object]] = []
+        for payload in diff_payloads:
+            entry: dict[str, object] = {
+                "venue": payload.get("venue"),
+                "symbol": payload.get("symbol"),
+                "severity": payload.get("severity"),
+            }
+            for key in ("diff_abs", "diff_rel"):
+                value = payload.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, (int, float)):
+                    entry[key] = float(value)
+                else:
+                    try:
+                        entry[key] = float(value)  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        entry[key] = value
+            summary_diffs.append(entry)
+        logger.log(
+            "recon_guard",
+            {
+                "state": "CRIT" if has_crit else "WARN" if has_warn else "OK",
+                "diffs": summary_diffs,
+            },
+        )
 
     snapshot_state = "CRIT" if has_crit else "WARN" if has_warn else "OK"
     metadata = {

@@ -16,6 +16,7 @@ import threading
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from ..audit_log import log_operator_action
+from ..golden.logger import get_golden_logger
 from ..pretrade.gate import PreTradeGate
 from .. import ledger
 from ..core.config import GuardsConfig, LoadedConfig, load_app_config
@@ -1964,6 +1965,17 @@ def engage_safety_hold(reason: str, *, source: str = "slo_monitor") -> bool:
             f"Safety hold engaged: {reason}",
             {"source": source},
         )
+        logger = get_golden_logger()
+        if logger.enabled:
+            logger.log(
+                "safety_hold",
+                {
+                    "reason": reason,
+                    "source": source,
+                    "mode_changed": changed,
+                    "hold_changed": hold_changed,
+                },
+            )
     return changed or hold_changed
 
 
