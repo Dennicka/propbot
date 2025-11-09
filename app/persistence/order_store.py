@@ -43,13 +43,22 @@ Base = declarative_base(metadata=metadata)
 
 
 class OrderIntentState(str, Enum):
+    NEW = "NEW"
     PENDING = "PENDING"
     SENT = "SENT"
     ACKED = "ACKED"
-    REJECTED = "REJECTED"
+    PARTIAL = "PARTIAL"
     FILLED = "FILLED"
     CANCELED = "CANCELED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
     REPLACED = "REPLACED"
+
+
+class OrderRequestState(str, Enum):
+    ACTIVE = "ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    COMPLETED = "COMPLETED"
 
 
 class CancelIntentState(str, Enum):
@@ -73,8 +82,13 @@ class OrderIntent(Base):
     tif = Column(String(16), nullable=True)
     qty = Column(Float, nullable=False)
     price = Column(Float, nullable=True)
+    filled_qty = Column(Float, nullable=False, default=0.0)
+    remaining_qty = Column(Float, nullable=True)
+    avg_fill_price = Column(Float, nullable=True)
     strategy = Column(String(64), nullable=True)
-    state = Column(SAEnum(OrderIntentState), nullable=False, default=OrderIntentState.PENDING)
+    state = Column(
+        SAEnum(OrderIntentState), nullable=False, default=OrderIntentState.NEW
+    )
     broker_order_id = Column(String(128), nullable=True, index=True)
     replaced_by = Column(String(64), nullable=True)
     created_ts = Column(DateTime(timezone=True), nullable=False, default=_now)
@@ -101,6 +115,22 @@ class CancelIntent(Base):
 
     __table_args__ = (
         UniqueConstraint("account", "venue", "intent_id", name="uq_cancel_intent_scope"),
+    )
+
+
+class OrderRequestLedger(Base):
+    __tablename__ = "order_request_ledger"
+
+    id = Column(Integer, primary_key=True)
+    intent_id = Column(String(64), nullable=False, index=True)
+    request_id = Column(String(64), nullable=False, unique=True, index=True)
+    state = Column(SAEnum(OrderRequestState), nullable=False, default=OrderRequestState.ACTIVE)
+    superseded_by = Column(String(64), nullable=True)
+    created_ts = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_ts = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        UniqueConstraint("intent_id", "request_id", name="uq_order_request_intent"),
     )
 
 
@@ -154,13 +184,91 @@ def session_scope() -> Iterator[Session]:
         session.close()
 
 
-TERMINAL_STATES: Sequence[OrderIntentState] = (
-    OrderIntentState.ACKED,
-    OrderIntentState.REJECTED,
+_STRICT_TERMINAL_STATES: Sequence[OrderIntentState] = (
     OrderIntentState.FILLED,
     OrderIntentState.CANCELED,
+    OrderIntentState.REJECTED,
+    OrderIntentState.EXPIRED,
     OrderIntentState.REPLACED,
 )
+
+TERMINAL_STATES: Sequence[OrderIntentState] = _STRICT_TERMINAL_STATES
+
+ACTIVE_STATES: Sequence[OrderIntentState] = (
+    OrderIntentState.NEW,
+    OrderIntentState.PENDING,
+    OrderIntentState.SENT,
+    OrderIntentState.ACKED,
+    OrderIntentState.PARTIAL,
+)
+
+COMPLETED_FOR_IDEMPOTENCY: Sequence[OrderIntentState] = (
+    OrderIntentState.ACKED,
+    *TERMINAL_STATES,
+)
+
+_ALLOWED_TRANSITIONS: dict[OrderIntentState | None, set[OrderIntentState]] = {
+    None: {OrderIntentState.NEW},
+    OrderIntentState.NEW: {
+        OrderIntentState.PENDING,
+        OrderIntentState.SENT,
+        OrderIntentState.ACKED,
+        OrderIntentState.PARTIAL,
+        OrderIntentState.FILLED,
+        OrderIntentState.CANCELED,
+        OrderIntentState.REJECTED,
+        OrderIntentState.EXPIRED,
+    },
+    OrderIntentState.PENDING: {
+        OrderIntentState.PENDING,
+        OrderIntentState.SENT,
+        OrderIntentState.ACKED,
+        OrderIntentState.FILLED,
+        OrderIntentState.PARTIAL,
+        OrderIntentState.REJECTED,
+        OrderIntentState.CANCELED,
+        OrderIntentState.EXPIRED,
+        OrderIntentState.REPLACED,
+    },
+    OrderIntentState.SENT: {
+        OrderIntentState.SENT,
+        OrderIntentState.ACKED,
+        OrderIntentState.PARTIAL,
+        OrderIntentState.FILLED,
+        OrderIntentState.REJECTED,
+        OrderIntentState.CANCELED,
+        OrderIntentState.EXPIRED,
+        OrderIntentState.REPLACED,
+    },
+    OrderIntentState.ACKED: {
+        OrderIntentState.ACKED,
+        OrderIntentState.PENDING,
+        OrderIntentState.SENT,
+        OrderIntentState.PARTIAL,
+        OrderIntentState.FILLED,
+        OrderIntentState.CANCELED,
+        OrderIntentState.EXPIRED,
+        OrderIntentState.REPLACED,
+    },
+    OrderIntentState.PARTIAL: {
+        OrderIntentState.PARTIAL,
+        OrderIntentState.PENDING,
+        OrderIntentState.SENT,
+        OrderIntentState.FILLED,
+        OrderIntentState.CANCELED,
+        OrderIntentState.EXPIRED,
+        OrderIntentState.REPLACED,
+    },
+    OrderIntentState.FILLED: set(),
+    OrderIntentState.CANCELED: set(),
+    OrderIntentState.REJECTED: set(),
+    OrderIntentState.EXPIRED: set(),
+    OrderIntentState.REPLACED: set(),
+}
+
+
+class OrderStateTransitionError(RuntimeError):
+    pass
 
 
 def load_intent(session: Session, intent_id: str) -> OrderIntent | None:
@@ -205,19 +313,42 @@ def ensure_order_intent(
             price=price,
             tif=tif,
             strategy=strategy,
-            state=OrderIntentState.PENDING,
+            state=OrderIntentState.NEW,
             replaced_by=replaced_by,
         )
+        intent.filled_qty = 0.0
+        intent.remaining_qty = float(qty)
         session.add(intent)
         session.flush()
+        _ensure_request_record(session, intent.intent_id, request_id)
     else:
         _ensure_matches(intent, account, venue, symbol, side)
         if replaced_by and intent.replaced_by not in {None, replaced_by}:
             raise ValueError("intent already replaced by another request")
         if replaced_by:
             intent.replaced_by = replaced_by
+        intent.type = order_type
+        intent.qty = float(qty)
+        intent.price = float(price) if price is not None else None
+        intent.tif = tif
+        intent.strategy = strategy
+        if intent.remaining_qty is None or intent.remaining_qty > intent.qty:
+            intent.remaining_qty = max(float(intent.qty) - float(intent.filled_qty or 0.0), 0.0)
+        previous_request = intent.request_id
         if intent.request_id != request_id:
             intent.request_id = request_id
+            intent.updated_ts = _now()
+            session.add(intent)
+            if previous_request:
+                _mark_request_state(
+                    session,
+                    intent.intent_id,
+                    previous_request,
+                    OrderRequestState.SUPERSEDED,
+                    superseded_by=request_id,
+                )
+            _ensure_request_record(session, intent.intent_id, request_id)
+        else:
             intent.updated_ts = _now()
             session.add(intent)
     return intent
@@ -239,19 +370,145 @@ def _ensure_matches(
         raise ValueError("intent parameters do not match existing record")
 
 
+def _mark_request_state(
+    session: Session,
+    intent_id: str,
+    request_id: str,
+    state: OrderRequestState,
+    *,
+    superseded_by: str | None = None,
+) -> None:
+    record = session.execute(
+        select(OrderRequestLedger).where(OrderRequestLedger.request_id == request_id)
+    ).scalar_one_or_none()
+    if record is None:
+        record = OrderRequestLedger(intent_id=intent_id, request_id=request_id)
+    record.state = state
+    record.superseded_by = superseded_by
+    record.updated_ts = _now()
+    session.add(record)
+    session.flush()
+
+
+def _ensure_request_record(session: Session, intent_id: str, request_id: str) -> None:
+    record = session.execute(
+        select(OrderRequestLedger).where(OrderRequestLedger.request_id == request_id)
+    ).scalar_one_or_none()
+    if record is None:
+        record = OrderRequestLedger(intent_id=intent_id, request_id=request_id)
+    record.state = OrderRequestState.ACTIVE
+    record.superseded_by = None
+    record.updated_ts = _now()
+    session.add(record)
+    session.flush()
+
+
+def _validate_state_transition(
+    previous: OrderIntentState | None,
+    new_state: OrderIntentState,
+    *,
+    intent: OrderIntent,
+    filled_qty: float,
+    remaining_qty: float | None,
+    broker_order_id: str | None,
+) -> None:
+    allowed = _ALLOWED_TRANSITIONS.get(previous)
+    if allowed is None or new_state not in allowed:
+        raise OrderStateTransitionError(
+            f"illegal transition {previous!s} -> {new_state!s} for {intent.intent_id}"
+        )
+    qty = float(intent.qty)
+    if qty < 0:
+        raise OrderStateTransitionError(f"intent {intent.intent_id} has negative qty")
+    if filled_qty < -1e-9:
+        raise OrderStateTransitionError(
+            f"intent {intent.intent_id} filled_qty negative: {filled_qty}"
+        )
+    if filled_qty > qty + 1e-6:
+        raise OrderStateTransitionError(
+            f"intent {intent.intent_id} filled_qty exceeds qty: {filled_qty}>{qty}"
+        )
+    if remaining_qty is not None and remaining_qty < -1e-9:
+        raise OrderStateTransitionError(
+            f"intent {intent.intent_id} remaining negative: {remaining_qty}"
+        )
+    if new_state == OrderIntentState.ACKED and not broker_order_id:
+        raise OrderStateTransitionError(
+            f"intent {intent.intent_id} ACKED without broker order id"
+        )
+    if new_state == OrderIntentState.PARTIAL:
+        if filled_qty <= 0 or filled_qty >= qty - 1e-9:
+            raise OrderStateTransitionError(
+                f"intent {intent.intent_id} invalid PARTIAL fill={filled_qty} qty={qty}"
+            )
+    if new_state == OrderIntentState.FILLED:
+        if abs(filled_qty - qty) > 1e-6 and (remaining_qty or 0.0) > 1e-6:
+            raise OrderStateTransitionError(
+                f"intent {intent.intent_id} FILLED but qty mismatch ({filled_qty}!={qty})"
+            )
+    if new_state in (OrderIntentState.CANCELED, OrderIntentState.REJECTED, OrderIntentState.EXPIRED):
+        if filled_qty > qty + 1e-9:
+            raise OrderStateTransitionError(
+                f"intent {intent.intent_id} terminal {new_state} with overfill"
+            )
+
+
+def _complete_request_if_needed(session: Session, intent: OrderIntent) -> None:
+    if not intent.request_id:
+        return
+    if intent.state in TERMINAL_STATES:
+        _mark_request_state(
+            session,
+            intent.intent_id,
+            intent.request_id,
+            OrderRequestState.COMPLETED,
+        )
+
+
 def update_intent_state(
     session: Session,
     intent: OrderIntent,
     *,
     state: OrderIntentState,
     broker_order_id: str | None = None,
+    filled_qty: float | None = None,
+    remaining_qty: float | None = None,
+    avg_fill_price: float | None = None,
 ) -> OrderIntent:
+    prev_state = intent.state
+    if filled_qty is None:
+        filled_value = float(intent.filled_qty or 0.0)
+    else:
+        filled_value = float(filled_qty)
+    if remaining_qty is None:
+        remaining_value = intent.remaining_qty
+    else:
+        remaining_value = float(remaining_qty)
+    if avg_fill_price is not None:
+        intent.avg_fill_price = float(avg_fill_price)
+
+    _validate_state_transition(
+        prev_state,
+        state,
+        intent=intent,
+        filled_qty=filled_value,
+        remaining_qty=remaining_value,
+        broker_order_id=broker_order_id or intent.broker_order_id,
+    )
+
     intent.state = state
     if broker_order_id:
         intent.broker_order_id = broker_order_id
+    intent.filled_qty = filled_value
+    if remaining_value is None:
+        computed_remaining = max(float(intent.qty) - filled_value, 0.0)
+        intent.remaining_qty = computed_remaining
+    else:
+        intent.remaining_qty = remaining_value
     intent.updated_ts = _now()
     session.add(intent)
     session.flush()
+    _complete_request_if_needed(session, intent)
     return intent
 
 
@@ -298,7 +555,7 @@ def update_cancel_state(
 
 def inflight_intents(session: Session) -> Iterable[OrderIntent]:
     return session.execute(
-        select(OrderIntent).where(OrderIntent.state.in_([OrderIntentState.PENDING, OrderIntentState.SENT]))
+        select(OrderIntent).where(OrderIntent.state.in_(list(ACTIVE_STATES)))
     ).scalars()
 
 
@@ -323,6 +580,8 @@ class IntentSnapshot:
     venue: str
     symbol: str
     side: str
+    filled_qty: float
+    remaining_qty: float | None
 
 
 def snapshot(session: Session, intent_id: str) -> IntentSnapshot | None:
@@ -338,18 +597,40 @@ def snapshot(session: Session, intent_id: str) -> IntentSnapshot | None:
         venue=record.venue,
         symbol=record.symbol,
         side=record.side,
+        filled_qty=float(record.filled_qty or 0.0),
+        remaining_qty=record.remaining_qty,
     )
+
+
+def active_request_id(session: Session, intent_id: str) -> str | None:
+    record = session.execute(
+        select(OrderRequestLedger)
+        .where(
+            OrderRequestLedger.intent_id == intent_id,
+            OrderRequestLedger.state == OrderRequestState.ACTIVE,
+        )
+        .order_by(OrderRequestLedger.updated_ts.desc())
+    ).scalar_one_or_none()
+    if record is None:
+        return None
+    return record.request_id
 
 
 __all__ = [
     "CancelIntent",
     "CancelIntentState",
+    "OrderRequestLedger",
+    "OrderRequestState",
+    "OrderStateTransitionError",
     "IntentSnapshot",
     "OrderIntent",
     "OrderIntentState",
+    "ACTIVE_STATES",
     "TERMINAL_STATES",
+    "COMPLETED_FOR_IDEMPOTENCY",
     "ensure_cancel_intent",
     "ensure_order_intent",
+    "active_request_id",
     "get_engine",
     "inflight_intents",
     "load_intent",

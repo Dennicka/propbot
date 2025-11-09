@@ -28,6 +28,8 @@ def test_stuck_order_metrics_exposed(client: TestClient) -> None:
     execution_metrics.STUCK_ORDERS_TOTAL.labels("venue", "symbol").inc()
     execution_metrics.ORDER_RETRIES_TOTAL.labels("venue", "symbol").inc()
     execution_metrics.OPEN_ORDERS_GAUGE.labels("venue", "symbol", "status").set(2.0)
+    execution_metrics.STUCK_RESOLVER_RETRIES_TOTAL.labels("venue", "symbol", "reason").inc()
+    execution_metrics.STUCK_RESOLVER_ACTIVE_INTENTS.set(3.0)
 
     metrics = client.get("/metrics")
     assert metrics.status_code == 200
@@ -36,3 +38,5 @@ def test_stuck_order_metrics_exposed(client: TestClient) -> None:
     assert 'stuck_orders_total{symbol="symbol",venue="venue"} 1.0' in body
     assert 'order_retries_total{symbol="symbol",venue="venue"} 1.0' in body
     assert 'open_orders_gauge{status="status",symbol="symbol",venue="venue"} 2.0' in body
+    assert 'stuck_resolver_retries_total{reason="reason",symbol="symbol",venue="venue"} 1.0' in body
+    assert 'stuck_resolver_active_intents 3.0' in body

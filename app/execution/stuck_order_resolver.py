@@ -11,7 +11,13 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, Mapping, Sequence
 
 from ..broker.router import ExecutionRouter
-from ..metrics.execution import OPEN_ORDERS_GAUGE, ORDER_RETRIES_TOTAL, STUCK_ORDERS_TOTAL
+from ..metrics.execution import (
+    OPEN_ORDERS_GAUGE,
+    ORDER_RETRIES_TOTAL,
+    STUCK_ORDERS_TOTAL,
+    STUCK_RESOLVER_ACTIVE_INTENTS,
+    STUCK_RESOLVER_RETRIES_TOTAL,
+)
 from ..persistence import order_store
 from ..router.order_router import OrderRouter, OrderRouterError
 from ..utils.identifiers import generate_request_id
@@ -248,6 +254,7 @@ class StuckOrderResolver:
         self._update_open_orders_gauge(orders)
         active_intents = _intent_set(orders)
         self._cleanup_stale(active_intents)
+        STUCK_RESOLVER_ACTIVE_INTENTS.set(float(len(active_intents)))
         now = datetime.now(timezone.utc)
         now_ts = time.time()
         for order in orders:
@@ -421,9 +428,18 @@ class StuckOrderResolver:
             intent = self._order_store.load_intent(session, intent_id)
         if intent is None:
             return
+        if intent.state in (
+            order_store.OrderIntentState.FILLED,
+            order_store.OrderIntentState.CANCELED,
+            order_store.OrderIntentState.REJECTED,
+            order_store.OrderIntentState.EXPIRED,
+            order_store.OrderIntentState.REPLACED,
+        ):
+            return
         broker_order_id = intent.broker_order_id
         if not broker_order_id:
             return
+        previous_request_id = intent.request_id
         self._ctx.clear_stuck_resolver_error(intent_id)
         venue = intent.venue
         symbol = intent.symbol
@@ -482,6 +498,9 @@ class StuckOrderResolver:
         self._maxed_out.discard(intent_id)
         self._ctx.record_stuck_resolver_retry(intent_id=intent_id, timestamp=now_ts)
         ORDER_RETRIES_TOTAL.labels(_normalise_venue(venue), _normalise_symbol(symbol)).inc()
+        STUCK_RESOLVER_RETRIES_TOTAL.labels(
+            _normalise_venue(venue), _normalise_symbol(symbol), "timeout"
+        ).inc()
         self._ctx.record_incident(
             "ops_event",
             {
@@ -492,6 +511,8 @@ class StuckOrderResolver:
                 "retries_n": retries + 1,
                 "venue": venue,
                 "symbol": symbol,
+                "previous_request_id": previous_request_id,
+                "new_request_id": new_request_id,
             },
         )
         self._logger.info(
@@ -502,6 +523,9 @@ class StuckOrderResolver:
                 "venue": venue,
                 "symbol": symbol,
                 "backoff_s": delay,
+                "previous_request_id": previous_request_id,
+                "new_request_id": new_request_id,
+                "reason": "STUCK_TIMEOUT",
             },
         )
 

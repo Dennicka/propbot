@@ -231,3 +231,53 @@ async def test_respects_max_retries_and_sets_error(monkeypatch):
     assert len([submit for submit in broker.submits if submit != intent_id]) == 1
     assert len(runtime_stub.retries) == 1
 
+
+@pytest.mark.asyncio
+async def test_does_not_retry_terminal_states(monkeypatch):
+    broker = DummyBroker()
+    router = OrderRouter(broker)
+    order_ref = await router.submit_order(
+        account="acct",
+        venue="test-venue",
+        symbol="BTCUSDT",
+        side="buy",
+        order_type="LIMIT",
+        qty=1.0,
+        price=10.0,
+        request_id="intent-terminal",
+    )
+    intent_id = order_ref.intent_id
+    with order_store.session_scope() as session:
+        intent = order_store.load_intent(session, intent_id)
+        assert intent is not None
+        order_store.update_intent_state(
+            session,
+            intent,
+            state=order_store.OrderIntentState.FILLED,
+            filled_qty=float(intent.qty),
+            remaining_qty=0.0,
+        )
+    now = datetime.now(timezone.utc)
+    ledger = FakeLedger(
+        [
+            {
+                "id": 99,
+                "status": "submitted",
+                "client_ts": (now - timedelta(seconds=10)).isoformat(),
+                "idemp_key": intent_id,
+                "venue": "test-venue",
+                "symbol": "BTCUSDT",
+            }
+        ]
+    )
+    runtime_stub = DummyRuntime(pending_timeout=1.0)
+    resolver = StuckOrderResolver(ctx=runtime_stub, order_router=router)
+    resolver._ledger = ledger
+    resolver._last_fill_poll = None
+
+    await resolver.run_once()
+
+    assert broker.cancels == []
+    assert broker.submits == [intent_id]
+    assert runtime_stub.retries == []
+
