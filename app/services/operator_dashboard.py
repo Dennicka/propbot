@@ -1678,6 +1678,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             state=_fmt(account_health_worst),
         )
     )
+    recon_state_label = str(recon_widget_status or "UNKNOWN").upper()
+    if recon_state_label not in {"OK", "WARN", "CRIT"}:
+        recon_state_label = "UNKNOWN"
+    recon_css = {
+        "OK": "status-pill status-ok",
+        "WARN": "status-pill status-warn",
+        "CRIT": "status-pill status-bad",
+    }.get(recon_state_label, "status-pill status-info")
+    recon_label = f"{_fmt(recon_state_label)} ({_fmt(recon_widget_mismatches)})"
+    status_pills_markup.append(
+        f"<span class=\"{recon_css}\"><span class=\"label\">RECON:</span> {recon_label}</span>"
+    )
     if hold_active_flag and (
         hold_reason_upper.startswith("SLO_CRITICAL::")
         or hold_reason_upper.startswith("RECON_DIVERGENCE")

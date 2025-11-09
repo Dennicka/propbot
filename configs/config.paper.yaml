@@ -108,6 +108,10 @@ obs:
   metrics_interval_sec: 5
 recon:
   max_divergence: 0.0
+  diff_abs_usd_warn: 100.0
+  diff_abs_usd_crit: 500.0
+  diff_rel_warn: 0.02
+  diff_rel_crit: 0.05
 readiness:
   startup_timeout_sec: 120
 status_thresholds_file: status_thresholds.yaml
