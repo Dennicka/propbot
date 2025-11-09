@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from types import SimpleNamespace
 from typing import Callable, Dict, Iterable, Mapping
 
@@ -15,6 +16,8 @@ from ...health.account_health import (
 )
 from ...metrics.risk_governor import set_throttled as set_risk_throttled
 from ...services import runtime as runtime_service
+from ...audit_log import log_operator_action
+from ...risk.freeze import FreezeRule, get_freeze_registry
 
 try:  # pragma: no cover - import guard for optional bootstrap contexts
     from ...config.schema import HealthConfig
@@ -54,6 +57,7 @@ class AccountHealthGuard:
         self._health_cfg = self._resolve_health_config(cfg, self._initial_ctx)
         self._hysteresis = max(int(getattr(self._health_cfg, "hysteresis_ok_windows", 0) or 0), 0)
         self._enabled = self._resolve_enabled()
+        self._auto_freeze = self._env_flag("AUTO_FREEZE_ON_HEALTH", False)
 
         self._ok_streak = 0
         self._throttle_reason: str | None = None
@@ -149,6 +153,8 @@ class AccountHealthGuard:
             except Exception:  # pragma: no cover - defensive
                 LOGGER.debug("health guard failed to throttle pre-trade gate", exc_info=True)
         self._engage_hold(runtime, reason)
+        if self._auto_freeze:
+            self._apply_freeze_rules(exchanges)
 
     # ------------------------------------------------------------------
     def _handle_ok(self, runtime: object) -> None:
@@ -166,6 +172,8 @@ class AccountHealthGuard:
                 LOGGER.debug("health guard failed to clear pre-trade gate", exc_info=True)
         if self._active_hold_reason:
             self._clear_hold(runtime)
+        if self._auto_freeze:
+            get_freeze_registry().clear("HEALTH_CRITICAL::")
 
     # ------------------------------------------------------------------
     def _set_throttle(self, runtime: object, reason: str) -> None:
@@ -329,6 +337,38 @@ class AccountHealthGuard:
             if lowered:
                 return lowered in {"1", "true", "yes", "on"}
         return bool(getattr(self._health_cfg, "guard_enabled", False))
+
+    # ------------------------------------------------------------------
+    def _env_flag(self, name: str, default: bool = False) -> bool:
+        raw = self._env.get(name)
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered:
+                return lowered in {"1", "true", "yes", "on"}
+        return default
+
+    # ------------------------------------------------------------------
+    def _apply_freeze_rules(self, exchanges: Iterable[str]) -> None:
+        registry = get_freeze_registry()
+        timestamp = time.time()
+        for exchange in exchanges:
+            token = str(exchange or "").strip()
+            if not token:
+                continue
+            reason = f"HEALTH_CRITICAL::{token}"
+            rule = FreezeRule(reason=reason, scope="venue", ts=timestamp)
+            if registry.apply(rule):
+                log_operator_action(
+                    "system",
+                    "system",
+                    "AUTO_FREEZE_APPLIED",
+                    {
+                        "source": "health_guard",
+                        "reason": reason,
+                        "scope": "venue",
+                        "exchange": token,
+                    },
+                )
 
 
 def build_health_guard_context() -> tuple[Callable[[], object], object | None]:

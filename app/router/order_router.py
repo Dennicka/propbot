@@ -29,6 +29,7 @@ from ..risk.exposure_caps import (
     resolve_caps,
     snapshot_entry,
 )
+from ..risk.freeze import get_freeze_registry
 
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ LOGGER = logging.getLogger(__name__)
 
 _CRITICAL_CAUSE = "ACCOUNT_HEALTH_CRITICAL"
 _REDUCE_ONLY_BLOCK = "blocked: reduce-only due to ACCOUNT_HEALTH::CRITICAL"
+_FROZEN_BLOCK = "blocked: FROZEN_BY_RISK"
 
 
 def _coerce_float(value: object) -> float:
@@ -212,6 +214,22 @@ def enforce_reduce_only(
     return True, native_supported, None
 
 
+def _is_reduce_only_order(side: str, qty: float | int | str | None, current_position: float) -> bool:
+    qty_value = _coerce_float(qty)
+    if qty_value <= 0:
+        return False
+    side_value = str(side or "").lower()
+    if side_value not in {"buy", "sell"}:
+        return False
+    if abs(current_position) <= 1e-9:
+        return False
+    if current_position > 0 and side_value == "sell":
+        return qty_value <= current_position + 1e-9
+    if current_position < 0 and side_value == "buy":
+        return qty_value <= abs(current_position) + 1e-9
+    return False
+
+
 class OrderRouterError(RuntimeError):
     """Raised when the order router encounters an unrecoverable error."""
 
@@ -312,9 +330,32 @@ class OrderRouter:
             "tif": tif,
             "strategy": strategy,
         }
+        reduce_only_flag = False
+        registry = get_freeze_registry()
+        if registry.is_frozen(strategy=strategy, venue=venue, symbol=symbol):
+            current_position = self._current_position(venue, symbol)
+            if _is_reduce_only_order(side, qty, current_position):
+                reduce_only_flag = self._supports_native_reduce_only(venue)
+            else:
+                reason_text = _FROZEN_BLOCK
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                log_operator_action(
+                    "system",
+                    "system",
+                    "PRETRADE_BLOCKED",
+                    details={
+                        "reason": reason_text,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "qty": qty,
+                        "price": price,
+                        "strategy": strategy,
+                    },
+                )
+                raise PretradeGateThrottled(reason_text, details=order_payload)
         gate = runtime.get_pre_trade_gate()
         allowed, gate_reason = gate.check_allowed(order_payload)
-        reduce_only_flag = False
         if not allowed:
             ctx = SimpleNamespace(
                 runtime=runtime,
@@ -327,7 +368,7 @@ class OrderRouter:
             if reduce_allowed:
                 allowed = True
                 gate_reason = None
-                reduce_only_flag = native_supported
+                reduce_only_flag = reduce_only_flag or native_supported
             else:
                 reason_text = (
                     (reduce_reason or gate_reason or "PRETRADE_BLOCKED").strip()

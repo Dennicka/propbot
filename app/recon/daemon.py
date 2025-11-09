@@ -9,12 +9,13 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Mapping
+from typing import Literal, Mapping
 
 from ..audit_log import log_operator_action
 from ..broker.router import ExecutionRouter
 from ..metrics.recon import RECON_DIFF_ABS_USD_GAUGE, RECON_DIFF_STATE_GAUGE
 from ..services import runtime
+from ..risk.freeze import FreezeRule, get_freeze_registry
 from .service import ReconDiff, collect_recon_snapshot
 
 LOGGER = logging.getLogger(__name__)
@@ -122,6 +123,34 @@ def _reset_missing_metric_labels(active: set[tuple[str, str]]) -> None:
     _ACTIVE_LABELS.update(active)
 
 
+def _apply_recon_freeze(diff: ReconDiff) -> None:
+    registry = get_freeze_registry()
+    venue_token = (diff.venue or "").strip().lower()
+    symbol_token = (diff.symbol or "").strip().upper()
+    scope: Literal["symbol", "venue"]
+    scope = "symbol" if symbol_token else "venue"
+    reason_parts = ["RECON_CRITICAL"]
+    if venue_token:
+        reason_parts.append(f"venue={venue_token}")
+    if scope == "symbol" and symbol_token:
+        reason_parts.append(f"symbol={symbol_token}")
+    reason = "::".join(reason_parts)
+    rule = FreezeRule(reason=reason, scope=scope, ts=time.time())
+    if registry.apply(rule):
+        log_operator_action(
+            "system",
+            "system",
+            "AUTO_FREEZE_APPLIED",
+            {
+                "source": "recon",
+                "reason": reason,
+                "scope": scope,
+                "venue": diff.venue,
+                "symbol": diff.symbol,
+            },
+        )
+
+
 async def _build_context(state, remote_balances: list[dict[str, object]]) -> SimpleNamespace:
     runtime_ns = SimpleNamespace(remote_balances=lambda: remote_balances)
     ctx = SimpleNamespace(runtime=runtime_ns)
@@ -139,6 +168,7 @@ async def run_recon_cycle(
     thresholds = thresholds or _resolve_thresholds()
     if enable_hold is None:
         enable_hold = _env_flag("ENABLE_RECON_HOLD", False)
+    auto_freeze_enabled = _env_flag("AUTO_FREEZE_ON_RECON", False)
 
     try:
         diffs = collect_recon_snapshot(ctx)
@@ -160,6 +190,8 @@ async def run_recon_cycle(
         if severity == "CRIT":
             has_crit = True
             LOGGER.error("recon.diff_critical", extra=payload)
+            if auto_freeze_enabled:
+                _apply_recon_freeze(diff)
         elif severity == "WARN":
             has_warn = True
             LOGGER.warning("recon.diff_warning", extra=payload)
@@ -185,6 +217,8 @@ async def run_recon_cycle(
                 runtime.flag_recon_issue("CRITICAL", details=details)
             except Exception:  # pragma: no cover - defensive
                 LOGGER.exception("recon.flag_issue_failed")
+    elif auto_freeze_enabled:
+        get_freeze_registry().clear("RECON_CRITICAL")
 
     return {
         "diffs": diff_payloads,

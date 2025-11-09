@@ -56,6 +56,7 @@ from services.daily_reporter import load_latest_report
 from ..risk_snapshot import build_risk_snapshot
 from ..risk.accounting import get_risk_snapshot as get_risk_accounting_snapshot
 from ..risk.auto_hold import AUTO_HOLD_AUDIT_REASON, AUTO_HOLD_REASON
+from ..risk.freeze import get_freeze_registry
 from ..risk.telemetry import get_risk_skip_counts
 from ..strategy_budget import get_strategy_budget_manager
 from ..strategy.pnl_tracker import get_strategy_pnl_tracker
@@ -484,6 +485,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
 
     risk_limits_env = _risk_limits_snapshot()
     risk_state = asdict(state.risk.limits)
+    freeze_snapshot = get_freeze_registry().snapshot()
 
     approvals = list_pending_requests(status="pending")
 
@@ -865,6 +867,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         "reconciliation": reconciliation_status,
         "runtime_snapshot": runtime_snapshot_payload,
         "account_health": account_health_snapshot,
+        "freeze": freeze_snapshot,
         "market_status": market_status_snapshot(),
         "risk_throttled": risk_throttled,
         "risk_throttle_reason": throttle_reason,
@@ -1118,6 +1121,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     recent_operator_actions = context.get("recent_operator_actions", []) or []
     trend = context.get("pnl_trend", {}) or {}
     liquidity = context.get("liquidity", {}) or {}
+    freeze_payload = context.get("freeze") or {}
+    if not isinstance(freeze_payload, Mapping):
+        freeze_payload = {}
+    freeze_rules = freeze_payload.get("rules") if isinstance(freeze_payload.get("rules"), Sequence) else []
     liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
     liquidity_reason = liquidity.get("reason") or ""
     liquidity_snapshot = liquidity.get("per_venue") or {}
@@ -1745,6 +1752,36 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             f"{_fmt(highlight)}"
             "</div>"
         )
+
+    if freeze_payload.get("active"):
+        parts.append("<section class=\"risk-freeze\">")
+        parts.append("<h3>Risk Freeze</h3>")
+        if not freeze_rules:
+            parts.append("<p>No active freeze rules.</p>")
+        else:
+            parts.append("<ul class=\"risk-freeze-list\">")
+            for entry in freeze_rules:
+                if not isinstance(entry, Mapping):
+                    continue
+                reason_text = _fmt(entry.get("reason"))
+                scope_text = _fmt(entry.get("scope"))
+                ts_value = entry.get("ts")
+                timestamp_html = ""
+                if isinstance(ts_value, (int, float)):
+                    ts_iso = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).isoformat()
+                    timestamp_html = f" <span class=\"freeze-ts\">{_fmt(ts_iso)}</span>"
+                elif ts_value:
+                    timestamp_html = f" <span class=\"freeze-ts\">{_fmt(ts_value)}</span>"
+                parts.append(
+                    "<li><span class=\"freeze-scope\">{scope}</span>: "
+                    "<code>{reason}</code>{ts}</li>".format(
+                        scope=scope_text or "unknown",
+                        reason=reason_text or "unknown",
+                        ts=timestamp_html,
+                    )
+                )
+            parts.append("</ul>")
+        parts.append("</section>")
 
     if exchange_watchdog_reason:
         parts.append(
