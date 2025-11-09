@@ -8,6 +8,7 @@ import math
 import os
 import signal
 import time
+from collections import deque
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -63,6 +64,7 @@ _UNSET = object()
 
 
 _STATE_LOCK = threading.RLock()
+_STUCK_RESOLVER_INSTANCE: object | None = None
 
 
 def _resolve_config_path() -> str:
@@ -232,6 +234,86 @@ class MetricsState:
     counters: Dict[str, float] = field(default_factory=dict)
     latency_samples_ms: List[float] = field(default_factory=list)
     slo_breach_started_at: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class StuckResolverRuntimeState:
+    enabled: bool = False
+    pending_timeout_sec: float = 0.0
+    cancel_grace_sec: float = 0.0
+    max_retries: int = 0
+    backoff_sec: List[float] = field(default_factory=list)
+    retries_total: int = 0
+    last_retry_ts: str | None = None
+    errors: Dict[str, str] = field(default_factory=dict)
+    _retry_window: deque[float] = field(default_factory=deque)
+
+    def configure(self, config: Mapping[str, object] | None) -> None:
+        if config is None:
+            self.enabled = False
+            self.pending_timeout_sec = 0.0
+            self.cancel_grace_sec = 0.0
+            self.max_retries = 0
+            self.backoff_sec = []
+            return
+        self.enabled = bool(config.get("enabled", getattr(config, "enabled", False)))
+        self.pending_timeout_sec = float(
+            config.get("pending_timeout_sec", getattr(config, "pending_timeout_sec", 0.0)) or 0.0
+        )
+        self.cancel_grace_sec = float(
+            config.get("cancel_grace_sec", getattr(config, "cancel_grace_sec", 0.0)) or 0.0
+        )
+        self.max_retries = int(config.get("max_retries", getattr(config, "max_retries", 0)) or 0)
+        backoff = config.get("backoff_sec", getattr(config, "backoff_sec", []))
+        values: List[float] = []
+        for entry in backoff if isinstance(backoff, (list, tuple)) else []:
+            try:
+                numeric = float(entry)
+            except (TypeError, ValueError):
+                continue
+            if numeric < 0:
+                continue
+            values.append(numeric)
+        self.backoff_sec = values
+
+    def _trim_window(self, now: float) -> None:
+        threshold = now - 3600.0
+        while self._retry_window and self._retry_window[0] < threshold:
+            self._retry_window.popleft()
+
+    def record_retry(self, timestamp: float | None = None) -> None:
+        now = timestamp or time.time()
+        self.retries_total += 1
+        self._retry_window.append(now)
+        self._trim_window(now)
+        self.last_retry_ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+
+    def retries_last_hour(self, timestamp: float | None = None) -> int:
+        now = timestamp or time.time()
+        self._trim_window(now)
+        return len(self._retry_window)
+
+    def snapshot(self) -> Dict[str, object]:
+        now = time.time()
+        return {
+            "enabled": self.enabled,
+            "pending_timeout_sec": self.pending_timeout_sec,
+            "cancel_grace_sec": self.cancel_grace_sec,
+            "max_retries": self.max_retries,
+            "backoff_sec": list(self.backoff_sec),
+            "retries_total": self.retries_total,
+            "retries_last_hour": self.retries_last_hour(now),
+            "last_retry_ts": self.last_retry_ts,
+            "errors": dict(self.errors),
+        }
+
+
+@dataclass
+class ExecutionState:
+    stuck_resolver: StuckResolverRuntimeState = field(default_factory=StuckResolverRuntimeState)
+
+    def as_dict(self) -> Dict[str, object]:
+        return {"stuck_resolver": self.stuck_resolver.snapshot()}
 
 
 @dataclass
@@ -661,6 +743,7 @@ class RuntimeState:
     universe: UniverseState = field(default_factory=UniverseState)
     chaos: ChaosSettings = field(default_factory=ChaosSettings)
     pre_trade_gate: PreTradeGate = field(default_factory=PreTradeGate)
+    execution: ExecutionState = field(default_factory=ExecutionState)
 
 
 def _sync_loop_from_control(state: RuntimeState) -> None:
@@ -735,7 +818,8 @@ def _bootstrap_runtime() -> RuntimeState:
     loaded = load_app_config(config_path)
     chaos_settings = resolve_chaos_settings(getattr(loaded.data, "chaos", None))
     configure_chaos(chaos_settings)
-
+    execution_cfg = getattr(loaded.data, "execution", None)
+    resolver_cfg = getattr(execution_cfg, "stuck_resolver", None) if execution_cfg else None
     control_cfg = loaded.data.control
     safe_mode = _env_flag("SAFE_MODE", control_cfg.safe_mode if control_cfg else True)
     dry_run_only = _env_flag("DRY_RUN_ONLY", control_cfg.dry_run if control_cfg else False)
@@ -895,6 +979,7 @@ def _bootstrap_runtime() -> RuntimeState:
         safety=SafetyState(limits=safety_limits, runaway_guard=runaway_guard_state),
         chaos=chaos_settings,
     )
+    state.execution.stuck_resolver.configure(_stuck_config_payload(resolver_cfg))
     _sync_loop_from_control(state)
     return state
 
@@ -903,6 +988,15 @@ def _bootstrap_runtime() -> RuntimeState:
 
 def get_state() -> RuntimeState:
     return _STATE
+
+
+def register_stuck_resolver_instance(resolver: object | None) -> None:
+    global _STUCK_RESOLVER_INSTANCE
+    _STUCK_RESOLVER_INSTANCE = resolver
+
+
+def get_stuck_resolver_instance() -> object | None:
+    return _STUCK_RESOLVER_INSTANCE
 
 
 def get_market_data() -> MarketDataAggregator:
@@ -1589,6 +1683,48 @@ def set_open_orders(orders: List[Dict[str, object]]) -> List[Dict[str, object]]:
         return _STATE.open_orders
 
 
+def _stuck_config_payload(config: object | None) -> Mapping[str, object] | None:
+    if config is None:
+        return None
+    if isinstance(config, Mapping):
+        return config
+    payload: Dict[str, object] = {}
+    for key in ("enabled", "pending_timeout_sec", "cancel_grace_sec", "max_retries", "backoff_sec"):
+        if hasattr(config, key):
+            payload[key] = getattr(config, key)
+    return payload
+
+
+def configure_stuck_resolver(config: object | None) -> None:
+    mapping = _stuck_config_payload(config)
+    with _STATE_LOCK:
+        _STATE.execution.stuck_resolver.configure(mapping)
+
+
+def record_stuck_resolver_retry(
+    *, intent_id: str | None = None, timestamp: float | None = None
+) -> None:
+    with _STATE_LOCK:
+        resolver_state = _STATE.execution.stuck_resolver
+        resolver_state.record_retry(timestamp)
+        if intent_id:
+            resolver_state.errors.pop(intent_id, None)
+
+
+def record_stuck_resolver_error(intent_id: str, error: str) -> None:
+    if not intent_id:
+        return
+    with _STATE_LOCK:
+        _STATE.execution.stuck_resolver.errors[intent_id] = error
+
+
+def clear_stuck_resolver_error(intent_id: str) -> None:
+    if not intent_id:
+        return
+    with _STATE_LOCK:
+        _STATE.execution.stuck_resolver.errors.pop(intent_id, None)
+
+
 def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:
     guard = _STATE.guards.setdefault(name, GuardState())
     guard.status = status
@@ -1842,6 +1978,7 @@ def reset_for_tests() -> None:
     if _reset_positions_store is not None:
         _reset_positions_store()
     globals()["_STATE"] = _STATE
+    register_stuck_resolver_instance(None)
     _persist_safety_snapshot(_STATE.safety.as_dict())
     _persist_autopilot_snapshot(_STATE.autopilot.as_dict())
     update_auto_hedge_state(
@@ -2286,6 +2423,7 @@ def _runtime_status_snapshot() -> Dict[str, Any]:
             "success_rate_1h": success_rate,
         }
         status["pre_trade_gate"] = _STATE.pre_trade_gate.snapshot()
+        status["execution"] = _STATE.execution.as_dict()
         return status
 
 

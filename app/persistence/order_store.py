@@ -216,6 +216,10 @@ def ensure_order_intent(
             raise ValueError("intent already replaced by another request")
         if replaced_by:
             intent.replaced_by = replaced_by
+        if intent.request_id != request_id:
+            intent.request_id = request_id
+            intent.updated_ts = _now()
+            session.add(intent)
     return intent
 
 

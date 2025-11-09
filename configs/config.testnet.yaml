@@ -101,6 +101,13 @@ risk:
     max_order_error_rate: 0.01
     min_broker_state: UP
     hold_after_windows: 2
+execution:
+  stuck_resolver:
+    enabled: false
+    pending_timeout_sec: 8
+    cancel_grace_sec: 3
+    max_retries: 3
+    backoff_sec: [1, 2, 5]
 recon:
   max_divergence: 0.0
 readiness:

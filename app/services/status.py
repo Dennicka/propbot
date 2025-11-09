@@ -732,6 +732,12 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     snapshot["watchdog"] = get_broker_watchdog().snapshot()
     snapshot["account_health"] = get_account_health()
     snapshot["exposure_caps"] = build_exposure_caps_status(state.config.data)
+    resolver_state = getattr(state.execution, "stuck_resolver", None)
+    if resolver_state and bool(getattr(resolver_state, "enabled", False)):
+        try:
+            snapshot["stuck_resolver"] = resolver_state.snapshot()
+        except Exception:  # pragma: no cover - defensive
+            snapshot["stuck_resolver"] = {"enabled": True}
     return redact_sensitive_data(snapshot)
 
 
