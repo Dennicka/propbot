@@ -104,6 +104,10 @@ execution:
     backoff_sec: [1, 2, 5]
 recon:
   max_divergence: 0.0
+  diff_abs_usd_warn: 50.0
+  diff_abs_usd_crit: 200.0
+  diff_rel_warn: 0.01
+  diff_rel_crit: 0.03
 readiness:
   startup_timeout_sec: 120
 status_thresholds_file: status_thresholds.yaml

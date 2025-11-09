@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from app.services import runtime
 
 
@@ -19,23 +21,26 @@ def test_recon_status_endpoint(monkeypatch, client) -> None:
                 "ledger_qty": 1.0,
                 "delta": 1.0,
                 "notional_usd": 30_000.0,
+                "severity": "OK",
             }
         ],
         desync_detected=True,
         last_checked=timestamp,
-        metadata={"auto_hold": True},
+        metadata={"auto_hold": True, "has_warn": False, "has_crit": False},
     )
 
-    response = client.get("/api/ui/recon/status")
+    response = client.get("/api/ui/recon_status")
     assert response.status_code == 200
     payload = response.json()
 
-    assert payload["desync_detected"] is True
-    assert payload["auto_hold"] is True
-    assert payload["diff_count"] == 1
-    assert payload["last_checked"] == timestamp
-    assert payload["diffs"][0]["venue"] == "binance-um"
-    assert payload["diffs"][0]["notional_usd"] == 30000.0
+    assert payload["has_warn"] is False
+    assert payload["has_crit"] is False
+    assert len(payload["diffs"]) == 1
+    diff = payload["diffs"][0]
+    assert diff["venue"] == "binance-um"
+    assert diff["symbol"] == "BTCUSDT"
+    assert diff["diff_abs"] == pytest.approx(30_000.0)
+    assert diff["severity"] == "OK"
 
 
 def test_recon_status_endpoint_returns_snapshot(monkeypatch, client) -> None:
@@ -44,19 +49,30 @@ def test_recon_status_endpoint_returns_snapshot(monkeypatch, client) -> None:
 
     timestamp = "2024-03-15T12:00:00+00:00"
     runtime.update_reconciliation_status(
-        diffs=[{"venue": "okx-perp", "symbol": "ETHUSDT", "delta": 1.0, "notional_usd": 100.0}],
+        diffs=[
+            {
+                "venue": "okx-perp",
+                "symbol": "ETHUSDT",
+                "delta": 1.0,
+                "notional_usd": 100.0,
+                "diff_rel": 0.1,
+                "severity": "WARN",
+            }
+        ],
         desync_detected=True,
         last_checked=timestamp,
-        metadata={"auto_hold": False},
+        metadata={"auto_hold": False, "has_warn": True, "has_crit": False},
     )
 
     response = client.get("/api/ui/recon_status")
     assert response.status_code == 200
     payload = response.json()
 
-    assert payload == {
-        "status": "DRIFT",
-        "mismatches_count": 1,
-        "auto_hold": False,
-        "last_run_iso": timestamp,
-    }
+    assert payload["has_warn"] is True
+    assert payload["has_crit"] is False
+    assert len(payload["diffs"]) == 1
+    diff = payload["diffs"][0]
+    assert diff["venue"] == "okx-perp"
+    assert diff["symbol"] == "ETHUSDT"
+    assert diff["severity"] == "WARN"
+    assert diff["diff_rel"] == pytest.approx(0.1)

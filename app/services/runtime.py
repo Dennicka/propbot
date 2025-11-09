@@ -1624,11 +1624,31 @@ def update_reconciliation_status(
     metadata: Mapping[str, Any] | None = None,
 ) -> Dict[str, object]:
     timestamp = last_checked or _ts()
-    issue_list = [dict(issue) for issue in issues] if issues else []
-    diff_list = [dict(diff) for diff in diffs] if diffs else []
+    with _STATE_LOCK:
+        previous_snapshot = dict(_STATE.safety.reconciliation_snapshot)
+        previous_flag = bool(_STATE.safety.desync_detected)
+    previous_issues = []
+    raw_prev_issues = previous_snapshot.get("issues")
+    if isinstance(raw_prev_issues, Sequence):
+        previous_issues = [dict(entry) for entry in raw_prev_issues if isinstance(entry, Mapping)]
+    previous_diffs = []
+    raw_prev_diffs = previous_snapshot.get("diffs")
+    if isinstance(raw_prev_diffs, Sequence):
+        previous_diffs = [dict(entry) for entry in raw_prev_diffs if isinstance(entry, Mapping)]
+
+    if issues is None:
+        issue_list = previous_issues
+    else:
+        issue_list = [dict(issue) for issue in issues]
+    if diffs is None:
+        diff_list = previous_diffs
+    else:
+        diff_list = [dict(diff) for diff in diffs]
+
     desync_flag = bool(issue_list or diff_list)
     if desync_detected is not None:
         desync_flag = bool(desync_detected) or desync_flag
+
     snapshot: Dict[str, Any] = {
         "desync_detected": desync_flag,
         "last_checked": timestamp,
@@ -1639,11 +1659,10 @@ def update_reconciliation_status(
     }
     if metadata:
         snapshot.update({str(key): value for key, value in metadata.items()})
+
     persist_snapshot: Dict[str, Any] | None = None
     with _STATE_LOCK:
         safety = _STATE.safety
-        previous_snapshot = dict(safety.reconciliation_snapshot)
-        previous_flag = bool(safety.desync_detected)
         safety.desync_detected = bool(desync_flag)
         safety.reconciliation_snapshot = snapshot
         if previous_flag != bool(desync_flag) or previous_snapshot != snapshot:
@@ -1651,6 +1670,36 @@ def update_reconciliation_status(
     if persist_snapshot is not None:
         _persist_safety_snapshot(persist_snapshot)
     return dict(snapshot)
+
+
+def flag_recon_issue(state: str, *, details: Mapping[str, Any] | None = None) -> Dict[str, object]:
+    entry_state = (state or "").upper() or "UNKNOWN"
+    timestamp = _ts()
+    entry: Dict[str, Any] = {"state": entry_state, "timestamp": timestamp}
+    if details:
+        entry["details"] = {str(key): value for key, value in details.items()}
+    persist_snapshot: Dict[str, Any] | None = None
+    with _STATE_LOCK:
+        safety = _STATE.safety
+        snapshot = dict(safety.reconciliation_snapshot)
+        issues = snapshot.get("issues")
+        if isinstance(issues, Sequence):
+            issue_list = [dict(item) for item in issues if isinstance(item, Mapping)]
+        else:
+            issue_list = []
+        issue_list.append(entry)
+        snapshot["issues"] = issue_list[-50:]
+        snapshot["issue_count"] = len(snapshot["issues"])
+        snapshot["last_issue_ts"] = timestamp
+        snapshot["recon_issue"] = entry_state
+        if details:
+            snapshot["recon_issue_details"] = entry.get("details", {})
+        safety.reconciliation_snapshot = snapshot
+        safety.desync_detected = True
+        persist_snapshot = safety.as_dict()
+    if persist_snapshot is not None:
+        _persist_safety_snapshot(persist_snapshot)
+    return entry
 
 
 def get_reconciliation_status() -> Dict[str, object]:

@@ -36,7 +36,7 @@
 
 * Watchdog: включите `WATCHDOG_ENABLED` и, при необходимости, `WATCHDOG_AUTO_HOLD`, чтобы автоматически фиксировать деградации бирж. Снапшоты транслируются в бейджи и могут триггерить HOLD. 【F:.env.example†L49-L60】【F:app/watchdog/exchange_watchdog.py†L43-L167】【F:app/services/autopilot_guard.py†L116-L145】
 * Chaos-флаги держите выключенными (`FEATURE_CHAOS=0`) на live, иначе будут искусственные сбои в адаптерах. 【F:.env.example†L63-L71】
-* Recon: `RECON_ENABLED`, `RECON_AUTO_HOLD` и `SHOW_RECON_STATUS` управляют сверкой позиций и видимостью виджета/бейджа. 【F:.env.example†L57-L61】【F:app/services/operator_dashboard.py†L539-L549】【F:app/services/recon_runner.py†L83-L114】
+* Recon: `RECON_ENABLED`, `ENABLE_RECON_HOLD` и `SHOW_RECON_STATUS` управляют сверкой позиций и видимостью виджета/бейджа. 【F:.env.example†L57-L61】【F:app/services/operator_dashboard.py†L539-L549】【F:app/services/recon_runner.py†L70-L114】
 
 ## Live Readiness Gate
 

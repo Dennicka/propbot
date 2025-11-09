@@ -345,6 +345,18 @@ class ChaosConfig(BaseModel):
 
 class ReconConfig(BaseModel):
     max_divergence: float = Field(0.0, ge=0.0)
+    diff_abs_usd_warn: float = Field(50.0, ge=0.0)
+    diff_abs_usd_crit: float = Field(100.0, ge=0.0)
+    diff_rel_warn: float = Field(0.05, ge=0.0)
+    diff_rel_crit: float = Field(0.1, ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate_thresholds(self) -> "ReconConfig":
+        if self.diff_abs_usd_crit < self.diff_abs_usd_warn:
+            raise ValueError("diff_abs_usd_crit must be >= diff_abs_usd_warn")
+        if self.diff_rel_crit < self.diff_rel_warn:
+            raise ValueError("diff_rel_crit must be >= diff_rel_warn")
+        return self
 
 
 class ReadinessConfig(BaseModel):

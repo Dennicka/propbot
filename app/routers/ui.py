@@ -52,6 +52,7 @@ from ..services.runtime import (
     set_mode,
     set_open_orders,
 )
+from ..services import runtime
 from ..services.runtime_badges import get_runtime_badges
 from ..chaos import injector as chaos_injector
 from ..services import approvals_store, portfolio, risk, risk_guard
@@ -750,11 +751,56 @@ async def hedge_positions(request: Request) -> dict:
     return await build_positions_snapshot(state, positions)
 
 
-def _coerce_float(value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+@router.get("/recon_status")
+def recon_status() -> dict[str, object]:
+    snapshot = runtime.get_reconciliation_status()
+    raw_diffs = snapshot.get("diffs")
+    diffs: list[dict[str, object]] = []
+    if isinstance(raw_diffs, list):
+        for entry in raw_diffs:
+            if not isinstance(entry, Mapping):
+                continue
+            kind = str(entry.get("kind") or "")
+            venue = str(entry.get("venue") or "")
+            symbol = entry.get("symbol")
+            local = _coerce_float(entry.get("local"), entry.get("ledger_qty"))
+            remote = _coerce_float(entry.get("remote"), entry.get("exch_qty"))
+            diff_abs = _coerce_float(entry.get("diff_abs"), entry.get("notional_usd"))
+            diff_rel = entry.get("diff_rel")
+            try:
+                diff_rel_value = float(diff_rel)
+            except (TypeError, ValueError):
+                diff_rel_value = None
+            severity = str(entry.get("severity") or "").upper()
+            record = {
+                "kind": kind,
+                "venue": venue,
+                "symbol": symbol,
+                "local": local,
+                "remote": remote,
+                "diff_abs": diff_abs,
+                "diff_rel": diff_rel_value,
+                "severity": severity,
+            }
+            diffs.append(record)
+    has_warn = bool(snapshot.get("has_warn"))
+    has_crit = bool(snapshot.get("has_crit"))
+    for entry in diffs:
+        severity = str(entry.get("severity") or "").upper()
+        if severity == "CRIT":
+            has_crit = True
+        elif severity == "WARN":
+            has_warn = True
+    return {"diffs": diffs, "has_warn": has_warn, "has_crit": has_crit}
+
+
+def _coerce_float(*values: Any) -> float:
+    for value in values:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
 
 
 async def _load_open_trades() -> list[dict[str, Any]]:
