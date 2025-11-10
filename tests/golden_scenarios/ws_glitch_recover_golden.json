@@ -1,0 +1,38 @@
+{
+  "name": "ws_glitch_recover_golden",
+  "initial_state": {
+    "balances": {
+      "USDT": "15000"
+    },
+    "positions": [
+      {"symbol": "BTCUSDT", "qty": "0", "avg_price": "0"}
+    ],
+    "control": {
+      "hold": false,
+      "safe_mode": false,
+      "auto_trade": true
+    },
+    "limits": {
+      "daily_loss_limit": "100",
+      "notional_cap": "6000"
+    }
+  },
+  "events": [
+    {"type": "market", "symbol": "BTCUSDT", "price": "29000"},
+    {"type": "trade", "symbol": "BTCUSDT", "side": "buy", "qty": "0.20", "price": "29000"},
+    {"type": "ws_glitch"},
+    {"type": "market", "symbol": "BTCUSDT", "price": "28900"},
+    {"type": "ws_recover", "safe_mode": false},
+    {"type": "market", "symbol": "BTCUSDT", "price": "29500"},
+    {"type": "trade", "symbol": "BTCUSDT", "side": "sell", "qty": "0.20", "price": "29500"}
+  ],
+  "expectations": {
+    "final_positions": {"BTCUSDT": "0"},
+    "hold": false,
+    "safe_mode": false,
+    "auto_trade": true,
+    "realized_pnl": {"min": "90", "max": "140"},
+    "daily_loss": {"breached": false},
+    "watchdog": {"recoveries": 1}
+  }
+}

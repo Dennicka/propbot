@@ -1,0 +1,36 @@
+{
+  "name": "scalp_ok_golden",
+  "initial_state": {
+    "balances": {
+      "USDT": "10000"
+    },
+    "positions": [
+      {"symbol": "BTCUSDT", "qty": "0", "avg_price": "0"},
+      {"symbol": "ETHUSDT", "qty": "0", "avg_price": "0"}
+    ],
+    "control": {
+      "hold": false,
+      "safe_mode": false,
+      "auto_trade": true
+    },
+    "limits": {
+      "daily_loss_limit": "50",
+      "notional_cap": "5000"
+    }
+  },
+  "events": [
+    {"type": "market", "symbol": "BTCUSDT", "price": "30000"},
+    {"type": "market", "symbol": "ETHUSDT", "price": "2000"},
+    {"type": "trade", "symbol": "BTCUSDT", "side": "buy", "qty": "0.10", "price": "30000"},
+    {"type": "market", "symbol": "BTCUSDT", "price": "30150"},
+    {"type": "trade", "symbol": "BTCUSDT", "side": "sell", "qty": "0.10", "price": "30150"}
+  ],
+  "expectations": {
+    "final_positions": {"BTCUSDT": "0", "ETHUSDT": "0"},
+    "hold": false,
+    "safe_mode": false,
+    "auto_trade": true,
+    "realized_pnl": {"min": "10", "max": "20"},
+    "daily_loss": {"breached": false}
+  }
+}
