@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,9 @@ from services.daily_reporter import load_latest_report
 
 
 __all__ = ["build_snapshot_payload", "create_snapshot"]
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 _SNAPSHOT_DIR_ENV = "SNAPSHOT_DIR"
@@ -85,8 +89,8 @@ def _safe_filename(timestamp: str) -> str:
 def _ensure_directory(path: Path) -> None:
     try:
         path.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("snapshot directory creation failed path=%s error=%s", path, exc)
 
 
 def _write_snapshot(path: Path, payload: Mapping[str, Any]) -> None:

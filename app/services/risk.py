@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,9 @@ from .runtime import (
     get_state,
 )
 from services import reconciler
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -189,8 +193,8 @@ def refresh_runtime_state(
     risk_alerts.evaluate_alerts()
     try:
         reconciler.reconcile(open_orders=open_orders_payload)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("risk reconciler failed: %s", exc)
     return state.risk
 
 

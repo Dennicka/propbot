@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from time import perf_counter
 from typing import Iterator
 
 from prometheus_client import Counter, Gauge, Histogram
+
+
+LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Metric definitions
@@ -138,20 +142,20 @@ def reset_for_tests() -> None:  # pragma: no cover - used only in tests
 
     try:
         SKIPPED_COUNTER._metrics.clear()  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.debug("failed to reset skipped counter error=%s", exc)
     try:
         WATCHDOG_OK_GAUGE._metrics.clear()  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.debug("failed to reset watchdog gauge error=%s", exc)
     for collector in (ORDER_CYCLE_HISTOGRAM, WS_GAP_HISTOGRAM):
         try:
             collector._sum.set(0.0)  # type: ignore[attr-defined]
             collector._count.set(0.0)  # type: ignore[attr-defined]
             for bucket in collector._buckets:  # type: ignore[attr-defined]
                 bucket.set(0.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("failed to reset slo histogram collector=%s error=%s", collector, exc)
     DAILY_LOSS_BREACHED_GAUGE.set(0.0)
     WS_GAP_HISTOGRAM.observe(0.0)
 

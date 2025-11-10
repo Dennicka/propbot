@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
@@ -8,6 +9,9 @@ from .. import ledger
 from ..broker.router import ExecutionRouter
 from . import risk
 from .runtime import get_state
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _ts_from_payload(value) -> datetime:
@@ -18,8 +22,8 @@ def _ts_from_payload(value) -> datetime:
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            LOGGER.debug("reconciler could not parse timestamp value=%s error=%s", value, exc)
     return datetime.now(timezone.utc)
 
 

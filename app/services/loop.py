@@ -317,7 +317,7 @@ class LoopController:
                 except asyncio.CancelledError:
                     raise
         except asyncio.CancelledError:
-            pass
+            LOGGER.debug("loop worker cancelled")
         except Exception as exc:  # pragma: no cover - defensive logging
             error = str(exc)
             loop_state = get_loop_state()

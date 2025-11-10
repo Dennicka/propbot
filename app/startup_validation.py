@@ -38,9 +38,9 @@ def _load_template_env_names() -> Set[str]:
             if not name:
                 continue
             names.add(name)
-    except OSError:
+    except OSError as exc:
         # Missing template is not fatal but reduces placeholder coverage.
-        pass
+        LOGGER.warning("startup_validation template read failed path=%s error=%s", template, exc)
     return names
 
 
@@ -106,10 +106,13 @@ def _collect_errors() -> list[str]:
         if not parent.exists():
             try:
                 parent.mkdir(parents=True, exist_ok=True)
-            except OSError:
+            except OSError as exc:
                 fatal(
                     f"{description}: каталог {parent} отсутствует и не создаётся. "
                     "Примонтируй volume с записью или укажи другой путь."
+                )
+                LOGGER.error(
+                    "startup_validation mkdir failed path=%s error=%s", parent, exc
                 )
                 return
         if not os.access(parent, os.W_OK | os.X_OK):
@@ -123,18 +126,23 @@ def _collect_errors() -> list[str]:
         try:
             with target.open("a", encoding="utf-8"):
                 pass
-        except OSError:
+        except OSError as exc:
             fatal(
                 f"{description}: {target} недоступен для записи. "
                 "Выстави права на запись или укажи другой путь."
+            )
+            LOGGER.error(
+                "startup_validation write probe failed path=%s error=%s", target, exc
             )
             return
         finally:
             if not existed_before:
                 try:
                     target.unlink()
-                except OSError:
-                    pass
+                except OSError as exc:
+                    LOGGER.warning(
+                        "startup_validation cleanup failed path=%s error=%s", target, exc
+                    )
 
     profile_cfg: ProfileConfig | None = None
     try:

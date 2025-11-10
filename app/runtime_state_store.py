@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Mapping
 
 
 _DEFAULT_RUNTIME_PATH = Path("data/runtime_state.json")
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def get_runtime_state_path() -> Path:
@@ -45,14 +49,14 @@ def write_runtime_payload(payload: Mapping[str, Any]) -> None:
     path = get_runtime_state_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("runtime_state_store parent creation failed path=%s error=%s", path.parent, exc)
     serialisable = dict(payload)
     try:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(serialisable, handle, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("runtime_state_store write failed path=%s error=%s", path, exc)
 
 
 def merge_runtime_payload(updates: Mapping[str, Any]) -> dict[str, Any]:

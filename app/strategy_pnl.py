@@ -8,6 +8,7 @@ implementation simple while still surfacing short-term drawdown trends.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -18,6 +19,9 @@ from typing import Any
 
 _DEFAULT_STATE_PATH = Path("data/strategy_pnl_state.json")
 _STATE_LOCK = threading.RLock()
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _get_state_path() -> Path:
@@ -92,13 +96,13 @@ def _write_state_unlocked(state: Mapping[str, Mapping[str, Any]]) -> None:
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.debug("strategy_pnl parent creation failed path=%s error=%s", path.parent, exc)
     try:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(serialisable, handle, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.debug("strategy_pnl write failed path=%s error=%s", path, exc)
 
 
 def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -217,8 +221,8 @@ def reset_state_for_tests() -> None:
         path = _get_state_path()
         try:
             path.unlink()
-        except OSError:
-            pass
+        except OSError as exc:
+            LOGGER.debug("strategy_pnl reset failed path=%s error=%s", path, exc)
 
 
 __all__ = ["record_fill", "snapshot", "snapshot_all", "reset_state_for_tests"]

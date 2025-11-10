@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from dataclasses import asdict
@@ -21,6 +22,9 @@ from ..services.runtime import (
 from ..strategy_budget import get_strategy_budget_manager
 from ..utils.operators import resolve_operator_identity
 from positions import list_open_positions
+
+
+LOGGER = logging.getLogger(__name__)
 
 SNAPSHOT_LIMIT = 50
 SNAPSHOT_VERSION = 1
@@ -151,8 +155,8 @@ def _resolve_snapshot_path() -> Path:
     directory = SNAPSHOT_DIR
     try:
         directory.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("incident snapshot directory creation failed path=%s error=%s", directory, exc)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     unique = uuid.uuid4().hex[:8]
     return directory / f"incident_{ts}_{unique}.json"

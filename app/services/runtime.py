@@ -124,12 +124,17 @@ def send_notifier_alert(
 
     try:
         from ..opsbot.notifier import emit_alert
-    except Exception:
+    except Exception as exc:
+        LOGGER.warning(
+            "ops notifier import failed kind=%s error=%s", kind, exc
+        )
         return
     try:
         emit_alert(kind=kind, text=text, extra=extra or None)
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning(
+            "ops notifier emit failed kind=%s error=%s", kind, exc
+        )
 
 
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
@@ -142,8 +147,10 @@ def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
     if base is not None:
         try:
             mapping["__default__"] = float(base)
-        except ValueError:
-            pass
+        except ValueError as exc:
+            LOGGER.debug(
+                "invalid default limit value name=%s value=%s error=%s", name, base, exc
+            )
     prefix = f"{name}__"
     for key, value in os.environ.items():
         if not key.startswith(prefix):
@@ -2067,8 +2074,8 @@ def reset_for_tests() -> None:
         from ..strategy_budget import get_strategy_budget_manager
 
         get_strategy_budget_manager().reset_all_usage()
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.warning("strategy budget reset failed: %s", exc)
 
 
 def control_as_dict() -> Dict[str, object]:
@@ -2828,13 +2835,21 @@ def _load_persisted_state(state: RuntimeState) -> None:
             max_orders_value = limits_payload.get("max_orders_per_min")
             try:
                 safety.limits.max_orders_per_min = max(0, int(float(max_orders_value)))
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                LOGGER.debug(
+                    "invalid safety limit value field=max_orders_per_min value=%s error=%s",
+                    max_orders_value,
+                    exc,
+                )
             max_cancels_value = limits_payload.get("max_cancels_per_min")
             try:
                 safety.limits.max_cancels_per_min = max(0, int(float(max_cancels_value)))
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                LOGGER.debug(
+                    "invalid safety limit value field=max_cancels_per_min value=%s error=%s",
+                    max_cancels_value,
+                    exc,
+                )
         counters_payload = safety_payload.get("counters")
         if isinstance(counters_payload, Mapping):
             orders_counter = counters_payload.get("orders_placed_last_min")
@@ -2842,13 +2857,21 @@ def _load_persisted_state(state: RuntimeState) -> None:
                 safety.counters.orders_placed_last_min = max(
                     0, int(float(orders_counter))
                 )
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                LOGGER.debug(
+                    "invalid safety counter field=orders_placed_last_min value=%s error=%s",
+                    orders_counter,
+                    exc,
+                )
             cancels_counter = counters_payload.get("cancels_last_min")
             try:
                 safety.counters.cancels_last_min = max(0, int(float(cancels_counter)))
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                LOGGER.debug(
+                    "invalid safety counter field=cancels_last_min value=%s error=%s",
+                    cancels_counter,
+                    exc,
+                )
         runaway_snapshot = safety_payload.get("runaway_guard")
         if isinstance(runaway_snapshot, Mapping):
             safety.runaway_guard.update_from_snapshot(runaway_snapshot)
@@ -2939,8 +2962,12 @@ def _load_persisted_state(state: RuntimeState) -> None:
         if daily_loss_value is not None:
             try:
                 limits.max_daily_loss_usdt = float(daily_loss_value)
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as exc:
+                LOGGER.debug(
+                    "invalid reconciliation snapshot field=%s error=%s",
+                    key,
+                    exc,
+                )
 
 
 def _enforce_safe_start(state: RuntimeState) -> None:

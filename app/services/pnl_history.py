@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime, timezone
@@ -12,6 +13,9 @@ from positions import list_positions
 
 from ..services import portfolio
 from pnl_history_store import append_snapshot
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 _DEFAULT_MAX_HISTORY = 288
@@ -138,8 +142,8 @@ async def ensure_snapshot_background(*, reason: str | None = None) -> None:
     async def _task() -> None:
         try:
             await record_snapshot(reason=reason)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.exception("background pnl snapshot failed: %s", exc)
 
     try:
         loop = asyncio.get_running_loop()

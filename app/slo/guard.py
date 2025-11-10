@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Mapping, MutableMapping
 
 from ..services import runtime
+
+
+LOGGER = logging.getLogger(__name__)
 
 __all__ = ["apply_critical_slo_auto_hold", "build_default_context"]
 
@@ -84,8 +88,10 @@ def _resolve_threshold(config: Any, key: str, env_var: str, default: float) -> f
     if override is not None:
         try:
             return float(override)
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.debug(
+                "invalid slo threshold key=%s value=%s error=%s", key, override, exc
+            )
     return _env_float(env_var, default)
 
 

@@ -58,8 +58,8 @@ def _coerce_timestamp(value: object) -> str:
     if isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
-        except (OverflowError, OSError, ValueError):
-            pass
+        except (OverflowError, OSError, ValueError) as exc:
+            LOGGER.debug("audit log timestamp coercion failed value=%s error=%s", value, exc)
     return datetime.now(timezone.utc).isoformat()
 
 
