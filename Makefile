@@ -39,6 +39,10 @@ test:
 golden-check:
 	PYTHONPATH=. python -m app.cli_golden check
 
+# Acceptance targets:
+#   make acceptance_smoke   → quick smoke tests in CI/local env
+#   make acceptance_trading → trading profile acceptance scenario
+#   make acceptance_chaos   → chaos / resilience flows suite
 acceptance_smoke:
 	$(PYTEST) -q tests/acceptance/test_smoke.py
 
@@ -56,16 +60,16 @@ smoke_health:
 	$(PYTEST) -q tests/acceptance/test_health_smoke.py
 
 run:
-$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+	$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
 
 run-paper:
-$(PY) -m app.cli run-profile paper
+	$(PY) -m app.cli run-profile paper
 
 run-testnet:
-$(PY) -m app.cli run-profile testnet
+	$(PY) -m app.cli run-profile testnet
 
 run-live:
-$(PY) -m app.cli run-profile live
+	$(PY) -m app.cli run-profile live
 
 dryrun.once:
 	$(PY) -m app.cli exec --profile paper
