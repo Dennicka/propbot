@@ -28,6 +28,13 @@ from ..util.venues import VENUE_ALIASES
 LOGGER = logging.getLogger(__name__)
 
 
+def _maybe_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _feature_flag_enabled(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -185,10 +192,14 @@ class SmartRouter:
             if isinstance(payload, Mapping):
                 for key in ("available_balance", "available", "cash_available"):
                     if key in payload:
-                        try:
-                            snapshot[canonical] = float(payload.get(key) or 0.0)
-                        except (TypeError, ValueError):  # pragma: no cover - defensive
-                            pass
+                        value = _maybe_float(payload.get(key))
+                        if value is not None:
+                            snapshot[canonical] = value
+                        else:  # pragma: no cover - defensive
+                            LOGGER.debug(
+                                "failed to parse liquidity balance",
+                                extra={"venue": canonical, "key": key},
+                            )
                         break
         return snapshot
 

@@ -16,6 +16,7 @@ import httpx
 from .base import Broker, CancelAllResult
 from .. import ledger
 from ..metrics.observability import record_order_error
+from ..secrets_store import get_secrets_store
 
 
 LOGGER = logging.getLogger(__name__)
@@ -41,6 +42,20 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _store_credentials() -> dict[str, str | None]:
+    try:
+        store = get_secrets_store()
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.debug("failed to load secrets store", extra={"error": str(exc)})
+        return {}
+
+    for alias in ("binance_um", "binance-um", "binance"):
+        credentials = store.get_exchange_credentials(alias)
+        if any(credentials.values()):
+            return credentials
+    return {}
+
+
 def _abs_nonzero(value: Any) -> float:
     numeric = _float(value, default=0.0)
     if abs(numeric) <= 1e-12:
@@ -63,7 +78,7 @@ def _order_error_reason(exc: Exception) -> str:
         try:
             return f"http_{int(status)}"
         except (TypeError, ValueError):  # pragma: no cover - defensive
-            pass
+            LOGGER.debug("failed to normalise status code", extra={"error": str(status)})
     code = getattr(exc, "code", None)
     if isinstance(code, str) and code:
         return code.lower()
@@ -98,8 +113,13 @@ class _BaseBinanceBroker(Broker):
         env_base_url = os.getenv(base_url_env)
         self.base_url = base_url or env_base_url or default_base_url
         if credentials is None:
-            api_key = os.getenv(api_key_env)
-            api_secret = os.getenv(api_secret_env)
+            store_credentials = _store_credentials()
+            api_key = store_credentials.get("key")
+            api_secret = store_credentials.get("secret")
+            if not api_key:
+                api_key = os.getenv(api_key_env)
+            if not api_secret:
+                api_secret = os.getenv(api_secret_env)
             if api_key and api_secret:
                 credentials = _Credentials(api_key=api_key, api_secret=api_secret)
         self.credentials = credentials

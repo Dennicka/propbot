@@ -43,6 +43,13 @@ MAX_ORDER_ATTEMPTS = 3
 LOGGER = logging.getLogger(__name__)
 
 
+def _maybe_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _batch_id_for_orders(orders: Iterable[Mapping[str, object]]) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     hasher = hashlib.sha256()
@@ -263,15 +270,13 @@ class ExecutionRouter:
                 context_qty = order_context.get("qty")
                 context_price = order_context.get("price")
                 if context_qty is not None:
-                    try:
-                        qty = float(context_qty)
-                    except (TypeError, ValueError):
-                        pass
+                    converted_qty = _maybe_float(context_qty)
+                    if converted_qty is not None:
+                        qty = converted_qty
                 if context_price is not None:
-                    try:
-                        price_to_use = float(context_price)
-                    except (TypeError, ValueError):
-                        pass
+                    converted_price = _maybe_float(context_price)
+                    if converted_price is not None:
+                        price_to_use = converted_price
                 if self._watchdog.should_block_orders(venue):
                     raise HoldActiveError("WATCHDOG_DOWN")
                 self._watchdog.record_order_submit(venue)

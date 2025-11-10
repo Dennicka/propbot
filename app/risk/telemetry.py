@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from threading import Lock
 from typing import Dict
@@ -16,6 +17,7 @@ _RISK_SKIP_COUNTER = Counter(
 
 _lock = Lock()
 _skip_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+LOGGER = logging.getLogger(__name__)
 
 
 def _normalise_strategy(strategy: str | None) -> str:
@@ -55,9 +57,9 @@ def reset_risk_skip_metrics_for_tests() -> None:  # pragma: no cover - test help
         _skip_counts.clear()
     try:
         _RISK_SKIP_COUNTER._metrics.clear()  # type: ignore[attr-defined]
-    except Exception:
+    except Exception as exc:
         # Clearing is best-effort; individual sample values are reset via inc() tests.
-        pass
+        LOGGER.debug("failed to reset risk skip metrics", extra={"error": str(exc)})
 
 
 __all__ = [

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Iterable, Set
@@ -14,6 +15,9 @@ from .profile_config import (
     load_profile_config,
 )
 from .secrets_store import SecretsStore
+
+
+LOGGER = logging.getLogger(__name__)
 
 _PLACEHOLDER_TOKENS = ("change-me", "changeme", "todo", "replace-me", "fill-me")
 
@@ -60,7 +64,9 @@ def _collect_errors() -> list[str]:
     errors: list[str] = []
 
     def fatal(message: str) -> None:
-        errors.append(f"[FATAL CONFIG] {message}")
+        formatted = f"[FATAL CONFIG] {message}"
+        LOGGER.error(formatted)
+        errors.append(formatted)
 
     def require_env(name: str, *, hint: str) -> None:
         if not _is_truthy(os.getenv(name)):

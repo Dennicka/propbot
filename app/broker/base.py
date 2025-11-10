@@ -49,19 +49,27 @@ class Broker(ABC):
         fee: float = 0.0,
         idemp_key: str | None = None,
     ) -> Dict[str, object]:
-        raise NotImplementedError
+        """Submit an order to the broker and return a serialisable payload."""
+
+        ...
 
     @abstractmethod
     async def cancel(self, *, venue: str, order_id: int) -> None:
-        raise NotImplementedError
+        """Cancel a single order on the broker."""
+
+        ...
 
     @abstractmethod
     async def positions(self, *, venue: str) -> Dict[str, object]:
-        raise NotImplementedError
+        """Return the current positions for ``venue`` in broker-native format."""
+
+        ...
 
     @abstractmethod
     async def balances(self, *, venue: str) -> Dict[str, object]:
-        raise NotImplementedError
+        """Return wallet balances for ``venue`` in broker-native format."""
+
+        ...
 
     @abstractmethod
     async def get_positions(self) -> List[Dict[str, object]]:

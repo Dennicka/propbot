@@ -48,6 +48,13 @@ def _coerce_float(value: object) -> float:
         return 0.0
 
 
+def _maybe_float(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 _FILLED_STATUSES = {"FILLED", "DONE", "COMPLETED", "CLOSED"}
 _PARTIAL_STATUSES = {"PARTIALLY_FILLED", "PARTIAL", "PARTIAL_FILL"}
 _CANCELED_STATUSES = {"CANCELED", "CANCELLED", "CANCELLED_BY_USER", "USER_CANCELED"}
@@ -137,8 +144,11 @@ def _resolve_gate(ctx: object) -> object | None:
     if callable(getter):
         try:
             return getter()
-        except TypeError:
-            pass
+        except TypeError as exc:
+            LOGGER.debug(
+                "pre-trade gate getter failed",
+                extra={"error": str(exc), "scope": type(runtime_scope).__name__},
+            )
     return None
 
 
