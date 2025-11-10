@@ -21,6 +21,15 @@ from ..metrics.cache import record_cache_observation
 LOGGER = logging.getLogger(__name__)
 
 
+def _make_etag(body: bytes) -> str:
+    """Create a deterministic, collision-resistant ETag for cached content."""
+    try:
+        digest = hashlib.blake2b(body, digest_size=16)
+    except TypeError:  # pragma: no cover - legacy Python without keyword-only args
+        digest = hashlib.blake2b(body, 16)  # type: ignore[arg-type]
+    return digest.hexdigest()
+
+
 CacheVary = Callable[[Request, tuple[Any, ...], dict[str, Any]], Any]
 
 
@@ -269,11 +278,7 @@ def cache_response(
             result = await fn(*args, **kwargs)
             response = await _ensure_response(result)
             body = await _read_response_body(response)
-            try:
-                digest = hashlib.md5(body, usedforsecurity=False)
-            except TypeError:  # pragma: no cover - Python without usedforsecurity
-                digest = hashlib.md5(body)
-            etag = digest.hexdigest()
+            etag = _make_etag(body)
             headers = dict(response.headers)
             cache_control_value = None
             for key, value in list(headers.items()):
