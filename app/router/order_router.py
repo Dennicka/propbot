@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Mapping, Tuple
 
 from ..audit_log import log_operator_action
+from ..execution.order_state import OrderState, OrderStatus, apply_exchange_update
 from .. import ledger
 from ..golden.logger import get_golden_logger
 from ..metrics import (
@@ -24,6 +25,7 @@ from ..persistence import order_store
 from ..runtime import locks
 from ..services import runtime
 from ..utils.identifiers import generate_request_id
+from .adapter import generate_client_order_id
 from ..risk.exposure_caps import (
     check_open_allowed,
     collect_snapshot,
@@ -92,47 +94,66 @@ def _extract_avg_price(payload: Mapping[str, object]) -> float | None:
     return None
 
 
+_INTENT_TO_ORDER_STATUS = {
+    order_store.OrderIntentState.NEW: OrderStatus.NEW,
+    order_store.OrderIntentState.PENDING: OrderStatus.PENDING,
+    order_store.OrderIntentState.SENT: OrderStatus.PENDING,
+    order_store.OrderIntentState.ACKED: OrderStatus.ACK,
+    order_store.OrderIntentState.PARTIAL: OrderStatus.PARTIAL,
+    order_store.OrderIntentState.FILLED: OrderStatus.FILLED,
+    order_store.OrderIntentState.CANCELED: OrderStatus.CANCELED,
+    order_store.OrderIntentState.REJECTED: OrderStatus.REJECTED,
+    order_store.OrderIntentState.EXPIRED: OrderStatus.EXPIRED,
+    order_store.OrderIntentState.REPLACED: OrderStatus.CANCELED,
+}
+
+_ORDER_STATUS_TO_INTENT = {
+    OrderStatus.NEW: order_store.OrderIntentState.NEW,
+    OrderStatus.PENDING: order_store.OrderIntentState.PENDING,
+    OrderStatus.ACK: order_store.OrderIntentState.ACKED,
+    OrderStatus.PARTIAL: order_store.OrderIntentState.PARTIAL,
+    OrderStatus.FILLED: order_store.OrderIntentState.FILLED,
+    OrderStatus.CANCELED: order_store.OrderIntentState.CANCELED,
+    OrderStatus.REJECTED: order_store.OrderIntentState.REJECTED,
+    OrderStatus.EXPIRED: order_store.OrderIntentState.EXPIRED,
+}
+
+
 def _resolve_remote_state(
     intent: order_store.OrderIntent,
     payload: Mapping[str, object],
-) -> tuple[order_store.OrderIntentState, float, float | None, float | None]:
-    status_text = str(
-        payload.get("status")
-        or payload.get("state")
-        or payload.get("order_status")
-        or ""
-    ).upper()
-    filled_qty = _extract_filled_qty(payload)
-    remaining_qty = _extract_remaining_qty(payload)
-    avg_price = _extract_avg_price(payload)
-    qty = float(intent.qty)
-
-    if status_text in _FILLED_STATUSES:
-        target_state = order_store.OrderIntentState.FILLED
-    elif status_text in _CANCELED_STATUSES:
-        target_state = order_store.OrderIntentState.CANCELED
-    elif status_text in _REJECTED_STATUSES:
-        target_state = order_store.OrderIntentState.REJECTED
-    elif status_text in _EXPIRED_STATUSES:
-        target_state = order_store.OrderIntentState.EXPIRED
-    elif status_text in _PARTIAL_STATUSES:
-        target_state = order_store.OrderIntentState.PARTIAL
+) -> tuple[
+    order_store.OrderIntentState,
+    float,
+    float | None,
+    float | None,
+    str | None,
+]:
+    current_state = OrderState(
+        status=_INTENT_TO_ORDER_STATUS.get(intent.state, OrderStatus.NEW),
+        qty=float(intent.qty or 0.0),
+        cum_filled=float(intent.filled_qty or 0.0),
+        avg_price=float(intent.avg_fill_price) if intent.avg_fill_price else None,
+    )
+    status_keys = ("status", "state", "order_status")
+    if not any(key in payload for key in status_keys) and not current_state.is_terminal():
+        enriched = dict(payload)
+        enriched["status"] = OrderStatus.ACK.value
+        payload_for_update: Mapping[str, object] = enriched
     else:
-        target_state = order_store.OrderIntentState.ACKED
-
-    if qty > 0:
-        if filled_qty >= qty - 1e-6:
-            target_state = order_store.OrderIntentState.FILLED
-        elif filled_qty > 0 and target_state == order_store.OrderIntentState.ACKED:
-            target_state = order_store.OrderIntentState.PARTIAL
-
-    if remaining_qty is None:
-        if target_state == order_store.OrderIntentState.FILLED:
-            remaining_qty = 0.0
-        elif qty > 0:
-            remaining_qty = max(qty - filled_qty, 0.0)
-
-    return target_state, filled_qty, remaining_qty, avg_price
+        payload_for_update = payload
+    new_state = apply_exchange_update(current_state, payload_for_update)
+    target_state = _ORDER_STATUS_TO_INTENT.get(
+        new_state.status, order_store.OrderIntentState.ACKED
+    )
+    filled_qty = new_state.cum_filled
+    remaining_qty: float | None
+    if new_state.qty > 0:
+        remaining_qty = max(new_state.qty - new_state.cum_filled, 0.0)
+    else:
+        remaining_qty = None
+    avg_price = new_state.avg_price
+    return target_state, filled_qty, remaining_qty, avg_price, new_state.last_event
 
 
 def _resolve_gate(ctx: object) -> object | None:
@@ -541,17 +562,32 @@ class OrderRouter:
                 raise PretradeValidationError(reason_text, details=order_payload)
 
         intent_key = intent_id or request_id or generate_request_id()
-        client_request_id = request_id or intent_key
         async with locks.intent_lock(intent_key):
             prev_state: order_store.OrderIntentState | None = None
             prev_request_id: str | None = None
             prev_broker_order_id: str | None = None
+            created_ts_hint: float | None = None
             with order_store.session_scope() as session:
                 existing = order_store.load_intent(session, intent_key)
                 if existing is not None:
                     prev_state = existing.state
                     prev_request_id = existing.request_id
                     prev_broker_order_id = existing.broker_order_id
+                    if existing.created_ts is not None:
+                        created_ts_hint = existing.created_ts.timestamp()
+                if request_id:
+                    client_request_id = request_id
+                elif prev_request_id:
+                    client_request_id = prev_request_id
+                else:
+                    client_request_id = generate_client_order_id(
+                        strategy=strategy,
+                        venue=venue,
+                        symbol=symbol,
+                        side=side,
+                        timestamp=created_ts_hint,
+                        nonce=intent_key,
+                    )
                 intent = order_store.ensure_order_intent(
                     session,
                     intent_id=intent_key,
@@ -965,9 +1001,26 @@ class OrderRouter:
                         continue
                     if matched_request_id:
                         order_store.ensure_active_request(session, current, matched_request_id)
-                    target_state, filled_qty, remaining_qty, avg_price = _resolve_remote_state(
-                        current, info
-                    )
+                    (
+                        target_state,
+                        filled_qty,
+                        remaining_qty,
+                        avg_price,
+                        lifecycle_event,
+                    ) = _resolve_remote_state(current, info)
+                    if lifecycle_event == "duplicate_fill_ignored":
+                        LOGGER.info(
+                            "duplicate fill ignored",
+                            extra={
+                                "event": lifecycle_event,
+                                "intent_id": intent_id,
+                                "request_id": matched_request_id or request_candidates[0],
+                                "broker_order_id": broker_order_id or current.broker_order_id,
+                                "venue": venue,
+                                "symbol": symbol,
+                                "fill_id": info.get("fill_id") or info.get("trade_id"),
+                            },
+                        )
                     try:
                         updated_intent = order_store.update_intent_state(
                             session,
