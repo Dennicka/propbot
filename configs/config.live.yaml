@@ -103,6 +103,11 @@ execution:
     max_retries: 3
     backoff_sec: [1, 2, 5]
 recon:
+  enabled: true
+  interval_sec: 15
+  warn_notional_usd: 5.0
+  critical_notional_usd: 25.0
+  clear_after_ok_runs: 3
   max_divergence: 0.0
   diff_abs_usd_warn: 50.0
   diff_abs_usd_crit: 200.0

@@ -718,6 +718,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
             "success_rate_1h": None,
         }
     snapshot["freeze"] = get_freeze_registry().snapshot()
+    snapshot["recon"] = _recon_overview(safety_snapshot)
     snapshot["partial_rebalance"] = _partial_rebalance_summary()
     snapshot["partial_hedge"] = get_partial_hedge_status()
     snapshot["autopilot"] = state.autopilot.as_dict()
@@ -793,4 +794,41 @@ def get_status_slo() -> Dict[str, object]:
         "partial_rebalance": snapshot.get("partial_rebalance"),
         "partial_hedge": snapshot.get("partial_hedge"),
     }
+
+
+def _recon_overview(safety_snapshot: Mapping[str, object]) -> Dict[str, object]:
+    payload = safety_snapshot.get("reconciliation")
+    if not isinstance(payload, Mapping):
+        payload = {}
+    worst = str(payload.get("state") or payload.get("status") or "UNKNOWN").upper()
+    last_ts = _coerce_last_ts(payload.get("last_ts") or payload.get("last_checked"))
+    auto_hold = bool(payload.get("auto_hold"))
+    if safety_snapshot.get("hold_active"):
+        reason = str(safety_snapshot.get("hold_reason") or "")
+        if reason.upper().startswith("RECON_DIVERGENCE"):
+            auto_hold = True
+    return {
+        "worst_state": worst,
+        "last_ts": last_ts,
+        "auto_hold": auto_hold,
+    }
+
+
+def _coerce_last_ts(raw: object) -> float | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, str):
+        try:
+            return float(raw)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+            return parsed.timestamp()
+    if isinstance(raw, datetime):
+        return raw.timestamp()
+    return None
 
