@@ -345,25 +345,11 @@ class ChaosConfig(BaseModel):
 
 class ReconConfig(BaseModel):
     enabled: bool = Field(True)
-    interval_sec: float = Field(15.0, ge=0.5)
-    warn_notional_usd: float = Field(5.0, ge=0.0)
-    critical_notional_usd: float = Field(25.0, ge=0.0)
-    clear_after_ok_runs: int = Field(3, ge=1)
-    max_divergence: float = Field(0.0, ge=0.0)
-    diff_abs_usd_warn: float = Field(50.0, ge=0.0)
-    diff_abs_usd_crit: float = Field(100.0, ge=0.0)
-    diff_rel_warn: float = Field(0.05, ge=0.0)
-    diff_rel_crit: float = Field(0.1, ge=0.0)
-
-    @model_validator(mode="after")
-    def _validate_thresholds(self) -> "ReconConfig":
-        if self.diff_abs_usd_crit < self.diff_abs_usd_warn:
-            raise ValueError("diff_abs_usd_crit must be >= diff_abs_usd_warn")
-        if self.diff_rel_crit < self.diff_rel_warn:
-            raise ValueError("diff_rel_crit must be >= diff_rel_warn")
-        if self.critical_notional_usd < self.warn_notional_usd:
-            raise ValueError("critical_notional_usd must be >= warn_notional_usd")
-        return self
+    interval_sec: float = Field(20.0, ge=0.5)
+    epsilon_position: float = Field(0.0001, ge=0.0)
+    epsilon_balance: float = Field(0.5, ge=0.0)
+    epsilon_notional: float = Field(5.0, ge=0.0)
+    auto_hold_on_critical: bool = Field(True)
 
 
 class ReadinessConfig(BaseModel):

@@ -111,14 +111,10 @@ execution:
 recon:
   enabled: true
   interval_sec: 20
-  warn_notional_usd: 5.0
-  critical_notional_usd: 25.0
-  clear_after_ok_runs: 3
-  max_divergence: 0.0
-  diff_abs_usd_warn: 100.0
-  diff_abs_usd_crit: 500.0
-  diff_rel_warn: 0.02
-  diff_rel_crit: 0.05
+  epsilon_position: 0.0001
+  epsilon_balance: 0.5
+  epsilon_notional: 5.0
+  auto_hold_on_critical: true
 readiness:
   startup_timeout_sec: 120
 status_thresholds_file: status_thresholds.yaml

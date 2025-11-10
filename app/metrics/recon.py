@@ -8,8 +8,28 @@ __all__ = [
     "RECON_DIFF_NOTIONAL_GAUGE",
     "RECON_STATUS_GAUGE",
     "RECON_AUTO_HOLD_COUNTER",
+    "RECON_ISSUES_TOTAL",
+    "RECON_LAST_RUN_TS",
+    "RECON_LAST_STATUS",
     "PNL_LEDGER_REALIZED_TODAY",
 ]
+
+RECON_ISSUES_TOTAL = Counter(
+    "propbot_recon_issues_total",
+    "Count of reconciliation issues grouped by kind and severity.",
+    ("kind", "code", "severity"),
+)
+
+RECON_LAST_RUN_TS = Gauge(
+    "propbot_recon_last_run_ts",
+    "Unix timestamp of the last completed reconciliation run.",
+)
+
+RECON_LAST_STATUS = Gauge(
+    "propbot_recon_last_status",
+    "Latest reconciliation status classification.",
+    ("status",),
+)
 
 RECON_DIFF_NOTIONAL_GAUGE = Gauge(
     "propbot_recon_diff_notional_usd",
@@ -39,4 +59,7 @@ for venue in ("unknown",):  # pre-warm default labels for exporters
         RECON_DIFF_NOTIONAL_GAUGE.labels(venue=venue, symbol="UNKNOWN", status=status).set(0.0)
 
 PNL_LEDGER_REALIZED_TODAY.set(0.0)
+RECON_LAST_RUN_TS.set(0.0)
+for status in ("OK", "WARN", "CRITICAL"):
+    RECON_LAST_STATUS.labels(status=status).set(1.0 if status == "OK" else 0.0)
 
