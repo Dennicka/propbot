@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Dict, List, Mapping, Tuple
 
 from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
 from .partial_hedge_runner import get_partial_hedge_status
 from ..health.account_health import get_account_health
 from ..utils import redact_sensitive_data
+from ..ledger import build_ledger_from_history
 from ..version import APP_VERSION
 from ..watchdog.broker_watchdog import get_broker_watchdog
 from positions import list_open_positions
@@ -627,6 +629,43 @@ def _score(status: str) -> float:
     }.get(status, 0.0)
 
 
+def _build_pnl_overview(state: RuntimeState, now: datetime) -> Dict[str, float]:
+    ctx = getattr(state, "ledger", None)
+    default = {"today_net_usd": 0.0, "last_7d_net_usd": 0.0, "realized_total_usd": 0.0}
+    try:
+        ledger_obj = build_ledger_from_history(ctx, None)
+    except Exception:  # pragma: no cover - defensive
+        return default
+    try:
+        snapshots = ledger_obj.daily_snapshots()
+    except AttributeError:
+        return default
+    if not snapshots:
+        return default
+    today_key = now.date()
+    today_net = Decimal("0")
+    last_7d_net = Decimal("0")
+    realized_total = Decimal("0")
+    for snapshot in snapshots:
+        date_value = getattr(snapshot, "date", None)
+        try:
+            snapshot_date = datetime.fromisoformat(str(date_value)).date()
+        except ValueError:
+            continue
+        net_value = getattr(snapshot, "net_pnl", Decimal("0"))
+        realized_total += getattr(snapshot, "realized_pnl", Decimal("0"))
+        if snapshot_date == today_key:
+            today_net += net_value
+        delta_days = (today_key - snapshot_date).days
+        if 0 <= delta_days < 7:
+            last_7d_net += net_value
+    return {
+        "today_net_usd": float(today_net),
+        "last_7d_net_usd": float(last_7d_net),
+        "realized_total_usd": float(realized_total),
+    }
+
+
 def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     now = datetime.now(timezone.utc)
     skew_value = _evaluate_clock_skew(state)
@@ -735,6 +774,7 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     snapshot["watchdog"] = get_broker_watchdog().snapshot()
     snapshot["account_health"] = get_account_health()
     snapshot["exposure_caps"] = build_exposure_caps_status(state.config.data)
+    snapshot["pnl_overview"] = _build_pnl_overview(state, now)
     resolver_state = getattr(state.execution, "stuck_resolver", None)
     if resolver_state and bool(getattr(resolver_state, "enabled", False)):
         try:

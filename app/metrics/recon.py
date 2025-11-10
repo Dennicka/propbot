@@ -8,6 +8,7 @@ __all__ = [
     "RECON_DIFF_NOTIONAL_GAUGE",
     "RECON_STATUS_GAUGE",
     "RECON_AUTO_HOLD_COUNTER",
+    "PNL_LEDGER_REALIZED_TODAY",
 ]
 
 RECON_DIFF_NOTIONAL_GAUGE = Gauge(
@@ -27,8 +28,15 @@ RECON_AUTO_HOLD_COUNTER = Counter(
     "Number of times reconciliation triggered an automatic HOLD.",
 )
 
+PNL_LEDGER_REALIZED_TODAY = Gauge(
+    "pnl_ledger_realized_today_usd",
+    "Realised PnL recorded by the ledger for the current UTC day.",
+)
+
 for venue in ("unknown",):  # pre-warm default labels for exporters
     for status in ("OK", "WARN", "CRITICAL"):
         RECON_STATUS_GAUGE.labels(venue=venue, status=status).set(1.0 if status == "OK" else 0.0)
         RECON_DIFF_NOTIONAL_GAUGE.labels(venue=venue, symbol="UNKNOWN", status=status).set(0.0)
+
+PNL_LEDGER_REALIZED_TODAY.set(0.0)
 
