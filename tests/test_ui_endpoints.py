@@ -670,7 +670,9 @@ def test_system_status_exposes_recon_block(monkeypatch, client) -> None:
         "worst_state": "CRITICAL",
         "last_ts": 123.0,
         "last_run_ts": 123.0,
+        "last_severity": "CRITICAL",
         "auto_hold": True,
+        "drift_count": 1,
         "issues_last_sample": [
             {
                 "kind": "POSITION",
@@ -703,4 +705,6 @@ def test_system_status_exposes_recon_block(monkeypatch, client) -> None:
     response = client.get("/api/ui/system_status")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["recon"] == recon_block
+    expected = dict(recon_block)
+    expected["enabled"] = True
+    assert payload["recon"] == expected

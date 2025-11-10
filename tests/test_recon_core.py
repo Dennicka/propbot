@@ -1,90 +1,99 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
-
-from app.recon import core
+from app.recon.core import detect_balance_drifts, detect_order_drifts, detect_position_drifts
 
 
-@pytest.fixture(autouse=True)
-def _reset_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = core._ReconConfig(  # type: ignore[attr-defined]
-        epsilon_position=Decimal("0.0001"),
-        epsilon_balance=Decimal("0.5"),
-        epsilon_notional=Decimal("5"),
-        auto_hold_on_critical=True,
+def _cfg(
+    *,
+    balance_warn: str = "10",
+    balance_critical: str = "100",
+    position_warn: str = "0.001",
+    position_critical: str = "0.01",
+    order_critical_missing: bool = True,
+):
+    return SimpleNamespace(
+        cfg=SimpleNamespace(
+            recon=SimpleNamespace(
+                balance_warn_usd=Decimal(balance_warn),
+                balance_critical_usd=Decimal(balance_critical),
+                position_size_warn=Decimal(position_warn),
+                position_size_critical=Decimal(position_critical),
+                order_critical_missing=order_critical_missing,
+            )
+        )
     )
-    monkeypatch.setattr(core, "_CONFIG_OVERRIDE", config)
 
 
-def test_compare_positions_detects_mismatch() -> None:
-    remote = {
-        ("binance-um", "BTCUSDT"): {"qty": Decimal("1.5")},
-    }
-    local = {}
+def test_detect_balance_drifts_severity_thresholds() -> None:
+    cfg = _cfg(balance_warn="5", balance_critical="15")
+    local = [{"venue": "binance", "asset": "USDT", "total": Decimal("100.0")}]
+    remote_ok = [{"venue": "binance", "asset": "USDT", "total": Decimal("103.0")}]
+    remote_warn = [{"venue": "binance", "asset": "USDT", "total": Decimal("108.0")}]
+    remote_crit = [{"venue": "binance", "asset": "USDT", "total": Decimal("130.0")}]
 
-    issues = core.compare_positions(local, remote)
+    assert detect_balance_drifts(local, remote_ok, cfg) == []
 
-    assert len(issues) == 1
-    issue = issues[0]
-    assert issue.code == "POSITION_MISMATCH"
-    assert issue.severity == "CRITICAL"
-    assert issue.venue == "binance-um"
-    assert issue.symbol == "BTCUSDT"
+    warn = detect_balance_drifts(local, remote_warn, cfg)
+    assert len(warn) == 1
+    warn_entry = warn[0]
+    assert warn_entry.severity == "WARN"
+    assert warn_entry.delta == Decimal("8.0") or warn_entry.delta == 8.0
+
+    critical = detect_balance_drifts(local, remote_crit, cfg)
+    assert len(critical) == 1
+    assert critical[0].severity == "CRITICAL"
 
 
-def test_compare_balances_respects_epsilon(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = core._ReconConfig(  # type: ignore[attr-defined]
-        epsilon_position=Decimal("0.0001"),
-        epsilon_balance=Decimal("2.0"),
-        epsilon_notional=Decimal("5.0"),
-        auto_hold_on_critical=True,
-    )
-    monkeypatch.setattr(core, "_CONFIG_OVERRIDE", config)
-
+def test_detect_position_drifts_includes_side_and_sign() -> None:
+    cfg = _cfg(position_warn="0.1", position_critical="0.5")
     local = [
-        {"venue": "okx-perp", "asset": "USDT", "total": Decimal("100.0")},
-    ]
-    remote_close = [
-        {"venue": "okx-perp", "asset": "USDT", "total": Decimal("101.0")},
-    ]
-    assert core.compare_balances(local, remote_close) == []
-
-    remote_far = [
-        {"venue": "okx-perp", "asset": "USDT", "total": Decimal("110.0")},
-    ]
-    issues = core.compare_balances(local, remote_far)
-    assert len(issues) == 1
-    issue = issues[0]
-    assert issue.code == "BALANCE_MISMATCH"
-    assert issue.severity == "CRITICAL"
-    assert issue.details.startswith("local_total=")
-
-
-def test_compare_orders_flags_unknown_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = core._ReconConfig(  # type: ignore[attr-defined]
-        epsilon_position=Decimal("0.0001"),
-        epsilon_balance=Decimal("0.5"),
-        epsilon_notional=Decimal("1.0"),
-        auto_hold_on_critical=True,
-    )
-    monkeypatch.setattr(core, "_CONFIG_OVERRIDE", config)
-
-    local = []
-    remote = [
         {
-            "venue": "binance-um",
-            "symbol": "ETHUSDT",
-            "id": "abc-1",
-            "qty": Decimal("0.5"),
-            "price": Decimal("10.0"),
+            "venue": "okx", "symbol": "ETHUSDT", "qty": Decimal("0.4"), "entry_price": Decimal("1800"),
         }
     ]
+    remote_flip = [
+        {
+            "venue": "okx", "symbol": "ETHUSDT", "qty": Decimal("-0.4"), "entry_price": Decimal("1795"),
+        }
+    ]
+    drifts = detect_position_drifts(local, remote_flip, cfg)
+    assert len(drifts) == 1
+    drift = drifts[0]
+    assert drift.severity == "CRITICAL"
+    assert drift.delta == {"qty": -0.8}
+    assert drift.local["qty"] == 0.4
+    assert drift.local["entry_price"] == 1800.0 or drift.local["entry_price"] == Decimal("1800")
 
-    issues = core.compare_open_orders(local, remote)
-    assert len(issues) == 1
-    issue = issues[0]
-    assert issue.code == "ORDER_DESYNC"
-    assert issue.severity == "CRITICAL"
-    assert issue.venue == "binance-um"
-    assert issue.symbol == "ETHUSDT"
+    remote_small = [
+        {
+            "venue": "okx", "symbol": "ETHUSDT", "qty": Decimal("0.25"),
+        }
+    ]
+    warn = detect_position_drifts(local, remote_small, cfg)
+    assert len(warn) == 1
+    assert warn[0].severity == "WARN"
+
+
+def test_detect_order_drifts_flags_orphans_and_stale() -> None:
+    cfg = _cfg(order_critical_missing=True)
+    local = [
+        {
+            "venue": "binance", "symbol": "BTCUSDT", "id": "a-1", "qty": Decimal("1.0"), "status": "NEW",
+        }
+    ]
+    remote = [
+        {
+            "venue": "binance", "symbol": "BTCUSDT", "id": "b-2", "qty": Decimal("0.5"), "status": "NEW",
+        },
+        {
+            "venue": "binance", "symbol": "BTCUSDT", "id": "a-1", "qty": Decimal("1.0"), "status": "FILLED",
+        },
+    ]
+
+    drifts = detect_order_drifts(local, remote, cfg)
+    kinds = {(drift.delta.get("missing"), drift.severity) for drift in drifts if isinstance(drift.delta, dict)}
+    assert ("local", "CRITICAL") in kinds  # orphan remote order
+    stale = [drift for drift in drifts if drift.delta.get("note")]
+    assert stale and stale[0].severity in {"WARN", "CRITICAL"}
+

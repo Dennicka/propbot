@@ -108,11 +108,16 @@ obs:
   metrics_interval_sec: 5
 recon:
   enabled: true
-  interval_sec: 20
+  interval_s: 20
   epsilon_position: 0.0001
   epsilon_balance: 0.5
   epsilon_notional: 5.0
   auto_hold_on_critical: true
+  balance_warn_usd: 10
+  balance_critical_usd: 100
+  position_size_warn: 0.001
+  position_size_critical: 0.01
+  order_critical_missing: true
 readiness:
   startup_timeout_sec: 120
 status_thresholds_file: status_thresholds.yaml

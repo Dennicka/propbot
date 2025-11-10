@@ -350,6 +350,11 @@ class ReconConfig(BaseModel):
     epsilon_balance: float = Field(0.5, ge=0.0)
     epsilon_notional: float = Field(5.0, ge=0.0)
     auto_hold_on_critical: bool = Field(True)
+    balance_warn_usd: float = Field(10.0, ge=0.0)
+    balance_critical_usd: float = Field(100.0, ge=0.0)
+    position_size_warn: float = Field(0.001, ge=0.0)
+    position_size_critical: float = Field(0.01, ge=0.0)
+    order_critical_missing: bool = Field(True)
 
 
 class ReadinessConfig(BaseModel):
