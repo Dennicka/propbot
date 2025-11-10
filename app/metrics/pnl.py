@@ -20,6 +20,24 @@ _PNL_UNREALIZED = Gauge(
     ("profile", "symbol"),
 )
 
+_PNL_REALIZED_TOTAL = Gauge(
+    "pnl_realized_usd_total",
+    "Total realised PnL (net of fees) by profile.",
+    ("profile",),
+)
+
+_PNL_FEES_TOTAL = Gauge(
+    "pnl_fees_usd_total",
+    "Total fees paid (positive) or rebates received (negative) by profile.",
+    ("profile",),
+)
+
+_PNL_FUNDING_TOTAL = Gauge(
+    "pnl_funding_usd_total",
+    "Total funding impact by profile.",
+    ("profile",),
+)
+
 _FEES_PAID = Gauge(
     "fees_paid_usd",
     "Trading fees paid (positive) or rebates received (negative) by profile and symbol.",
@@ -59,6 +77,9 @@ _DAILY_NET = Gauge(
 _KNOWN_KEYS = {
     _PNL_REALIZED: set(),
     _PNL_UNREALIZED: set(),
+    _PNL_REALIZED_TOTAL: set(),
+    _PNL_FEES_TOTAL: set(),
+    _PNL_FUNDING_TOTAL: set(),
     _FEES_PAID: set(),
     _FUNDING_PAID: set(),
     _DAILY_REALIZED: set(),
@@ -131,6 +152,11 @@ def update_pnl_metrics(
 
     profile_label = _normalise_profile(profile)
     with _LOCK:
+        total_seen: dict[Gauge, set[tuple[str, ...]]] = {
+            _PNL_REALIZED_TOTAL: set(),
+            _PNL_FEES_TOTAL: set(),
+            _PNL_FUNDING_TOTAL: set(),
+        }
         if realized is not None:
             _update_gauge(_PNL_REALIZED, profile_label, realized, total=total_realized)
         if unrealized is not None:
@@ -139,6 +165,22 @@ def update_pnl_metrics(
             _update_gauge(_FEES_PAID, profile_label, fees, total=total_fees)
         if funding is not None:
             _update_gauge(_FUNDING_PAID, profile_label, funding, total=total_funding)
+        if total_realized is not None:
+            _PNL_REALIZED_TOTAL.labels(profile=profile_label).set(_safe_value(total_realized))
+            total_seen[_PNL_REALIZED_TOTAL].add((profile_label,))
+        if total_fees is not None:
+            _PNL_FEES_TOTAL.labels(profile=profile_label).set(_safe_value(total_fees))
+            total_seen[_PNL_FEES_TOTAL].add((profile_label,))
+        if total_funding is not None:
+            _PNL_FUNDING_TOTAL.labels(profile=profile_label).set(_safe_value(total_funding))
+            total_seen[_PNL_FUNDING_TOTAL].add((profile_label,))
+        for gauge, seen in total_seen.items():
+            registry = _KNOWN_KEYS[gauge]
+            stale = registry - seen
+            for (label,) in stale:
+                gauge.labels(profile=label).set(0.0)
+                registry.discard((label,))
+            registry.update(seen)
 
 
 def publish_daily_snapshots(snapshots: Iterable[object]) -> None:
@@ -204,6 +246,10 @@ def reset_for_tests() -> None:
                 for (date,) in tuple(registry):
                     gauge.labels(date=date).set(0.0)
                     registry.discard((date,))
+            elif gauge in (_PNL_REALIZED_TOTAL, _PNL_FEES_TOTAL, _PNL_FUNDING_TOTAL):
+                for (profile,) in tuple(registry):
+                    gauge.labels(profile=profile).set(0.0)
+                    registry.discard((profile,))
             else:
                 for profile, symbol in tuple(registry):
                     gauge.labels(profile=profile, symbol=symbol).set(0.0)

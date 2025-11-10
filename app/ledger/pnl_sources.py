@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable, Mapping, Sequence
 
-from .pnl_ledger import PnLLedger
+from app.pnl.ledger import FundingEvent, PnLLedger, TradeFill
 
 LOGGER = logging.getLogger(__name__)
 
 _FUNDING_CODES = {"funding", "funding_payment", "funding_settlement"}
+
+
+def _exclude_simulated_default() -> bool:
+    raw = os.getenv("EXCLUDE_DRY_RUN_FROM_PNL")
+    if raw is None:
+        return True
+    value = raw.strip().lower()
+    if not value:
+        return True
+    return value in {"1", "true", "yes", "on"}
 
 
 def _coerce_timestamp(value: object) -> float:
@@ -62,54 +73,9 @@ def _normalise_symbol(value: object) -> str:
 
 def _normalise_side(value: object) -> str:
     text = str(value or "").strip().lower()
-    if text in {"buy", "long", "bid"}:
-        return "LONG"
     if text in {"sell", "short", "ask"}:
-        return "SHORT"
-    return "FLAT"
-
-
-def _signed_qty(row: Mapping[str, object]) -> Decimal:
-    qty = _coerce_decimal(row.get("qty"))
-    side = str(row.get("side") or "").lower()
-    if side in {"sell", "short", "ask"}:
-        return -qty
-    return qty
-
-
-def _apply_realized_state(
-    state: dict[str, dict[str, Decimal]], symbol: str, qty: Decimal, price: Decimal
-) -> Decimal:
-    if qty == 0:
-        return Decimal("0")
-    symbol_state = state.setdefault(symbol, {"qty": Decimal("0"), "avg": Decimal("0")})
-    position_qty = symbol_state["qty"]
-    avg_price = symbol_state["avg"]
-    realized = Decimal("0")
-    if position_qty == 0 or position_qty * qty > 0:
-        new_qty = position_qty + qty
-        if new_qty == 0:
-            symbol_state["qty"] = Decimal("0")
-            symbol_state["avg"] = Decimal("0")
-        else:
-            total_cost = avg_price * position_qty + price * qty
-            symbol_state["qty"] = new_qty
-            symbol_state["avg"] = total_cost / new_qty
-    else:
-        close_qty = min(abs(position_qty), abs(qty))
-        direction = Decimal("1") if position_qty > 0 else Decimal("-1")
-        realized = (price - avg_price) * close_qty * direction
-        new_qty = position_qty + qty
-        if new_qty == 0:
-            symbol_state["qty"] = Decimal("0")
-            symbol_state["avg"] = Decimal("0")
-        elif position_qty * new_qty > 0:
-            symbol_state["qty"] = new_qty
-            symbol_state["avg"] = avg_price
-        else:
-            symbol_state["qty"] = new_qty
-            symbol_state["avg"] = price
-    return realized
+        return "SELL"
+    return "BUY"
 
 
 def _fill_rows(ctx: object | None, since_ts: float | None) -> Iterable[Mapping[str, object]]:
@@ -172,39 +138,38 @@ def _funding_rows(ctx: object | None, since_ts: float | None) -> Iterable[Mappin
     return filtered
 
 
-def _fee_components(raw_fee: Decimal) -> tuple[Decimal, Decimal]:
-    if raw_fee >= 0:
-        return raw_fee, Decimal("0")
-    return Decimal("0"), -raw_fee
-
-
-def build_ledger_from_history(ctx: object | None, since_ts: float | None = None) -> PnLLedger:
+def build_ledger_from_history(
+    ctx: object | None,
+    since_ts: float | None = None,
+    *,
+    exclude_simulated: bool | None = None,
+) -> PnLLedger:
+    if exclude_simulated is None:
+        exclude_simulated = _exclude_simulated_default()
     ledger = PnLLedger()
-    realized_state: dict[str, dict[str, Decimal]] = {}
 
     for row in sorted(_fill_rows(ctx, since_ts), key=lambda item: _coerce_timestamp(item.get("ts"))):
+        venue = str(row.get("venue") or row.get("exchange") or "unknown")
         symbol = _normalise_symbol(row.get("symbol"))
         price = _coerce_decimal(row.get("price"))
-        qty_signed = _signed_qty(row)
-        realized = _apply_realized_state(realized_state, symbol, qty_signed, price)
+        qty = _coerce_decimal(row.get("qty"))
+        qty = abs(qty)
         ts = _coerce_timestamp(row.get("ts"))
-        notional = abs(price * qty_signed)
-        fee_raw = _coerce_decimal(row.get("fee"))
-        fee, rebate = _fee_components(fee_raw)
-        ref_id = row.get("id") or row.get("order_id") or row.get("trade_id")
+        fee = _coerce_decimal(row.get("fee"))
+        fee_asset = str(row.get("fee_asset") or row.get("fee_currency") or "").upper()
         simulated = bool(row.get("simulated"))
-        ledger.record_fill(
-            ts=ts,
+        fill = TradeFill(
+            venue=venue,
             symbol=symbol,
             side=_normalise_side(row.get("side")),
-            realized_pnl=realized,
+            qty=qty,
+            price=price,
             fee=fee,
-            rebate=rebate,
-            funding=Decimal("0"),
-            notional=notional,
-            ref_id=str(ref_id) if ref_id is not None else None,
-            simulated=simulated,
+            fee_asset=fee_asset,
+            ts=ts,
+            is_simulated=simulated,
         )
+        ledger.apply_fill(fill, exclude_simulated=exclude_simulated)
 
     for event in _funding_rows(ctx, since_ts):
         payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
@@ -221,22 +186,21 @@ def build_ledger_from_history(ctx: object | None, since_ts: float | None = None)
         )
         if amount == 0:
             continue
-        ts = _coerce_timestamp(event.get("ts"))
-        symbol = _normalise_symbol(payload.get("symbol") or event.get("symbol"))
-        ref_id = (
-            payload.get("id")
-            or payload.get("funding_id")
-            or payload.get("reference")
-            or event.get("id")
-        )
         simulated = bool(payload.get("simulated") or event.get("simulated"))
-        ledger.record_funding(
-            ts=ts,
+        if simulated and exclude_simulated:
+            continue
+        venue = str(payload.get("venue") or event.get("venue") or "unknown")
+        symbol = _normalise_symbol(payload.get("symbol") or event.get("symbol"))
+        asset = str(payload.get("asset") or payload.get("currency") or event.get("asset") or "").upper()
+        ts = _coerce_timestamp(event.get("ts"))
+        funding_event = FundingEvent(
+            venue=venue,
             symbol=symbol,
             amount=amount,
-            ref_id=str(ref_id) if ref_id is not None else None,
-            simulated=simulated,
+            asset=asset,
+            ts=ts,
         )
+        ledger.apply_funding(funding_event)
 
     return ledger
 

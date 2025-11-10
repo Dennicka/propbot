@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Iterable, Mapping, Sequence
+
+from app.pnl.ledger import PnLLedger, TradeFill
+from app.utils.decimal import to_decimal
 
 
 @dataclass(frozen=True)
@@ -67,48 +71,11 @@ def _sort_key(fill: Fill) -> tuple[int, float]:
     return (0, fill.ts.timestamp())
 
 
-def _compute_realized_state(fills: Sequence[Fill]) -> RealizedPnLBreakdown:
-    state: dict[str, dict[str, float]] = {}
-    trading = 0.0
-    fees = 0.0
-    for fill in sorted(fills, key=_sort_key):
-        fees += float(fill.fee or 0.0)
-        if not fill.symbol or fill.qty <= 0:
-            continue
-        symbol_state = state.setdefault(fill.symbol, {"qty": 0.0, "avg": 0.0})
-        signed_qty = fill.qty if fill.side == "buy" else -fill.qty
-        position_qty = symbol_state["qty"]
-        avg_price = symbol_state["avg"]
-        if position_qty == 0.0 or position_qty * signed_qty > 0:
-            new_qty = position_qty + signed_qty
-            if new_qty == 0.0:
-                symbol_state["qty"] = 0.0
-                symbol_state["avg"] = 0.0
-            else:
-                total_cost = avg_price * position_qty + fill.price * signed_qty
-                symbol_state["qty"] = new_qty
-                symbol_state["avg"] = total_cost / new_qty
-        else:
-            close_qty = min(abs(position_qty), abs(signed_qty))
-            direction = 1.0 if position_qty > 0 else -1.0
-            trading += (fill.price - avg_price) * close_qty * direction
-            new_qty = position_qty + signed_qty
-            if new_qty == 0.0:
-                symbol_state["qty"] = 0.0
-                symbol_state["avg"] = 0.0
-            elif position_qty * new_qty > 0:
-                symbol_state["qty"] = new_qty
-                symbol_state["avg"] = avg_price
-            else:
-                symbol_state["qty"] = new_qty
-                symbol_state["avg"] = fill.price
-    return RealizedPnLBreakdown(trading=trading, fees=fees)
-
-
 def compute_realized_breakdown(fills: Sequence[Fill]) -> RealizedPnLBreakdown:
     """Compute realised trading PnL and fees for ``fills``."""
-
-    return _compute_realized_state(fills)
+    ledger = _build_ledger_from_fills(fills)
+    realized, fees = _ledger_totals(ledger)
+    return RealizedPnLBreakdown(trading=realized, fees=fees)
 
 
 def compute_realized_breakdown_by_symbol(
@@ -116,24 +83,26 @@ def compute_realized_breakdown_by_symbol(
 ) -> dict[str, RealizedPnLBreakdown]:
     """Return realised PnL breakdown grouped by symbol."""
 
-    by_symbol: dict[str, list[Fill]] = {}
-    unknown_fees = 0.0
-    for fill in fills:
-        symbol = str(fill.symbol or "").upper()
-        if symbol:
-            by_symbol.setdefault(symbol, []).append(fill)
-        else:
-            unknown_fees += float(fill.fee or 0.0)
+    ledger = _build_ledger_from_fills(fills)
+    snapshot = ledger.get_snapshot()
     breakdowns: dict[str, RealizedPnLBreakdown] = {}
-    for symbol, symbol_fills in by_symbol.items():
-        breakdowns[symbol] = _compute_realized_state(symbol_fills)
-    if unknown_fees:
-        breakdowns["UNKNOWN"] = RealizedPnLBreakdown(trading=0.0, fees=unknown_fees)
+    for venue_payload in snapshot.get("by_venue", {}).values():
+        for symbol, values in venue_payload.items():
+            trading = float(values.get("realized_pnl", 0.0))
+            fees = float(values.get("fees", 0.0) - values.get("rebates", 0.0))
+            entry = breakdowns.get(symbol)
+            if entry is None:
+                breakdowns[symbol] = RealizedPnLBreakdown(trading=trading, fees=fees)
+            else:
+                breakdowns[symbol] = RealizedPnLBreakdown(
+                    trading=entry.trading + trading,
+                    fees=entry.fees + fees,
+                )
     return breakdowns
 
 
 def compute_realized_pnl(fills: Sequence[Fill]) -> float:
-    return _compute_realized_state(fills).net
+    return compute_realized_breakdown(fills).net
 
 
 def compute_unrealized_pnl(positions: Iterable[Position], marks: Mapping[str, float]) -> float:
@@ -147,3 +116,41 @@ def compute_unrealized_pnl(positions: Iterable[Position], marks: Mapping[str, fl
             continue
         unrealized += (mark - position.avg_entry) * qty
     return unrealized
+
+
+def _build_ledger_from_fills(fills: Sequence[Fill]) -> PnLLedger:
+    ledger = PnLLedger()
+    for fill in sorted(fills, key=_sort_key):
+        if fill.qty <= 0:
+            continue
+        trade = _fill_to_trade_fill(fill)
+        ledger.apply_fill(trade, exclude_simulated=False)
+    return ledger
+
+
+def _ledger_totals(ledger: PnLLedger) -> tuple[float, float]:
+    snapshot = ledger.get_snapshot()
+    totals = snapshot.get("totals", {})
+    realized = float(totals.get("realized_pnl", 0.0))
+    fees = float(totals.get("fees", 0.0) - totals.get("rebates", 0.0))
+    return realized, fees
+
+
+def _fill_to_trade_fill(fill: Fill) -> TradeFill:
+    qty = to_decimal(fill.qty, default=Decimal("0")).copy_abs()
+    price = to_decimal(fill.price, default=Decimal("0"))
+    fee = to_decimal(fill.fee, default=Decimal("0"))
+    side = "BUY" if fill.side in {"buy", "long", "bid"} else "SELL"
+    ts = fill.ts.timestamp() if fill.ts else 0.0
+    symbol = (fill.symbol or "").upper() or "UNKNOWN"
+    return TradeFill(
+        venue="internal",
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        price=price,
+        fee=fee,
+        fee_asset="USD",
+        ts=ts,
+        is_simulated=False,
+    )

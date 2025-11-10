@@ -403,6 +403,12 @@ JSON-отчёт по стратегиям содержит `realized_today`, `re
 }
 ```
 
+Для ежедневных срезов используйте `app.pnl.reporting.make_daily_report`: функция
+принимает готовый `PnLLedger` и возвращает словарь с аггрегатами по каждому
+символу и итоговыми суммами (`realized`, `fees`, `funding`, `net`). Скрипт или
+cron-джоба может собирать ledger через `build_ledger_from_history(...)` и писать
+JSON в архив без прямого I/O в боевом коде.
+
 ### `/api/ui/pnl_attrib`
 
 Отдельный срез PnL attribution. Требует тот же bearer-токен, что и остальные

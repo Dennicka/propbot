@@ -68,3 +68,6 @@ def test_pnl_metrics_exposed(client: TestClient) -> None:
     assert 'fees_paid_usd{profile="paper",symbol="BTCUSDT"} 0.1' in body
     assert 'funding_paid_usd{profile="paper",symbol="BTCUSDT"} -0.05' in body
     assert 'pnl_realized_usd{profile="paper",symbol="__total__"} 5.0' in body
+    assert 'pnl_realized_usd_total{profile="paper"} 5.0' in body
+    assert 'pnl_fees_usd_total{profile="paper"} 0.1' in body
+    assert 'pnl_funding_usd_total{profile="paper"} -0.05' in body
