@@ -1,0 +1,36 @@
+{
+  "name": "trend_dd_warning_golden",
+  "initial_state": {
+    "balances": {
+      "USDT": "20000"
+    },
+    "positions": [
+      {"symbol": "ETHUSDT", "qty": "0", "avg_price": "0"}
+    ],
+    "control": {
+      "hold": false,
+      "safe_mode": false,
+      "auto_trade": true
+    },
+    "limits": {
+      "daily_loss_limit": "25",
+      "notional_cap": "4000"
+    }
+  },
+  "events": [
+    {"type": "market", "symbol": "ETHUSDT", "price": "1800"},
+    {"type": "trade", "symbol": "ETHUSDT", "side": "buy", "qty": "1.50", "price": "1800"},
+    {"type": "market", "symbol": "ETHUSDT", "price": "1750"},
+    {"type": "market", "symbol": "ETHUSDT", "price": "1700"},
+    {"type": "trade", "symbol": "ETHUSDT", "side": "sell", "qty": "1.50", "price": "1700"},
+    {"type": "set_hold", "active": true}
+  ],
+  "expectations": {
+    "final_positions": {"ETHUSDT": "0"},
+    "hold": true,
+    "safe_mode": false,
+    "auto_trade": false,
+    "realized_pnl": {"max": "-140", "min": "-180"},
+    "daily_loss": {"breached": true}
+  }
+}

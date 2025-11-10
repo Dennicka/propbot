@@ -1,12 +1,18 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from app.golden import replay
 from app.services.arbitrage import ExecutionReport
 from app.services.runtime import HoldActiveError
+from app.testing.golden_replay import assert_invariants, load_scenario, run_scenario
+
+
+SCENARIO_DIR = Path(__file__).with_name("golden_scenarios")
 
 
 @pytest.mark.asyncio
@@ -183,3 +189,54 @@ async def test_golden_replay_detects_mismatch(tmp_path, monkeypatch):
     assert summary.mismatches
     mismatch_symbols = {entry.details["symbol"] for entry in summary.mismatches}
     assert "BTCUSDT" in mismatch_symbols
+
+
+def _scenario_path(name: str) -> Path:
+    return SCENARIO_DIR / name
+
+
+def test_golden_scalp_ok_scenario():
+    scenario = load_scenario(_scenario_path("scalp_ok_golden.json"))
+    result = run_scenario(scenario)
+    assert_invariants(result)
+
+    final_positions = result["final_positions"]
+    assert final_positions["BTCUSDT"] == Decimal("0")
+    assert final_positions.get("ETHUSDT", Decimal("0")) == Decimal("0")
+    assert result["hold"] is False
+    assert result["safe_mode"] is False
+    assert Decimal("10") <= result["realized_pnl"] <= Decimal("20")
+    assert not result["daily_loss"]["breached"]
+    assert all(not entry.get("during_safe_mode") for entry in result["trade_log"])
+
+
+def test_golden_trend_dd_warning():
+    scenario = load_scenario(_scenario_path("trend_dd_warning_golden.json"))
+    result = run_scenario(scenario)
+    assert_invariants(result)
+
+    assert result["hold"] is True
+    assert result["auto_trade"] is False
+    assert result["daily_loss"]["breached"] is True
+    assert Decimal("-180") <= result["realized_pnl"] <= Decimal("-140")
+    timeline = result["timeline"]
+    hold_indices = [idx for idx, snap in enumerate(timeline) if snap["hold"]]
+    trade_indices = [idx for idx, snap in enumerate(timeline) if snap["event"]["type"] == "trade"]
+    if hold_indices:
+        assert max(trade_indices) <= hold_indices[0]
+
+
+def test_golden_ws_glitch_recover():
+    scenario = load_scenario(_scenario_path("ws_glitch_recover_golden.json"))
+    result = run_scenario(scenario)
+    assert_invariants(result)
+
+    assert result["hold"] is False
+    assert result["safe_mode"] is False
+    assert result["watchdog"]["recoveries"] == 1
+    assert Decimal("90") <= result["realized_pnl"] <= Decimal("140")
+    timeline = result["timeline"]
+    safe_mode_windows = [idx for idx, snap in enumerate(timeline) if snap["safe_mode"]]
+    trade_indices = [idx for idx, snap in enumerate(timeline) if snap["event"]["type"] == "trade"]
+    for idx in safe_mode_windows:
+        assert idx not in trade_indices
