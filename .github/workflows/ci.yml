@@ -27,9 +27,9 @@ jobs:
       - name: Ruff lint
         run: ruff check .
       - name: Black check
-        run: black --check app tests
+        run: black --check .
       - name: Mypy
-        run: mypy app
+        run: mypy --config-file mypy.ini app
 
   test:
     needs: lint
