@@ -36,6 +36,20 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="order notional in USDT",
     )
+    run_parser = sub.add_parser("run-profile", help="launch PropBot services for a profile")
+    run_parser.add_argument("profile", choices=["paper", "testnet", "live"], help="runtime profile")
+    run_parser.add_argument("--host", default=os.getenv("PROP_APP_HOST", "127.0.0.1"), help="bind host")
+    run_parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("PROP_APP_PORT", "8000")),
+        help="bind port",
+    )
+    run_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="enable uvicorn autoreload (development only)",
+    )
     return parser
 
 
@@ -112,6 +126,64 @@ def _run_loop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_profile_command(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    from ..config.profiles import (
+        ProfileSafetyError,
+        RuntimeProfile,
+        apply_profile_environment,
+        ensure_profile_safe,
+        load_profile,
+    )
+    from ..profile_config import ProfileConfigError
+
+    logger = logging.getLogger("propbot.cli")
+
+    try:
+        profile = RuntimeProfile.parse(args.profile)
+        profile_cfg = load_profile(profile)
+    except ProfileSafetyError as exc:
+        logger.error("%s", exc)
+        return 1
+    except ProfileConfigError as exc:
+        logger.error("Не удалось загрузить профиль %s: %s", args.profile, exc)
+        return 1
+
+    applied = apply_profile_environment(profile, profile_cfg)
+    logger.info(
+        "Активируем профиль=%s host=%s port=%s", profile.value, args.host, args.port
+    )
+    logger.info(
+        "Параметры окружения: %s",
+        ", ".join(f"{key}={value}" for key, value in sorted(applied.items())),
+    )
+
+    try:
+        ensure_profile_safe(profile, profile_cfg)
+    except ProfileSafetyError as exc:
+        details = "\n".join(f"  {reason}" for reason in exc.reasons) if exc.reasons else str(exc)
+        logger.error("Запуск отклонён:%s%s", "\n" if exc.reasons else " ", details)
+        return 1
+
+    try:
+        import uvicorn
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Не удалось импортировать uvicorn: %s", exc)
+        return 1
+
+    uvicorn.run(
+        "app.main:app",
+        host=args.host,
+        port=args.port,
+        reload=bool(args.reload),
+        log_config=None,
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -119,6 +191,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_exec(args)
     if args.command == "loop":
         return _run_loop(args)
+    if args.command == "run-profile":
+        return _run_profile_command(args)
     parser.error("unknown command")
     return 1
 
