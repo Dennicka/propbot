@@ -14,6 +14,7 @@ from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger, risk_governor
 from ..services import portfolio, risk
+from ..golden.recorder import golden_replay_enabled
 from ..services.runtime import (
     HoldActiveError,
     get_market_data,
@@ -364,10 +365,11 @@ class ExecutionRouter:
         state = get_state()
         post_only = bool(state.control.post_only)
         reduce_only = bool(state.control.reduce_only)
+        shadow_mode = golden_replay_enabled()
         if not simulate and not self.dry_run_only and not state.control.safe_mode and is_hold_active():
             safety = get_safety_status()
             raise HoldActiveError(safety.get("hold_reason") or "hold_active")
-        if simulate or self.dry_run_only or state.control.safe_mode:
+        if simulate or self.dry_run_only or state.control.safe_mode or shadow_mode:
             for leg in plan.legs:
                 venue = self._venue_for_exchange(leg.exchange)
                 orders.append(
