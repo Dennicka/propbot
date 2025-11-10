@@ -616,6 +616,44 @@ def active_request_id(session: Session, intent_id: str) -> str | None:
     return record.request_id
 
 
+def request_id_history(session: Session, intent_id: str, *, limit: int | None = None) -> list[str]:
+    rows = (
+        session.execute(
+            select(OrderRequestLedger)
+            .where(OrderRequestLedger.intent_id == intent_id)
+            .order_by(OrderRequestLedger.updated_ts.desc(), OrderRequestLedger.id.desc())
+        )
+        .scalars()
+        .all()
+    )
+    history: list[str] = []
+    for row in rows:
+        history.append(row.request_id)
+        if limit is not None and len(history) >= max(limit, 0):
+            break
+    return history
+
+
+def ensure_active_request(session: Session, intent: OrderIntent, request_id: str) -> OrderIntent:
+    previous_request = intent.request_id
+    if previous_request == request_id and intent.request_id:
+        _ensure_request_record(session, intent.intent_id, request_id)
+        return intent
+    intent.request_id = request_id
+    intent.updated_ts = _now()
+    session.add(intent)
+    if previous_request:
+        _mark_request_state(
+            session,
+            intent.intent_id,
+            previous_request,
+            OrderRequestState.SUPERSEDED,
+            superseded_by=request_id,
+        )
+    _ensure_request_record(session, intent.intent_id, request_id)
+    return intent
+
+
 __all__ = [
     "CancelIntent",
     "CancelIntentState",
@@ -630,7 +668,9 @@ __all__ = [
     "COMPLETED_FOR_IDEMPOTENCY",
     "ensure_cancel_intent",
     "ensure_order_intent",
+    "ensure_active_request",
     "active_request_id",
+    "request_id_history",
     "get_engine",
     "inflight_intents",
     "load_intent",

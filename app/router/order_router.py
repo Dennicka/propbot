@@ -876,17 +876,67 @@ class OrderRouter:
                     current = order_store.load_intent(session, intent_id)
                     if current is None:
                         continue
+                    venue = current.venue
+                    symbol = current.symbol
                     ledger_request_id = order_store.active_request_id(session, intent_id)
-                    request_id = current.request_id or ledger_request_id
-                if not request_id:
-                    request_id = ledger_request_id
-                if not request_id:
+                    history = order_store.request_id_history(session, intent_id, limit=5)
+                    request_candidates: list[str] = []
+
+                    def _add_candidate(candidate: str | None) -> None:
+                        if candidate and candidate not in request_candidates:
+                            request_candidates.append(candidate)
+
+                    _add_candidate(current.request_id)
+                    _add_candidate(ledger_request_id)
+                    for candidate in history:
+                        _add_candidate(candidate)
+                if not request_candidates:
                     continue
-                info = await self._broker.get_order_by_client_id(request_id)
-                if not isinstance(info, Mapping):
+                info: Mapping[str, Any] | None = None
+                matched_request_id: str | None = None
+                for candidate in request_candidates:
+                    try:
+                        lookup = await self._broker.get_order_by_client_id(candidate)
+                    except Exception as exc:  # pragma: no cover - broker exceptions
+                        LOGGER.exception(
+                            "recover inflight lookup failed",
+                            extra={
+                                "event": "recover_inflight_lookup_failed",
+                                "intent_id": intent_id,
+                                "request_id": candidate,
+                                "venue": venue,
+                                "symbol": symbol,
+                                "error": str(exc),
+                            },
+                        )
+                        continue
+                    if isinstance(lookup, Mapping) and lookup:
+                        info = lookup
+                        matched_request_id = candidate
+                        if candidate != request_candidates[0]:
+                            LOGGER.info(
+                                "recover inflight fallback matched request",
+                                extra={
+                                    "event": "recover_inflight_fallback",
+                                    "intent_id": intent_id,
+                                    "request_id": candidate,
+                                    "original_request_id": request_candidates[0],
+                                    "venue": venue,
+                                    "symbol": symbol,
+                                },
+                            )
+                        break
+                if not isinstance(info, Mapping) or not info:
                     LOGGER.warning(
                         "inflight order missing on venue",
-                        extra={"intent_id": intent_id, "request_id": request_id},
+                        extra={
+                            "event": "recover_inflight_missing",
+                            "intent_id": intent_id,
+                            "request_id": request_candidates[0],
+                            "venue": venue,
+                            "symbol": symbol,
+                            "attempted_request_ids": request_candidates,
+                        },
                     )
                     with order_store.session_scope() as session:
                         current = order_store.load_intent(session, intent_id)
@@ -900,7 +950,12 @@ class OrderRouter:
                             except order_store.OrderStateTransitionError:
                                 LOGGER.exception(
                                     "failed to expire missing inflight intent",
-                                    extra={"intent_id": intent_id},
+                                    extra={
+                                        "event": "recover_inflight_expire_failed",
+                                        "intent_id": intent_id,
+                                        "venue": venue,
+                                        "symbol": symbol,
+                                    },
                                 )
                     continue
                 broker_order_id = _extract_order_id(info) or None
@@ -908,11 +963,13 @@ class OrderRouter:
                     current = order_store.load_intent(session, intent_id)
                     if not current:
                         continue
+                    if matched_request_id:
+                        order_store.ensure_active_request(session, current, matched_request_id)
                     target_state, filled_qty, remaining_qty, avg_price = _resolve_remote_state(
                         current, info
                     )
                     try:
-                        order_store.update_intent_state(
+                        updated_intent = order_store.update_intent_state(
                             session,
                             current,
                             state=target_state,
@@ -925,13 +982,16 @@ class OrderRouter:
                         LOGGER.exception(
                             "recovery state transition failed",
                             extra={
+                                "event": "recover_inflight_state_failed",
                                 "intent_id": intent_id,
                                 "state": target_state.value,
-                                "request_id": request_id,
+                                "request_id": matched_request_id or request_candidates[0],
+                                "venue": venue,
+                                "symbol": symbol,
                             },
                         )
                         continue
-                    ORDER_INTENT_TOTAL.labels(state=current.state.value).inc()
+                    ORDER_INTENT_TOTAL.labels(state=updated_intent.state.value).inc()
                     record_open_intents(order_store.open_intent_count(session))
 
 

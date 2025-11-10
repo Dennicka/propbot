@@ -23,6 +23,12 @@ STUCK_RESOLVER_RETRIES_TOTAL = Counter(
     labelnames=("venue", "symbol", "reason"),
 )
 
+STUCK_RESOLVER_FAILURES_TOTAL = Counter(
+    "stuck_resolver_failures_total",
+    "Number of stuck resolver attempts that resulted in a terminal failure",
+    labelnames=("venue", "symbol", "reason"),
+)
+
 OPEN_ORDERS_GAUGE = Gauge(
     "open_orders_gauge",
     "Open orders grouped by venue, symbol, and status",
@@ -39,6 +45,7 @@ __all__ = [
     "ORDER_RETRIES_TOTAL",
     "OPEN_ORDERS_GAUGE",
     "STUCK_RESOLVER_ACTIVE_INTENTS",
+    "STUCK_RESOLVER_FAILURES_TOTAL",
     "STUCK_RESOLVER_RETRIES_TOTAL",
     "STUCK_ORDERS_TOTAL",
 ]
