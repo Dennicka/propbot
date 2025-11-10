@@ -1,0 +1,37 @@
+profile: live
+description: "Боевой профиль с реальными ключами и строгими лимитами."
+dry_run: false
+requires_secrets: true
+broker:
+  primary:
+    venue: binance_um
+    endpoints:
+      rest: https://fapi.binance.com
+      websocket: wss://fstream.binance.com/ws
+  hedge:
+    venue: okx_perp
+    endpoints:
+      rest: https://www.okx.com
+      websocket: wss://ws.okx.com:8443/ws/v5/private
+risk_limits:
+  max_total_notional_usd: 50000
+  max_single_position_usd: 15000
+  max_drawdown_bps: 200
+  daily_loss_cap_usd: 2000
+flags:
+  health_guard: true
+  recon: true
+  slo: true
+  watchdog: true
+secrets:
+  - name: binance
+    required: true
+    fields:
+      key: PLACEHOLDER
+      secret: PLACEHOLDER
+  - name: okx
+    required: true
+    fields:
+      key: PLACEHOLDER
+      secret: PLACEHOLDER
+      passphrase: PLACEHOLDER

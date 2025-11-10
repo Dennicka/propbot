@@ -6,6 +6,15 @@ import os
 from pathlib import Path
 from typing import Iterable, Set
 
+from .profile_config import (
+    MissingSecretsError,
+    ProfileConfig,
+    ProfileConfigError,
+    ensure_required_secrets,
+    load_profile_config,
+)
+from .secrets_store import SecretsStore
+
 _PLACEHOLDER_TOKENS = ("change-me", "changeme", "todo", "replace-me", "fill-me")
 
 
@@ -120,6 +129,34 @@ def _collect_errors() -> list[str]:
                     target.unlink()
                 except OSError:
                     pass
+
+    profile_cfg: ProfileConfig | None = None
+    try:
+        profile_cfg = load_profile_config()
+    except ProfileConfigError as exc:
+        fatal(str(exc))
+    else:
+        if profile_cfg.requires_secrets:
+            secrets_path = os.getenv("SECRETS_STORE_PATH")
+            if not secrets_path:
+                fatal(
+                    "PROFILE=live требует SECRETS_STORE_PATH с путём до JSON-хранилища ключей."
+                )
+            else:
+                try:
+                    store = SecretsStore(secrets_path)
+                except Exception as exc:  # pragma: no cover - defensive
+                    fatal(
+                        "Не удалось загрузить secrets store: "
+                        f"{exc} (путь: {secrets_path}). Проверь, что файл существует и доступен."
+                    )
+                else:
+                    try:
+                        ensure_required_secrets(
+                            profile_cfg, lambda name: store.get_exchange_credentials(name)
+                        )
+                    except MissingSecretsError as exc:
+                        fatal(str(exc))
 
     # ------------------------------------------------------------------
     # Placeholder detection to ensure template values were replaced.

@@ -1,0 +1,37 @@
+profile: testnet
+description: "Тестовый стенд с ордерами на биржевые тестнеты."
+dry_run: true
+requires_secrets: false
+broker:
+  primary:
+    venue: binance_um_testnet
+    endpoints:
+      rest: https://testnet.binancefuture.com
+      websocket: wss://stream.binancefuture.com/ws
+  hedge:
+    venue: okx_perp_testnet
+    endpoints:
+      rest: https://www.okx.com
+      websocket: wss://ws.okx.com/ws/v5/public
+risk_limits:
+  max_total_notional_usd: 20000
+  max_single_position_usd: 5000
+  max_drawdown_bps: 250
+  daily_loss_cap_usd: 750
+flags:
+  health_guard: true
+  recon: true
+  slo: true
+  watchdog: false
+secrets:
+  - name: binance
+    required: false
+    fields:
+      key: PLACEHOLDER
+      secret: PLACEHOLDER
+  - name: okx
+    required: false
+    fields:
+      key: PLACEHOLDER
+      secret: PLACEHOLDER
+      passphrase: PLACEHOLDER

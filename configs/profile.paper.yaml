@@ -1,0 +1,37 @@
+profile: paper
+description: "Безопасный paper-режим с симуляцией ордеров."
+dry_run: true
+requires_secrets: false
+broker:
+  primary:
+    venue: binance_um_testnet
+    endpoints:
+      rest: https://testnet.binancefuture.com
+      websocket: wss://stream.binancefuture.com/ws
+  hedge:
+    venue: okx_perp_testnet
+    endpoints:
+      rest: https://www.okx.com
+      websocket: wss://ws.okx.com/ws/v5/public
+risk_limits:
+  max_total_notional_usd: 8000
+  max_single_position_usd: 2000
+  max_drawdown_bps: 300
+  daily_loss_cap_usd: 250
+flags:
+  health_guard: false
+  recon: false
+  slo: false
+  watchdog: false
+secrets:
+  - name: binance
+    required: false
+    fields:
+      key: PLACEHOLDER
+      secret: PLACEHOLDER
+  - name: okx
+    required: false
+    fields:
+      key: PLACEHOLDER
+      secret: PLACEHOLDER
+      passphrase: PLACEHOLDER
