@@ -181,7 +181,8 @@ def should_drop_ws_update(settings: ChaosSettings | None = None) -> bool:
     payload = settings or get_settings()
     if not payload.enabled or payload.ws_drop_p <= 0.0:
         return False
-    return random.random() < payload.ws_drop_p
+    chaos_roll = random.random()  # chaos-only probability trigger; not security sensitive. # nosec B311
+    return chaos_roll < payload.ws_drop_p
 
 
 def maybe_raise_rest_timeout(
@@ -190,7 +191,8 @@ def maybe_raise_rest_timeout(
     payload = settings or get_settings()
     if not payload.enabled or payload.rest_timeout_p <= 0.0:
         return
-    if random.random() < payload.rest_timeout_p:
+    chaos_roll = random.random()  # chaos-only probability trigger; not security sensitive. # nosec B311
+    if chaos_roll < payload.rest_timeout_p:
         if context:
             raise RuntimeError(f"chaos: simulated REST timeout ({context})")
         raise RuntimeError("chaos: simulated REST timeout")
