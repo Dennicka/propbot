@@ -2,7 +2,8 @@
         alembic-init alembic-rev alembic-up dryrun.once dryrun.loop \
         docker-login docker-build docker-push docker-run-image docker-release \
         up down logs curl-health release \
-        acceptance_smoke acceptance_trading acceptance_chaos
+        acceptance_smoke acceptance_trading acceptance_chaos \
+        run-paper run-testnet run-live
 
 VENV=.venv
 PY=$(VENV)/bin/python
@@ -56,6 +57,15 @@ smoke_health:
 
 run:
 $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+
+run-paper:
+PROFILE=paper $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+
+run-testnet:
+PROFILE=testnet $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+
+run-live:
+PROFILE=live $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
 
 dryrun.once:
 	$(PY) -m app.cli exec --profile paper

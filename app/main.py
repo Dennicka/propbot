@@ -52,6 +52,7 @@ from .readiness import (
 from .metrics.observability import observe_api_latency, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
+from .profile_config import ProfileConfigError, load_profile_config
 from .startup_resume import perform_resume as perform_startup_resume
 from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
 from .services.autopilot import setup_autopilot
@@ -105,6 +106,21 @@ def _startup_timeout_seconds(state) -> float:
 def create_app() -> FastAPI:
     ledger.init_db()
     validate_startup()
+    try:
+        profile_cfg = load_profile_config()
+    except ProfileConfigError as exc:
+        logger.warning("Не удалось загрузить профиль запуска: %s", exc)
+    else:
+        logger.info(
+            "Активный профиль=%s dry_run=%s risk_limits(total=%s, single=%s, daily_loss_usd=%s, drawdown_bps=%s) flags=%s",
+            profile_cfg.name,
+            profile_cfg.dry_run,
+            profile_cfg.risk_limits.max_total_notional_usd,
+            profile_cfg.risk_limits.max_single_position_usd,
+            profile_cfg.risk_limits.daily_loss_cap_usd,
+            profile_cfg.risk_limits.max_drawdown_bps,
+            profile_cfg.flags.as_dict(),
+        )
     resume_ok, resume_payload = perform_startup_resume()
     build_version = os.getenv("BUILD_VERSION") or APP_VERSION
     logger.info(
