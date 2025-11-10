@@ -662,3 +662,30 @@ def test_pre_trade_gate_blocks_when_throttled(monkeypatch):
     assert isinstance(governor_snapshot, dict)
     assert governor_snapshot.get("throttled") is True
     assert governor_snapshot.get("reason") == "HIGH_ORDER_ERRORS"
+
+
+def test_system_status_exposes_recon_block(monkeypatch, client) -> None:
+    recon_block = {"worst_state": "CRITICAL", "last_ts": 123.0, "auto_hold": True}
+    sample_snapshot = {
+        "ts": "2023-01-01T00:00:00Z",
+        "components": [],
+        "slo": {},
+        "thresholds": {},
+        "alerts": [],
+        "mode": "RUN",
+        "safe_mode": False,
+        "dry_run_mode": False,
+        "hold_active": False,
+        "recon": recon_block,
+    }
+
+    monkeypatch.setattr("app.services.status.get_status_overview", lambda: sample_snapshot)
+    monkeypatch.setattr("app.api.ui.system_status.get_status_overview", lambda: sample_snapshot)
+    monkeypatch.setattr("app.health.account_health.get_account_health", lambda: {})
+    monkeypatch.setattr("app.services.status.get_account_health", lambda: {})
+    monkeypatch.setattr("app.api.ui.system_status.get_account_health", lambda: {})
+
+    response = client.get("/api/ui/system_status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["recon"] == recon_block

@@ -1,278 +1,374 @@
-"""Background reconciliation loop responsible for monitoring diffs."""
+"""Reconciliation daemon responsible for periodic position/balance checks."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
-from typing import Literal, Mapping
+from typing import Mapping, Sequence
 
 from ..audit_log import log_operator_action
 from ..broker.router import ExecutionRouter
-from ..metrics.recon import RECON_DIFF_ABS_USD_GAUGE, RECON_DIFF_STATE_GAUGE
-from ..services import runtime
-from ..risk.freeze import FreezeRule, get_freeze_registry
 from ..golden.logger import get_golden_logger
-from .service import ReconDiff, collect_recon_snapshot
+from ..metrics.recon import (
+    RECON_AUTO_HOLD_COUNTER,
+    RECON_DIFF_NOTIONAL_GAUGE,
+    RECON_STATUS_GAUGE,
+)
+from ..services import runtime
+from .core import ReconSettings, ReconSnapshot, reconcile_once
+
 
 LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_INTERVAL_SEC = 5.0
-_ACTIVE_LABELS: set[tuple[str, str]] = set()
+_ACTIVE_DIFF_LABELS: set[tuple[str, str, str]] = set()
+_ACTIVE_STATUS_LABELS: set[tuple[str, str]] = set()
 
 
-@dataclass(frozen=True)
-class ReconThresholds:
-    abs_warn: float
-    abs_crit: float
-    rel_warn: float
-    rel_crit: float
+@dataclass(slots=True)
+class DaemonConfig:
+    enabled: bool = True
+    interval_sec: float = 15.0
+    warn_notional_usd: Decimal = Decimal("5")
+    critical_notional_usd: Decimal = Decimal("25")
+    clear_after_ok_runs: int = 3
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
+class ReconDaemon:
+    """Manage reconciliation cycles and associated safety reactions."""
+
+    def __init__(self, config: DaemonConfig | None = None) -> None:
+        self._config = config or _resolve_daemon_config()
+        self._task: asyncio.Task[None] | None = None
+        self._stop_event = asyncio.Event()
+        self._consecutive_ok = 0
+        self._auto_hold_active = False
+        self._previous_safe_mode: bool | None = None
+
+    @property
+    def auto_hold_active(self) -> bool:
+        return self._auto_hold_active
+
+    async def start(self) -> None:
+        if not self._config.enabled:
+            LOGGER.info("recon.daemon_disabled")
+            return
+        if self._task and not self._task.done():
+            return
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._run_loop())
+
+    async def stop(self) -> None:
+        if not self._task:
+            return
+        self._stop_event.set()
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
+            return
+        finally:
+            self._task = None
+
+    async def run_once(self) -> list[ReconSnapshot]:
+        """Execute a single reconciliation cycle."""
+
+        state = runtime.get_state()
+        remote_balances = await _fetch_remote_balances(state)
+        settings = ReconSettings(
+            warn_notional_usd=self._config.warn_notional_usd,
+            critical_notional_usd=self._config.critical_notional_usd,
+        )
+        recon_ctx = SimpleNamespace(
+            cfg=SimpleNamespace(recon=settings),
+            remote_balances=lambda: remote_balances,
+            runtime=SimpleNamespace(
+                get_state=runtime.get_state,
+                remote_balances=lambda: remote_balances,
+            ),
+        )
+
+        snapshots = reconcile_once(recon_ctx)
+        self._publish_results(snapshots)
+        return snapshots
+
+    async def _run_loop(self) -> None:
+        LOGGER.info("recon.daemon_start", extra={"interval": self._config.interval_sec})
+        while not self._stop_event.is_set():
+            start = time.perf_counter()
+            try:
+                await self.run_once()
+            except Exception:
+                LOGGER.exception("recon.daemon_cycle_failed")
+            elapsed = time.perf_counter() - start
+            wait_for = max(self._config.interval_sec - elapsed, 0.5)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=wait_for)
+            except asyncio.TimeoutError:
+                continue
+        LOGGER.info("recon.daemon_stop")
+
+    def _publish_results(self, snapshots: Sequence[ReconSnapshot]) -> None:
+        worst_state = "OK"
+        venue_states: dict[str, str] = {}
+        diff_labels: set[tuple[str, str, str]] = set()
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        for snapshot in snapshots:
+            payload = _snapshot_payload(snapshot)
+            LOGGER.info("recon.snapshot", extra=payload)
+            venue_states[snapshot.venue] = _worst_state(
+                venue_states.get(snapshot.venue, "OK"), snapshot.status
+            )
+            worst_state = _worst_state(worst_state, snapshot.status)
+            label_symbol = snapshot.symbol or snapshot.asset
+            diff_labels.add((snapshot.venue, label_symbol, snapshot.status))
+            RECON_DIFF_NOTIONAL_GAUGE.labels(
+                venue=snapshot.venue,
+                symbol=label_symbol,
+                status=snapshot.status,
+            ).set(float(snapshot.diff_abs))
+
+        _reset_diff_metrics(diff_labels)
+        _update_status_metrics(venue_states)
+        self._handle_auto_hold(worst_state)
+
+        metadata = {
+            "state": worst_state,
+            "status": worst_state,
+            "last_checked": now_iso,
+            "last_ts": max((snapshot.ts for snapshot in snapshots), default=time.time()),
+            "auto_hold": self._auto_hold_active,
+        }
+        runtime.update_reconciliation_status(
+            diffs=[_snapshot_payload(snapshot) for snapshot in snapshots],
+            metadata=metadata,
+        )
+        self._log_summary(worst_state, snapshots)
+
+    def _handle_auto_hold(self, worst_state: str) -> None:
+        if worst_state == "CRITICAL":
+            self._consecutive_ok = 0
+            self._engage_auto_hold()
+            return
+        if worst_state == "WARN":
+            self._consecutive_ok = 0
+            return
+        self._consecutive_ok += 1
+        if (
+            self._auto_hold_active
+            and self._consecutive_ok >= self._config.clear_after_ok_runs
+        ):
+            self._release_auto_hold()
+
+    def _engage_auto_hold(self) -> None:
+        state = runtime.get_state()
+        safety = getattr(state, "safety", None)
+        control = getattr(state, "control", None)
+        if safety is None or control is None:
+            return
+        if not self._auto_hold_active:
+            self._previous_safe_mode = bool(getattr(control, "safe_mode", True))
+        engaged = runtime.engage_safety_hold("RECON_DIVERGENCE", source="recon")
+        if engaged:
+            self._auto_hold_active = True
+            RECON_AUTO_HOLD_COUNTER.inc()
+            log_operator_action(
+                "system",
+                "system",
+                "RECON_AUTO_HOLD",
+                {"reason": "RECON_DIVERGENCE"},
+            )
+            LOGGER.error("recon.auto_hold_engaged")
+
+    def _release_auto_hold(self) -> None:
+        state = runtime.get_state()
+        safety = getattr(state, "safety", None)
+        if safety is None or not getattr(safety, "hold_active", False):
+            self._auto_hold_active = False
+            self._previous_safe_mode = None
+            return
+        reason = str(getattr(safety, "hold_reason", ""))
+        if not reason.upper().startswith("RECON_DIVERGENCE"):
+            return
+        safe_mode = self._previous_safe_mode
+        if safe_mode is None:
+            control = getattr(state, "control", None)
+            safe_mode = bool(getattr(control, "safe_mode", True))
+        runtime.autopilot_apply_resume(safe_mode=safe_mode)
+        self._auto_hold_active = False
+        self._previous_safe_mode = None
+        LOGGER.info("recon.auto_hold_cleared")
+
+    def _log_summary(self, worst_state: str, snapshots: Sequence[ReconSnapshot]) -> None:
+        logger = get_golden_logger()
+        if not logger.enabled:
+            return
+        logger.log(
+            "recon_guard",
+            {
+                "state": worst_state,
+                "diffs": [
+                    {
+                        "venue": snapshot.venue,
+                        "symbol": snapshot.symbol or snapshot.asset,
+                        "status": snapshot.status,
+                        "diff_abs": float(snapshot.diff_abs),
+                    }
+                    for snapshot in snapshots
+                ],
+            },
+        )
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _resolve_thresholds() -> ReconThresholds:
-    state = runtime.get_state()
-    config = getattr(state, "config", None)
-    data = getattr(config, "data", None)
-    recon_cfg = getattr(data, "recon", None)
-    abs_warn = float(getattr(recon_cfg, "diff_abs_usd_warn", 50.0) or 50.0)
-    abs_crit = float(getattr(recon_cfg, "diff_abs_usd_crit", max(abs_warn * 2, abs_warn)) or abs_warn)
-    if abs_crit < abs_warn:
-        abs_crit = abs_warn
-    rel_warn = float(getattr(recon_cfg, "diff_rel_warn", 0.05) or 0.05)
-    rel_crit = float(getattr(recon_cfg, "diff_rel_crit", max(rel_warn * 2, rel_warn)) or rel_warn)
-    if rel_crit < rel_warn:
-        rel_crit = rel_warn
-    return ReconThresholds(abs_warn=abs_warn, abs_crit=abs_crit, rel_warn=rel_warn, rel_crit=rel_crit)
-
-
-def _classify(diff: ReconDiff, thresholds: ReconThresholds) -> str:
-    severity = "OK"
-    rel = diff.diff_rel or 0.0
-    if diff.diff_abs >= thresholds.abs_crit or rel >= thresholds.rel_crit:
-        severity = "CRIT"
-    elif diff.diff_abs >= thresholds.abs_warn or rel >= thresholds.rel_warn:
-        severity = "WARN"
-    return severity
-
-
-async def _fetch_remote_balances(state) -> list[dict[str, object]]:
+async def _fetch_remote_balances(state) -> list[Mapping[str, object]]:
     runtime_deriv = getattr(state, "derivatives", None)
     venues = getattr(runtime_deriv, "venues", {}) if runtime_deriv else {}
     if not venues:
         return []
     router = ExecutionRouter()
-    tasks = []
+    tasks: list[asyncio.Task] = []
     for venue_id in venues.keys():
         venue = venue_id.replace("_", "-")
         broker = router.broker_for_venue(venue)
         tasks.append(asyncio.create_task(broker.balances(venue=venue)))
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    balances: list[dict[str, object]] = []
+    balances: list[Mapping[str, object]] = []
     for venue_id, result in zip(venues.keys(), results):
         venue = venue_id.replace("_", "-")
         if isinstance(result, Exception):
-            LOGGER.warning("recon.remote_balances_failed", extra={"venue": venue, "error": str(result)})
+            LOGGER.warning(
+                "recon.remote_balances_failed",
+                extra={"venue": venue, "error": str(result)},
+            )
             continue
         payload = result.get("balances") if isinstance(result, Mapping) else None
-        if isinstance(payload, list):
+        if isinstance(payload, Sequence):
             balances.extend([row for row in payload if isinstance(row, Mapping)])
     return balances
 
 
-def _set_metrics(diff: ReconDiff, severity: str) -> tuple[str, str]:
-    venue = (diff.venue or "").lower() or "unknown"
-    symbol = (diff.symbol or "").upper() or "UNKNOWN"
-    RECON_DIFF_ABS_USD_GAUGE.labels(venue=venue, symbol=symbol).set(float(diff.diff_abs))
-    for state in ("OK", "WARN", "CRIT"):
-        value = 1.0 if severity == state else 0.0
-        RECON_DIFF_STATE_GAUGE.labels(venue=venue, symbol=symbol, state=state).set(value)
-    return venue, symbol
+def _reset_diff_metrics(active: set[tuple[str, str, str]]) -> None:
+    stale = _ACTIVE_DIFF_LABELS - active
+    for venue, symbol, status in stale:
+        RECON_DIFF_NOTIONAL_GAUGE.labels(venue=venue, symbol=symbol, status=status).set(0.0)
+    _ACTIVE_DIFF_LABELS.clear()
+    _ACTIVE_DIFF_LABELS.update(active)
 
 
-def _reset_missing_metric_labels(active: set[tuple[str, str]]) -> None:
-    stale = _ACTIVE_LABELS - active
-    for venue, symbol in stale:
-        RECON_DIFF_ABS_USD_GAUGE.labels(venue=venue, symbol=symbol).set(0.0)
-        for state in ("OK", "WARN", "CRIT"):
-            RECON_DIFF_STATE_GAUGE.labels(venue=venue, symbol=symbol, state=state).set(1.0 if state == "OK" else 0.0)
-    _ACTIVE_LABELS.clear()
-    _ACTIVE_LABELS.update(active)
+def _update_status_metrics(venue_states: Mapping[str, str]) -> None:
+    active: set[tuple[str, str]] = set()
+    for venue, status in venue_states.items():
+        for candidate in ("OK", "WARN", "CRITICAL"):
+            value = 1.0 if candidate == status else 0.0
+            RECON_STATUS_GAUGE.labels(venue=venue, status=candidate).set(value)
+            active.add((venue, candidate))
+    stale = _ACTIVE_STATUS_LABELS - active
+    for venue, status in stale:
+        value = 1.0 if status == "OK" else 0.0
+        RECON_STATUS_GAUGE.labels(venue=venue, status=status).set(value)
+    _ACTIVE_STATUS_LABELS.clear()
+    _ACTIVE_STATUS_LABELS.update(active)
 
 
-def _apply_recon_freeze(diff: ReconDiff) -> None:
-    registry = get_freeze_registry()
-    venue_token = (diff.venue or "").strip().lower()
-    symbol_token = (diff.symbol or "").strip().upper()
-    scope: Literal["symbol", "venue"]
-    scope = "symbol" if symbol_token else "venue"
-    reason_parts = ["RECON_CRITICAL"]
-    if venue_token:
-        reason_parts.append(f"venue={venue_token}")
-    if scope == "symbol" and symbol_token:
-        reason_parts.append(f"symbol={symbol_token}")
-    reason = "::".join(reason_parts)
-    rule = FreezeRule(reason=reason, scope=scope, ts=time.time())
-    if registry.apply(rule):
-        log_operator_action(
-            "system",
-            "system",
-            "AUTO_FREEZE_APPLIED",
-            {
-                "source": "recon",
-                "reason": reason,
-                "scope": scope,
-                "venue": diff.venue,
-                "symbol": diff.symbol,
-            },
-        )
+def _worst_state(current: str, candidate: str) -> str:
+    order = {"OK": 0, "WARN": 1, "CRITICAL": 2}
+    current_rank = order.get(current, 0)
+    candidate_rank = order.get(candidate, 0)
+    return current if current_rank >= candidate_rank else candidate
 
 
-async def _build_context(state, remote_balances: list[dict[str, object]]) -> SimpleNamespace:
-    runtime_ns = SimpleNamespace(remote_balances=lambda: remote_balances)
-    ctx = SimpleNamespace(runtime=runtime_ns)
-    return ctx
-
-
-async def run_recon_cycle(
-    thresholds: ReconThresholds | None = None,
-    *,
-    enable_hold: bool | None = None,
-) -> dict[str, object]:
-    state = runtime.get_state()
-    remote_balances = await _fetch_remote_balances(state)
-    ctx = await _build_context(state, remote_balances)
-    thresholds = thresholds or _resolve_thresholds()
-    if enable_hold is None:
-        enable_hold = _env_flag("ENABLE_RECON_HOLD", False)
-    auto_freeze_enabled = _env_flag("AUTO_FREEZE_ON_RECON", False)
-
-    try:
-        diffs = collect_recon_snapshot(ctx)
-    except Exception:
-        LOGGER.exception("recon.snapshot_failed")
-        raise
-
-    active_labels: set[tuple[str, str]] = set()
-    has_warn = False
-    has_crit = False
-    diff_payloads: list[dict[str, object]] = []
-
-    for diff in diffs:
-        severity = _classify(diff, thresholds)
-        active_labels.add(_set_metrics(diff, severity))
-        payload = asdict(diff)
-        payload["severity"] = severity
-        diff_payloads.append(payload)
-        if severity == "CRIT":
-            has_crit = True
-            LOGGER.error("recon.diff_critical", extra=payload)
-            if auto_freeze_enabled:
-                _apply_recon_freeze(diff)
-        elif severity == "WARN":
-            has_warn = True
-            LOGGER.warning("recon.diff_warning", extra=payload)
-
-    _reset_missing_metric_labels(active_labels)
-
-    logger = get_golden_logger()
-    if logger.enabled:
-        summary_diffs: list[dict[str, object]] = []
-        for payload in diff_payloads:
-            entry: dict[str, object] = {
-                "venue": payload.get("venue"),
-                "symbol": payload.get("symbol"),
-                "severity": payload.get("severity"),
-            }
-            for key in ("diff_abs", "diff_rel"):
-                value = payload.get(key)
-                if value is None:
-                    continue
-                if isinstance(value, (int, float)):
-                    entry[key] = float(value)
-                else:
-                    try:
-                        entry[key] = float(value)  # type: ignore[arg-type]
-                    except (TypeError, ValueError):
-                        entry[key] = value
-            summary_diffs.append(entry)
-        logger.log(
-            "recon_guard",
-            {
-                "state": "CRIT" if has_crit else "WARN" if has_warn else "OK",
-                "diffs": summary_diffs,
-            },
-        )
-
-    snapshot_state = "CRIT" if has_crit else "WARN" if has_warn else "OK"
-    metadata = {
-        "state": snapshot_state,
-        "status": snapshot_state,
-        "has_warn": has_warn,
-        "has_crit": has_crit,
-        "last_checked": _iso_now(),
-    }
-    metadata["auto_hold"] = bool(enable_hold)
-    runtime.update_reconciliation_status(diffs=diff_payloads, metadata=metadata, desync_detected=bool(diffs))
-
-    if has_crit:
-        details = {"diffs": diff_payloads, "timestamp": metadata["last_checked"]}
-        log_operator_action("system", "system", "RECON_CRITICAL", details)
-        if enable_hold:
-            try:
-                runtime.flag_recon_issue("CRITICAL", details=details)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.exception("recon.flag_issue_failed")
-    elif auto_freeze_enabled:
-        get_freeze_registry().clear("RECON_CRITICAL")
-
+def _snapshot_payload(snapshot: ReconSnapshot) -> dict[str, object]:
     return {
-        "diffs": diff_payloads,
-        "has_warn": has_warn,
-        "has_crit": has_crit,
-        "state": snapshot_state,
+        "event": "recon_snapshot",
+        "venue": snapshot.venue,
+        "asset": snapshot.asset,
+        "symbol": snapshot.symbol,
+        "side": snapshot.side,
+        "exch_position": _decimal_to_str(snapshot.exch_position),
+        "local_position": _decimal_to_str(snapshot.local_position),
+        "exch_balance": _decimal_to_str(snapshot.exch_balance),
+        "local_balance": _decimal_to_str(snapshot.local_balance),
+        "diff_abs": _decimal_to_str(snapshot.diff_abs),
+        "status": snapshot.status,
+        "reason": snapshot.reason,
+        "ts": snapshot.ts,
+    }
+
+
+def _decimal_to_str(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value, "f")
+
+
+def _resolve_daemon_config(cfg: object | None = None) -> DaemonConfig:
+    state = runtime.get_state()
+    config_data = getattr(getattr(state, "config", None), "data", None)
+    recon_cfg = getattr(config_data, "recon", None)
+    if cfg is not None:
+        recon_cfg = getattr(cfg, "recon", recon_cfg)
+    if recon_cfg is None:
+        return DaemonConfig()
+    enabled = bool(getattr(recon_cfg, "enabled", True))
+    interval = float(getattr(recon_cfg, "interval_sec", 15.0) or 15.0)
+    warn = getattr(recon_cfg, "warn_notional_usd", getattr(recon_cfg, "diff_abs_usd_warn", 5.0))
+    crit = getattr(
+        recon_cfg,
+        "critical_notional_usd",
+        getattr(recon_cfg, "diff_abs_usd_crit", max(float(warn) * 2, float(warn))),
+    )
+    clear_runs = int(getattr(recon_cfg, "clear_after_ok_runs", 3) or 3)
+    return DaemonConfig(
+        enabled=enabled,
+        interval_sec=interval,
+        warn_notional_usd=Decimal(str(warn)),
+        critical_notional_usd=Decimal(str(crit)),
+        clear_after_ok_runs=max(1, clear_runs),
+    )
+
+
+async def run_recon_cycle(*, config: DaemonConfig | None = None) -> dict[str, object]:
+    daemon = ReconDaemon(config)
+    snapshots = await daemon.run_once()
+    worst = "OK"
+    for snapshot in snapshots:
+        worst = _worst_state(worst, snapshot.status)
+    return {
+        "snapshots": [_snapshot_payload(snapshot) for snapshot in snapshots],
+        "worst_state": worst,
+        "auto_hold": daemon.auto_hold_active,
     }
 
 
 async def run_recon_loop(interval: float | None = None) -> None:
-    interval_value = interval if interval is not None else _env_float("RECON_LOOP_INTERVAL_SEC", _DEFAULT_INTERVAL_SEC)
-    LOGGER.info("recon.loop_start", extra={"interval": interval_value})
-    while True:
-        start = time.perf_counter()
-        thresholds = _resolve_thresholds()
-        enable_hold = _env_flag("ENABLE_RECON_HOLD", False)
-        try:
-            await run_recon_cycle(thresholds, enable_hold=enable_hold)
-        except Exception:
-            await asyncio.sleep(max(interval_value, 0.5))
-            continue
-        elapsed = time.perf_counter() - start
-        await asyncio.sleep(max(interval_value - elapsed, 0.5))
+    config = _resolve_daemon_config()
+    if interval is not None:
+        config.interval_sec = interval
+    daemon = ReconDaemon(config)
+    await daemon.start()
+    if daemon._task is not None:
+        await daemon._task
 
 
-__all__ = ["run_recon_loop", "run_recon_cycle", "ReconThresholds"]
+def start_recon_daemon(ctx: object | None, cfg: object | None) -> ReconDaemon:
+    """Initialise and return a running reconciliation daemon."""
+
+    config = _resolve_daemon_config(cfg)
+    daemon = ReconDaemon(config)
+    asyncio.create_task(daemon.start())
+    return daemon
+
+
+__all__ = [
+    "ReconDaemon",
+    "DaemonConfig",
+    "run_recon_loop",
+    "run_recon_cycle",
+    "start_recon_daemon",
+]
 

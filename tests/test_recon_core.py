@@ -1,96 +1,119 @@
 from __future__ import annotations
 
-from app.recon.reconciler import RECON_QTY_TOL, Reconciler
+from dataclasses import dataclass
+from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from app.recon.core import reconcile_once
 
 
-class FakeClient:
-    def __init__(self, positions: list[dict[str, object]], marks: dict[str, float] | None = None) -> None:
-        self._positions = positions
-        self._marks = marks or {}
+@dataclass
+class _FakeSafety:
+    risk_snapshot: dict[str, Any]
+    hold_active: bool = False
+    hold_reason: str | None = None
+    reconciliation_snapshot: dict[str, Any] = None
 
-    def positions(self) -> list[dict[str, object]]:
-        return list(self._positions)
-
-    def get_mark_price(self, symbol: str) -> dict[str, float]:  # pragma: no cover - fallback handled in tests
-        if symbol in self._marks:
-            return {"price": self._marks[symbol]}
-        raise RuntimeError(f"no mark for {symbol}")
-
-
-class FakeVenueRuntime:
-    def __init__(self, client: FakeClient) -> None:
-        self.client = client
+    def status_payload(self) -> dict[str, Any]:  # pragma: no cover - helper
+        return {
+            "hold_active": self.hold_active,
+            "hold_reason": self.hold_reason,
+            "reconciliation": self.reconciliation_snapshot or {},
+        }
 
 
-class FakeSafety:
-    def __init__(self, snapshot: dict[str, object] | None = None) -> None:
-        self.risk_snapshot = snapshot or {}
+@pytest.fixture
+def fake_state(monkeypatch: pytest.MonkeyPatch) -> _FakeSafety:
+    safety = _FakeSafety(risk_snapshot={})
+    state = SimpleNamespace(safety=safety, config=SimpleNamespace(data=None))
+    monkeypatch.setattr("app.recon.core.runtime.get_state", lambda: state)
+    return safety
 
 
-class FakeState:
-    def __init__(self, venues: dict[str, FakeVenueRuntime], snapshot: dict[str, object]) -> None:
-        self.derivatives = type("Derivatives", (), {"venues": venues})()
-        self.safety = FakeSafety(snapshot)
+def test_reconcile_classifies_ok_warn_critical(monkeypatch: pytest.MonkeyPatch, fake_state: _FakeSafety) -> None:
+    fake_state.risk_snapshot = {}
 
-
-class FakeAdapters:
-    def __init__(self, state: FakeState, ledger_rows: list[dict[str, object]]) -> None:
-        self._state = state
-        self._ledger_rows = ledger_rows
-
-    def get_state(self) -> FakeState:
-        return self._state
-
-    def fetch_ledger_positions(self) -> list[dict[str, object]]:
-        return list(self._ledger_rows)
-
-
-def test_reconciler_produces_diffs() -> None:
-    ledger_rows = [
-        {"venue": "binance-um", "symbol": "BTCUSDT", "base_qty": 1.0, "avg_price": 20000.0},
-        {"venue": "okx-perp", "symbol": "BTC-USDT-SWAP", "base_qty": -1.0, "avg_price": 19950.0},
-    ]
-    binance_client = FakeClient(
-        positions=[{"symbol": "BTCUSDT", "position_amt": 1.002}],
-        marks={"BTCUSDT": 20050.0},
-    )
-    okx_client = FakeClient(
-        positions=[{"instId": "BTC-USDT-SWAP", "pos": -0.95}],
-        marks={"BTC-USDT-SWAP": 19980.0},
-    )
-    venues = {
-        "binance_um": FakeVenueRuntime(binance_client),
-        "okx_perp": FakeVenueRuntime(okx_client),
+    exchange_positions = {
+        ("binance-um", "BTCUSDT"): Decimal("1"),
+        ("binance-um", "ETHUSDT"): Decimal("1.5"),
+        ("binance-um", "SOLUSDT"): Decimal("0"),
     }
-    snapshot = {"exposure_by_symbol": {"BTCUSDT": 40000.0}}
-    state = FakeState(venues, snapshot)
-    adapters = FakeAdapters(state, ledger_rows)
-    reconciler = Reconciler(adapters=adapters)  # type: ignore[arg-type]
+    ledger_positions = {
+        ("binance-um", "BTCUSDT"): {"qty": Decimal("1"), "avg_price": Decimal("20000")},
+        ("binance-um", "ETHUSDT"): {"qty": Decimal("1"), "avg_price": Decimal("10")},
+        ("binance-um", "SOLUSDT"): {"qty": Decimal("1"), "avg_price": Decimal("100")},
+    }
 
-    diffs = reconciler.diff()
-    assert len(diffs) == 2
-    venues_seen = {(entry["venue"], entry["symbol"]) for entry in diffs}
-    assert ("binance-um", "BTCUSDT") in venues_seen
-    assert ("okx-perp", "BTCUSDT") in venues_seen
-    for entry in diffs:
-        assert abs(entry["delta"]) > 0
-        assert entry.get("notional_usd", 0.0) > 0
-
-
-def test_reconciler_applies_tolerance() -> None:
-    ledger_rows = [
-        {"venue": "binance-um", "symbol": "ETHUSDT", "base_qty": 10.0, "avg_price": 1200.0},
-    ]
-    delta = RECON_QTY_TOL / 10
-    binance_client = FakeClient(
-        positions=[{"symbol": "ETHUSDT", "position_amt": 10.0 + delta}],
-        marks={"ETHUSDT": 1200.0},
+    monkeypatch.setattr(
+        "app.recon.core.Reconciler.fetch_exchange_positions",
+        lambda self: exchange_positions,
     )
-    venues = {"binance_um": FakeVenueRuntime(binance_client)}
-    snapshot = {"exposure_by_symbol": {"ETHUSDT": 12000.0}}
-    state = FakeState(venues, snapshot)
-    adapters = FakeAdapters(state, ledger_rows)
-    reconciler = Reconciler(adapters=adapters)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        "app.recon.core.Reconciler.fetch_ledger_positions",
+        lambda self: ledger_positions,
+    )
+    monkeypatch.setattr(
+        "app.recon.core.Reconciler._fetch_mark_prices",
+        lambda self, candidates: {"BTCUSDT": 20000.0, "ETHUSDT": 10.0, "SOLUSDT": 100.0},
+    )
 
-    diffs = reconciler.diff()
-    assert diffs == []
+    ctx = SimpleNamespace(
+        cfg=SimpleNamespace(
+            recon=SimpleNamespace(
+                warn_notional_usd=Decimal("5"),
+                critical_notional_usd=Decimal("25"),
+            )
+        ),
+        local_balances=lambda: [
+            {"venue": "binance-um", "asset": "USDT", "total": "1000"},
+        ],
+        remote_balances=lambda: [
+            {"venue": "binance-um", "asset": "USDT", "total": "1005"},
+        ],
+    )
+
+    snapshots = reconcile_once(ctx)
+
+    status_map = {(snap.venue, snap.symbol or snap.asset): snap.status for snap in snapshots}
+    assert status_map[("binance-um", "BTCUSDT")] == "OK"
+    assert status_map[("binance-um", "ETHUSDT")] == "WARN"
+    assert status_map[("binance-um", "SOLUSDT")] == "CRITICAL"
+    assert status_map[("binance-um", "USDT")] in {"OK", "WARN", "CRITICAL"}
+    assert all(isinstance(snap.diff_abs, Decimal) for snap in snapshots)
+
+
+def test_reconcile_uses_decimal_and_config(monkeypatch: pytest.MonkeyPatch, fake_state: _FakeSafety) -> None:
+    exchange_positions = {("okx-perp", "ADAUSDT"): Decimal("10")}
+    ledger_positions = {("okx-perp", "ADAUSDT"): {"qty": Decimal("8"), "avg_price": Decimal("1")}}
+    monkeypatch.setattr(
+        "app.recon.core.Reconciler.fetch_exchange_positions",
+        lambda self: exchange_positions,
+    )
+    monkeypatch.setattr(
+        "app.recon.core.Reconciler.fetch_ledger_positions",
+        lambda self: ledger_positions,
+    )
+    monkeypatch.setattr(
+        "app.recon.core.Reconciler._fetch_mark_prices",
+        lambda self, candidates: {"ADAUSDT": 1.0},
+    )
+
+    ctx = SimpleNamespace(
+        cfg=SimpleNamespace(
+            recon=SimpleNamespace(
+                warn_notional_usd=Decimal("1"),
+                critical_notional_usd=Decimal("5"),
+            )
+        ),
+        local_balances=lambda: [],
+        remote_balances=lambda: [],
+    )
+
+    snapshots = reconcile_once(ctx)
+    ada_snapshot = next(s for s in snapshots if s.symbol == "ADAUSDT")
+    assert isinstance(ada_snapshot.diff_abs, Decimal)
+    assert ada_snapshot.diff_abs == Decimal("2")
+    assert ada_snapshot.status == "WARN"

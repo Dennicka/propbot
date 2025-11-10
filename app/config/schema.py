@@ -344,6 +344,11 @@ class ChaosConfig(BaseModel):
 
 
 class ReconConfig(BaseModel):
+    enabled: bool = Field(True)
+    interval_sec: float = Field(15.0, ge=0.5)
+    warn_notional_usd: float = Field(5.0, ge=0.0)
+    critical_notional_usd: float = Field(25.0, ge=0.0)
+    clear_after_ok_runs: int = Field(3, ge=1)
     max_divergence: float = Field(0.0, ge=0.0)
     diff_abs_usd_warn: float = Field(50.0, ge=0.0)
     diff_abs_usd_crit: float = Field(100.0, ge=0.0)
@@ -356,6 +361,8 @@ class ReconConfig(BaseModel):
             raise ValueError("diff_abs_usd_crit must be >= diff_abs_usd_warn")
         if self.diff_rel_crit < self.diff_rel_warn:
             raise ValueError("diff_rel_crit must be >= diff_rel_warn")
+        if self.critical_notional_usd < self.warn_notional_usd:
+            raise ValueError("critical_notional_usd must be >= warn_notional_usd")
         return self
 
 

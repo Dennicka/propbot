@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from ..metrics import RECON_DIFFS_GAUGE, RECON_EXCEPTIONS_COUNTER
-from ..recon.daemon import run_recon_cycle
+from ..recon.daemon import ReconDaemon
 from . import runtime
 
 LOGGER = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ class ReconRunner:
         self._signal_hold = _env_flag("ENABLE_RECON_HOLD", RECON_SIGNAL_HOLD)
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        self._daemon: ReconDaemon | None = None
 
     @property
     def auto_hold_enabled(self) -> bool:
@@ -82,8 +83,10 @@ class ReconRunner:
             self._task = None
 
     async def run_once(self) -> dict[str, object]:
+        if self._daemon is None:
+            self._daemon = ReconDaemon()
         try:
-            summary = await run_recon_cycle(enable_hold=self._signal_hold)
+            snapshots = await self._daemon.run_once()
         except Exception as exc:  # pragma: no cover - defensive logging
             RECON_EXCEPTIONS_COUNTER.inc()
             runtime.update_reconciliation_status(
@@ -92,11 +95,21 @@ class ReconRunner:
                 metadata={"error": str(exc), "state": "ERROR"},
             )
             raise
-        diffs = summary.get("diffs")
-        RECON_DIFFS_GAUGE.set(len(diffs) if isinstance(diffs, list) else 0.0)
-        summary["signal_hold"] = self._signal_hold
-        summary.setdefault("auto_hold", self._signal_hold)
-        return summary
+        diff_count = len([snapshot for snapshot in snapshots if snapshot.status != "OK"])
+        RECON_DIFFS_GAUGE.set(diff_count)
+        worst = "OK"
+        for snapshot in snapshots:
+            status = snapshot.status if isinstance(snapshot.status, str) else "OK"
+            if status == "CRITICAL":
+                worst = "CRITICAL"
+                break
+            if status == "WARN" and worst != "CRITICAL":
+                worst = "WARN"
+        return {
+            "snapshots": snapshots,
+            "worst_state": worst,
+            "auto_hold": self._daemon.auto_hold_active if self._daemon else False,
+        }
 
     async def _run(self) -> None:
         LOGGER.info("reconciliation runner started with interval=%ss", self._interval)

@@ -1,29 +1,50 @@
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
+from app.recon.core import ReconSnapshot
 from app.recon.service import ReconDiff, collect_recon_snapshot
 
 
-def _position_diff() -> dict[str, object]:
-    return {
+def _make_snapshot(**overrides: object) -> ReconSnapshot:
+    defaults = {
         "venue": "binance-um",
+        "asset": "USDT",
         "symbol": "BTCUSDT",
-        "ledger_qty": 1.0,
-        "exch_qty": 1.5,
-        "delta": 0.5,
-        "notional_usd": 500.0,
+        "side": "LONG",
+        "exch_position": Decimal("1.5"),
+        "local_position": Decimal("1.0"),
+        "exch_balance": None,
+        "local_balance": None,
+        "diff_abs": Decimal("500"),
+        "status": "WARN",
+        "reason": "position_mismatch",
+        "ts": 123.0,
     }
+    defaults.update(overrides)
+    return ReconSnapshot(**defaults)
 
 
 def test_collect_recon_snapshot_returns_position_and_balance(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.recon.service.Reconciler.diff", lambda self: [_position_diff()])
-    ctx = SimpleNamespace(
-        local_balances=lambda: [{"venue": "binance-um", "asset": "USDT", "qty": 1200.0}],
-        remote_balances=lambda: [{"venue": "binance-um", "asset": "USDT", "total": 1000.0}],
+    position_snapshot = _make_snapshot()
+    balance_snapshot = _make_snapshot(
+        symbol=None,
+        side=None,
+        exch_position=None,
+        local_position=None,
+        exch_balance=Decimal("1000"),
+        local_balance=Decimal("1200"),
+        diff_abs=Decimal("200"),
+        reason="balance_mismatch",
     )
 
-    diffs = collect_recon_snapshot(ctx)
+    monkeypatch.setattr(
+        "app.recon.service.reconcile_once",
+        lambda ctx=None: [position_snapshot, balance_snapshot],
+    )
+
+    diffs = collect_recon_snapshot(SimpleNamespace())
 
     assert any(isinstance(diff, ReconDiff) and diff.kind == "position" for diff in diffs)
     assert any(diff.kind == "balance" for diff in diffs)
@@ -37,18 +58,18 @@ def test_collect_recon_snapshot_returns_position_and_balance(monkeypatch: pytest
     assert balance.diff_rel == pytest.approx(200.0 / 1200.0)
 
 
-def test_collect_recon_snapshot_uses_asset_prices(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.recon.service.Reconciler.diff", lambda self: [])
-    ctx = SimpleNamespace(
-        local_balances=lambda: [{"venue": "okx-perp", "asset": "BTC", "qty": 1.0}],
-        remote_balances=lambda: [{"venue": "okx-perp", "asset": "BTC", "total": 1.2}],
-        asset_prices={"BTC": 25_000.0},
+def test_collect_recon_snapshot_filters_ok_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    warn_snapshot = _make_snapshot()
+    ok_snapshot = _make_snapshot(status="OK", diff_abs=Decimal("0"), reason="position_ok")
+
+    monkeypatch.setattr(
+        "app.recon.service.reconcile_once",
+        lambda ctx=None: [warn_snapshot, ok_snapshot],
     )
 
-    diffs = collect_recon_snapshot(ctx)
+    diffs = collect_recon_snapshot(SimpleNamespace())
 
     assert len(diffs) == 1
     diff = diffs[0]
-    assert diff.kind == "balance"
-    assert diff.diff_abs == pytest.approx(0.2 * 25_000.0)
-    assert diff.diff_rel == pytest.approx(0.2 / 1.2)
+    assert diff.kind == "position"
+    assert diff.diff_abs == pytest.approx(500.0)

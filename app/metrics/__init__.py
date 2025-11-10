@@ -57,7 +57,7 @@ from .orders import (
     observe_replace_chain,
     record_open_intents,
 )
-from .recon import RECON_DIFF_ABS_USD_GAUGE, RECON_DIFF_STATE_GAUGE
+from .recon import RECON_AUTO_HOLD_COUNTER, RECON_DIFF_NOTIONAL_GAUGE, RECON_STATUS_GAUGE
 from .pretrade import PRETRADE_AUTOFIX_TOTAL, PRETRADE_BLOCKS_TOTAL, PRETRADE_CHECKS_TOTAL
 from .risk_governor import (
     increment_window as increment_risk_window,
@@ -76,8 +76,9 @@ __all__ = [
     "DAILY_LOSS_BREACH_GAUGE",
     "RECON_EXCEPTIONS_COUNTER",
     "RECON_DIFFS_GAUGE",
-    "RECON_DIFF_ABS_USD_GAUGE",
-    "RECON_DIFF_STATE_GAUGE",
+    "RECON_DIFF_NOTIONAL_GAUGE",
+    "RECON_STATUS_GAUGE",
+    "RECON_AUTO_HOLD_COUNTER",
     "RISK_BREACHES_COUNTER",
     "TRADES_EXECUTED_COUNTER",
     "WATCHDOG_STATE_GAUGE",

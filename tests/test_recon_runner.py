@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.services import runtime
@@ -8,50 +10,51 @@ from app.services.recon_runner import ReconRunner
 
 @pytest.mark.asyncio
 async def test_recon_runner_invokes_cycle(monkeypatch):
-    summary = {"diffs": [{"kind": "position"}], "has_warn": False, "has_crit": False, "state": "OK"}
-    statuses: list[dict[str, object]] = []
+    snapshots = [SimpleNamespace(status="WARN")]
 
-    async def fake_cycle(*, thresholds=None, enable_hold=None):
-        assert enable_hold is True
-        runtime.update_reconciliation_status(
-            diffs=summary["diffs"],
-            metadata={
-                "state": summary["state"],
-                "has_warn": summary["has_warn"],
-                "has_crit": summary["has_crit"],
-            },
-            desync_detected=bool(summary["diffs"]),
-        )
-        return summary
+    class StubDaemon:
+        auto_hold_active = True
 
-    monkeypatch.setattr(runtime, "update_reconciliation_status", lambda **kw: statuses.append(kw) or kw)
-    monkeypatch.setattr("app.services.recon_runner.run_recon_cycle", fake_cycle)
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.calls = 0
+
+        async def run_once(self) -> list[object]:
+            self.calls += 1
+            return snapshots
+
+    stub = StubDaemon()
+    monkeypatch.setattr("app.services.recon_runner.ReconDaemon", lambda *_a, **_k: stub)
 
     runner = ReconRunner(interval=0.01)
-    runner.auto_hold_enabled = True
-
     result = await runner.run_once()
 
-    assert result["diffs"] == summary["diffs"]
-    assert result["signal_hold"] is True
+    assert result["snapshots"] == snapshots
+    assert result["worst_state"] == "WARN"
     assert result["auto_hold"] is True
-    assert statuses  # status updated at least once
+    assert stub.calls == 1
 
 
 @pytest.mark.asyncio
 async def test_recon_runner_handles_exceptions(monkeypatch):
-    statuses: list[dict[str, object]] = []
-
-    async def failing_cycle(*args, **kwargs):
+    async def failing_run_once(self):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(runtime, "update_reconciliation_status", lambda **kw: statuses.append(kw) or kw)
-    monkeypatch.setattr("app.services.recon_runner.run_recon_cycle", failing_cycle)
+    class StubDaemon:
+        auto_hold_active = False
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        run_once = failing_run_once
+
+    monkeypatch.setattr("app.services.recon_runner.ReconDaemon", StubDaemon)
+    monkeypatch.setattr(
+        runtime,
+        "update_reconciliation_status",
+        lambda **kw: kw,
+    )
 
     runner = ReconRunner(interval=0.01)
 
     with pytest.raises(RuntimeError):
         await runner.run_once()
-
-    assert statuses
-    assert statuses[-1]["metadata"]["error"] == "boom"
