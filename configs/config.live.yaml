@@ -104,11 +104,16 @@ execution:
     backoff_sec: [1, 2, 5]
 recon:
   enabled: false
-  interval_sec: 20
+  interval_s: 30
   epsilon_position: 0.0001
   epsilon_balance: 0.5
   epsilon_notional: 5.0
   auto_hold_on_critical: true
+  balance_warn_usd: 5
+  balance_critical_usd: 50
+  position_size_warn: 0.0005
+  position_size_critical: 0.005
+  order_critical_missing: true
 readiness:
   startup_timeout_sec: 120
 status_thresholds_file: status_thresholds.yaml

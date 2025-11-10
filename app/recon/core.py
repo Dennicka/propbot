@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import logging
 import time
-from typing import Mapping, NamedTuple, Sequence
+from typing import Any, Literal, Mapping, NamedTuple, Sequence
 
 from .. import ledger
 from ..services import runtime
@@ -15,6 +15,20 @@ from ..util.venues import VENUE_ALIASES
 LOGGER = logging.getLogger(__name__)
 
 _CONFIG_OVERRIDE: _ReconConfig | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ReconDrift:
+    """Normalized reconciliation drift discovered during a recon sweep."""
+
+    kind: Literal["BALANCE", "POSITION", "ORDER"]
+    venue: str
+    symbol: str | None
+    local: Any
+    remote: Any
+    delta: Any
+    severity: Literal["INFO", "WARN", "CRITICAL"]
+    ts: float
 
 
 class ReconIssue(NamedTuple):
@@ -41,6 +55,11 @@ class _ReconConfig:
     epsilon_balance: Decimal
     epsilon_notional: Decimal
     auto_hold_on_critical: bool
+    balance_warn_usd: Decimal
+    balance_critical_usd: Decimal
+    position_size_warn: Decimal
+    position_size_critical: Decimal
+    order_critical_missing: bool
 
 
 _DEFAULT_CONFIG = _ReconConfig(
@@ -48,6 +67,11 @@ _DEFAULT_CONFIG = _ReconConfig(
     epsilon_balance=Decimal("0.5"),
     epsilon_notional=Decimal("5.0"),
     auto_hold_on_critical=True,
+    balance_warn_usd=Decimal("10"),
+    balance_critical_usd=Decimal("100"),
+    position_size_warn=Decimal("0.001"),
+    position_size_critical=Decimal("0.01"),
+    order_critical_missing=True,
 )
 
 
@@ -57,16 +81,21 @@ class _PositionEntry:
     symbol: str
     qty: Decimal
     notional: Decimal | None
+    entry_price: Decimal | None = None
 
 
 @dataclass(slots=True)
 class _OrderEntry:
     venue: str
-    symbol: str
+    symbol: str | None
+    key: str
     order_id: str
+    client_order_id: str | None
+    intent_id: str | None
     qty: Decimal
     price: Decimal | None
     notional: Decimal | None
+    status: str | None
 
 
 def compare_positions(
@@ -306,6 +335,9 @@ def _coerce_position(venue: object, symbol: object, value: object) -> _PositionE
 
     qty = Decimal("0")
     notional: Decimal | None = None
+    entry_price: Decimal | None = None
+
+    entry_price: Decimal | None = None
 
     if isinstance(value, Mapping):
         qty = _to_decimal(
@@ -316,17 +348,30 @@ def _coerce_position(venue: object, symbol: object, value: object) -> _PositionE
             or value.get("size"),
             default=Decimal("0"),
         )
+        entry_price = _to_decimal(
+            value.get("entry_price")
+            or value.get("entryPrice")
+            or value.get("avg_price")
+            or value.get("avgPrice")
+            or value.get("price")
+            or value.get("mark_price"),
+            default=None,
+        )
         notional_value = value.get("notional") or value.get("notional_usd")
-        if notional_value is None:
-            price = _to_decimal(value.get("price") or value.get("mark_price"), default=None)
-            if price is not None:
-                notional_value = abs(qty) * price
+        if notional_value is None and entry_price is not None:
+            notional_value = abs(qty) * entry_price
         if notional_value is not None:
             notional = _to_decimal(notional_value, default=None)
     else:
         qty = _to_decimal(value, default=Decimal("0"))
 
-    return _PositionEntry(venue=venue_name, symbol=symbol_name, qty=qty, notional=notional)
+    return _PositionEntry(
+        venue=venue_name,
+        symbol=symbol_name,
+        qty=qty,
+        notional=notional,
+        entry_price=entry_price,
+    )
 
 
 def _position_notional_delta(
@@ -412,9 +457,12 @@ def _normalise_orders(
 
     for row in rows:
         venue = _normalise_venue(row.get("venue") or row.get("exchange"))
-        order_id = _normalise_order_id(row)
         symbol = _normalise_symbol(row.get("symbol") or row.get("instrument"))
-        if not venue or not order_id:
+        client_order_id = _extract_client_order_id(row)
+        intent_id = _normalise_identifier(row.get("intent_id") or row.get("intentId"))
+        order_id = _normalise_order_id(row)
+        key = client_order_id or intent_id or order_id
+        if not venue or not key:
             continue
         qty = _to_decimal(
             row.get("qty")
@@ -433,13 +481,18 @@ def _normalise_orders(
         if notional_val is None and price is not None:
             notional_val = abs(qty) * price
         notional = _to_decimal(notional_val, default=None)
-        entries[(venue, order_id)] = _OrderEntry(
+        status = _extract_order_status(row)
+        entries[(venue, key)] = _OrderEntry(
             venue=venue,
             symbol=symbol or None,
-            order_id=order_id,
+            key=key,
+            order_id=order_id or key,
+            client_order_id=client_order_id or None,
+            intent_id=intent_id or None,
             qty=qty,
             price=price,
             notional=notional,
+            status=status,
         )
     return entries
 
@@ -548,15 +601,39 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
     epsilon_position = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_position"), config.epsilon_position)
     epsilon_balance = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_balance"), config.epsilon_balance)
     epsilon_notional = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_notional"), config.epsilon_notional)
+    balance_warn = _coerce_decimal(_cfg_get(recon_cfg, "balance_warn_usd"), config.balance_warn_usd)
+    balance_critical = _coerce_decimal(
+        _cfg_get(recon_cfg, "balance_critical_usd"),
+        config.balance_critical_usd,
+    )
+    position_warn = _coerce_decimal(
+        _cfg_get(recon_cfg, "position_size_warn"),
+        config.position_size_warn,
+    )
+    position_critical = _coerce_decimal(
+        _cfg_get(recon_cfg, "position_size_critical"),
+        config.position_size_critical,
+    )
 
     auto_hold = _cfg_get(recon_cfg, "auto_hold_on_critical")
     auto_hold_bool = bool(auto_hold) if auto_hold is not None else config.auto_hold_on_critical
+    order_missing_raw = _cfg_get(recon_cfg, "order_critical_missing")
+    order_missing_bool = (
+        bool(order_missing_raw)
+        if order_missing_raw is not None
+        else config.order_critical_missing
+    )
 
     return _ReconConfig(
         epsilon_position=epsilon_position or config.epsilon_position,
         epsilon_balance=epsilon_balance or config.epsilon_balance,
         epsilon_notional=epsilon_notional or config.epsilon_notional,
         auto_hold_on_critical=auto_hold_bool,
+        balance_warn_usd=balance_warn or config.balance_warn_usd,
+        balance_critical_usd=balance_critical or config.balance_critical_usd,
+        position_size_warn=position_warn or config.position_size_warn,
+        position_size_critical=position_critical or config.position_size_critical,
+        order_critical_missing=order_missing_bool,
     )
 
 
@@ -581,6 +658,241 @@ def _coerce_decimal(value: object, default: Decimal | None = None) -> Decimal | 
         except InvalidOperation:
             return default
     return default
+
+
+def detect_balance_drifts(
+    local_balances: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    remote_balances: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    cfg: object | None,
+) -> list[ReconDrift]:
+    """Compare balance snapshots and emit drifts above configured thresholds."""
+
+    config = _get_recon_config(cfg)
+    ts = time.time()
+    local_entries = _normalise_balances(local_balances)
+    remote_entries = _normalise_balances(remote_balances)
+    drifts: list[ReconDrift] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, asset in sorted(keys):
+        local_value = local_entries.get((venue, asset), Decimal("0"))
+        remote_value = remote_entries.get((venue, asset), Decimal("0"))
+        delta = remote_value - local_value
+        severity = _threshold_classification(
+            delta,
+            warn=config.balance_warn_usd,
+            critical=config.balance_critical_usd,
+        )
+        if severity == "INFO":
+            continue
+        drifts.append(
+            ReconDrift(
+                kind="BALANCE",
+                venue=venue,
+                symbol=asset,
+                local=float(local_value),
+                remote=float(remote_value),
+                delta=float(delta),
+                severity=severity,
+                ts=ts,
+            )
+        )
+    return drifts
+
+
+def detect_position_drifts(
+    local_positions: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    remote_positions: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    cfg: object | None,
+) -> list[ReconDrift]:
+    """Detect position size/sign drifts between local runtime and venue."""
+
+    config = _get_recon_config(cfg)
+    ts = time.time()
+    local_entries = _normalise_positions(local_positions)
+    remote_entries = _normalise_positions(remote_positions)
+    drifts: list[ReconDrift] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, symbol in sorted(keys):
+        local_entry = local_entries.get((venue, symbol))
+        remote_entry = remote_entries.get((venue, symbol))
+        local_qty = local_entry.qty if local_entry else Decimal("0")
+        remote_qty = remote_entry.qty if remote_entry else Decimal("0")
+        delta = remote_qty - local_qty
+        if local_entry is None and remote_entry is None:
+            continue
+        sign_mismatch = (
+            local_qty != 0
+            and remote_qty != 0
+            and (local_qty > 0 > remote_qty or local_qty < 0 < remote_qty)
+        )
+        severity = "CRITICAL" if sign_mismatch else _threshold_classification(
+            delta,
+            warn=config.position_size_warn,
+            critical=config.position_size_critical,
+        )
+        if severity == "INFO":
+            continue
+        drifts.append(
+            ReconDrift(
+                kind="POSITION",
+                venue=venue,
+                symbol=symbol,
+                local={
+                    "qty": float(local_qty),
+                    "entry_price": _maybe_float(local_entry.entry_price) if local_entry else None,
+                },
+                remote={
+                    "qty": float(remote_qty),
+                    "entry_price": _maybe_float(remote_entry.entry_price) if remote_entry else None,
+                },
+                delta={"qty": float(delta)},
+                severity=severity,
+                ts=ts,
+            )
+        )
+    return drifts
+
+
+def detect_order_drifts(
+    local_orders: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
+    remote_orders: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
+    cfg: object | None,
+) -> list[ReconDrift]:
+    """Detect mismatches between local open orders and exchange view."""
+
+    config = _get_recon_config(cfg)
+    ts = time.time()
+    local_entries = _normalise_orders(local_orders)
+    remote_entries = _normalise_orders(remote_orders)
+    drifts: list[ReconDrift] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, order_key in sorted(keys):
+        local_entry = local_entries.get((venue, order_key))
+        remote_entry = remote_entries.get((venue, order_key))
+        if local_entry and remote_entry:
+            local_open = _is_order_open(local_entry.status)
+            remote_open = _is_order_open(remote_entry.status)
+            if local_open and not remote_open:
+                severity = "CRITICAL" if config.order_critical_missing else "WARN"
+                drifts.append(
+                    _order_status_drift(
+                        venue,
+                        order_key,
+                        local_entry,
+                        remote_entry,
+                        severity,
+                        ts,
+                        delta_note=f"remote_status={remote_entry.status or 'UNKNOWN'}",
+                    )
+                )
+            elif remote_open and not local_open:
+                severity = "WARN"
+                drifts.append(
+                    _order_status_drift(
+                        venue,
+                        order_key,
+                        local_entry,
+                        remote_entry,
+                        severity,
+                        ts,
+                        delta_note=f"local_status={local_entry.status or 'UNKNOWN'}",
+                    )
+                )
+            continue
+        if remote_entry and not local_entry:
+            severity = "CRITICAL" if config.order_critical_missing else "WARN"
+            drifts.append(
+                ReconDrift(
+                    kind="ORDER",
+                    venue=venue,
+                    symbol=remote_entry.symbol,
+                    local=None,
+                    remote=_order_payload(remote_entry),
+                    delta={"missing": "local"},
+                    severity=severity,
+                    ts=ts,
+                )
+            )
+        elif local_entry and not remote_entry:
+            severity = "CRITICAL" if config.order_critical_missing else "WARN"
+            drifts.append(
+                ReconDrift(
+                    kind="ORDER",
+                    venue=venue,
+                    symbol=local_entry.symbol,
+                    local=_order_payload(local_entry),
+                    remote=None,
+                    delta={"missing": "remote"},
+                    severity=severity,
+                    ts=ts,
+                )
+            )
+    return drifts
+
+
+def _order_status_drift(
+    venue: str,
+    order_key: str,
+    local_entry: _OrderEntry,
+    remote_entry: _OrderEntry,
+    severity: str,
+    ts: float,
+    *,
+    delta_note: str,
+) -> ReconDrift:
+    return ReconDrift(
+        kind="ORDER",
+        venue=venue,
+        symbol=remote_entry.symbol or local_entry.symbol,
+        local=_order_payload(local_entry),
+        remote=_order_payload(remote_entry),
+        delta={"note": delta_note, "order_id": remote_entry.order_id},
+        severity=severity,
+        ts=ts,
+    )
+
+
+def _order_payload(entry: _OrderEntry) -> dict[str, object]:
+    payload = {
+        "order_id": entry.order_id,
+        "client_order_id": entry.client_order_id,
+        "intent_id": entry.intent_id,
+        "qty": float(entry.qty),
+    }
+    if entry.price is not None:
+        payload["price"] = float(entry.price)
+    if entry.status:
+        payload["status"] = entry.status
+    if entry.notional is not None:
+        payload["notional"] = float(entry.notional)
+    return payload
+
+
+def _is_order_open(status: str | None) -> bool:
+    if not status:
+        return True
+    normalized = str(status).strip().upper()
+    if not normalized:
+        return True
+    return normalized in {"NEW", "OPEN", "PARTIALLY_FILLED", "PARTIAL", "LIVE", "ACTIVE"}
+
+
+def _threshold_classification(delta: Decimal, *, warn: Decimal, critical: Decimal) -> str:
+    abs_delta = abs(delta)
+    if abs_delta >= critical:
+        return "CRITICAL"
+    if abs_delta >= warn:
+        return "WARN"
+    return "INFO"
+
+
+def _maybe_float(value: Decimal | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _severity_for_delta(
@@ -625,6 +937,11 @@ def _normalise_symbol(value: object) -> str:
     return text.replace("-", "").replace("_", "") if text else ""
 
 
+def _normalise_identifier(value: object) -> str:
+    text = str(value or "").strip()
+    return text if text else ""
+
+
 def _to_decimal(value: object, *, default: Decimal | None) -> Decimal | None:
     if isinstance(value, Decimal):
         return value
@@ -647,6 +964,32 @@ def _normalise_order_id(row: Mapping[str, object]) -> str:
     return ""
 
 
+def _extract_client_order_id(row: Mapping[str, object]) -> str:
+    for key in (
+        "client_order_id",
+        "clientOrderId",
+        "client_id",
+        "cid",
+        "idemp_key",
+        "intent_id",
+        "intentId",
+    ):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        return _normalise_identifier(value)
+    return ""
+
+
+def _extract_order_status(row: Mapping[str, object]) -> str | None:
+    for key in ("status", "state", "orderStatus", "ordStatus"):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        return str(value).upper()
+    return None
+
+
 def _format_decimal(value: Decimal | None) -> str:
     if value is None:
         return "-"
@@ -654,8 +997,12 @@ def _format_decimal(value: Decimal | None) -> str:
 
 
 __all__ = [
+    "ReconDrift",
     "ReconIssue",
     "ReconResult",
+    "detect_balance_drifts",
+    "detect_position_drifts",
+    "detect_order_drifts",
     "compare_positions",
     "compare_balances",
     "compare_open_orders",

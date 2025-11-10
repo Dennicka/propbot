@@ -851,6 +851,10 @@ def _recon_overview(safety_snapshot: Mapping[str, object]) -> Dict[str, object]:
         reason = str(safety_snapshot.get("hold_reason") or "")
         if reason.upper().startswith("RECON_DIVERGENCE"):
             auto_hold = True
+    enabled_flag = bool(payload.get("enabled", True))
+    last_severity = str(payload.get("last_severity") or status or "UNKNOWN").upper()
+    if last_severity not in {"OK", "WARN", "CRITICAL"}:
+        last_severity = status
     issues_sample = []
     raw_sample = payload.get("issues_last_sample")
     if isinstance(raw_sample, Sequence):
@@ -871,8 +875,11 @@ def _recon_overview(safety_snapshot: Mapping[str, object]) -> Dict[str, object]:
         "worst_state": status,
         "last_ts": last_ts,
         "last_run_ts": last_ts,
+        "last_severity": last_severity,
+        "enabled": enabled_flag,
         "auto_hold": auto_hold,
         "issues_last_sample": issues_sample,
+        "drift_count": int(payload.get("drift_count", len(issues_sample)) or 0),
     }
 
 
