@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import logging
 import threading
 from typing import Dict, Iterable, Mapping, Tuple
 
@@ -45,6 +46,9 @@ from .daily_loss import (
     reset_daily_loss_cap_for_tests,
 )
 from .telemetry import record_risk_skip
+
+
+LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "get_risk_snapshot",
@@ -195,8 +199,11 @@ def _record_strategy_pnl(strategy: str, pnl_value: float, *, simulated: bool) ->
     try:
         tracker = get_strategy_pnl_tracker()
         tracker.record_fill(strategy, pnl_value, simulated=simulated)
-    except Exception:  # pragma: no cover - defensive
-        pass
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.debug(
+            "failed to record strategy pnl",
+            extra={"strategy": strategy, "error": str(exc), "simulated": simulated},
+        )
 
 
 def _epoch_day_to_iso(epoch_day: object) -> str | None:

@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover
     RequestError = Exception
 
 from . import InMemoryDerivClient, build_in_memory_client
+from app.secrets_store import get_secrets_store
 from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
 from app.watchdog.broker_watchdog import get_broker_watchdog
 
@@ -31,6 +32,23 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _store_credentials() -> tuple[str | None, str | None, str | None]:
+    try:
+        store = get_secrets_store()
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.debug("failed to load secrets store", extra={"error": str(exc)})
+        return None, None, None
+
+    for alias in ("okx_perp", "okx-perp", "okx"):
+        credentials = store.get_exchange_credentials(alias)
+        key = credentials.get("key")
+        secret = credentials.get("secret")
+        passphrase = credentials.get("passphrase")
+        if key or secret or passphrase:
+            return key, secret, passphrase
+    return None, None, None
 
 
 class OKXPerpClient:
@@ -49,9 +67,16 @@ class OKXPerpClient:
         self._client: Optional[httpx.Client] = None
         self._watchdog = get_broker_watchdog()
 
-        self._api_key = os.getenv("OKX_API_KEY_TESTNET")
-        self._api_secret = os.getenv("OKX_API_SECRET_TESTNET")
-        self._passphrase = os.getenv("OKX_API_PASSPHRASE_TESTNET")
+        store_key, store_secret, store_passphrase = _store_credentials()
+        env_key = os.getenv("OKX_API_KEY_TESTNET") if store_key is None else None
+        env_secret = os.getenv("OKX_API_SECRET_TESTNET") if store_secret is None else None
+        env_passphrase = (
+            os.getenv("OKX_API_PASSPHRASE_TESTNET") if store_passphrase is None else None
+        )
+
+        self._api_key = store_key or env_key
+        self._api_secret = store_secret or env_secret
+        self._passphrase = store_passphrase or env_passphrase
 
         if not safe_mode:
             if not (self._api_key and self._api_secret and self._passphrase):

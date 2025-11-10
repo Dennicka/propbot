@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover
     RequestError = Exception
 
 from . import InMemoryDerivClient, build_in_memory_client
+from app.secrets_store import get_secrets_store
 from app.utils.chaos import apply_order_delay, maybe_raise_rest_timeout
 from app.watchdog.broker_watchdog import get_broker_watchdog
 
@@ -29,6 +30,22 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _store_credentials() -> tuple[str | None, str | None]:
+    try:
+        store = get_secrets_store()
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.debug("failed to load secrets store", extra={"error": str(exc)})
+        return None, None
+
+    for alias in ("binance_um", "binance-um", "binance"):
+        credentials = store.get_exchange_credentials(alias)
+        key = credentials.get("key")
+        secret = credentials.get("secret")
+        if key or secret:
+            return key, secret
+    return None, None
 
 
 class BinanceUMClient:
@@ -45,8 +62,13 @@ class BinanceUMClient:
         self._filters_cache: Dict[str, Dict[str, float]] = {}
         self._fees_cache: Dict[str, Dict[str, float]] = {}
         self._client: Optional[httpx.Client] = None
-        self._api_key = os.getenv("BINANCE_UM_API_KEY_TESTNET")
-        self._api_secret = os.getenv("BINANCE_UM_API_SECRET_TESTNET")
+        store_key, store_secret = _store_credentials()
+        env_key = os.getenv("BINANCE_UM_API_KEY_TESTNET") if store_key is None else None
+        env_secret = (
+            os.getenv("BINANCE_UM_API_SECRET_TESTNET") if store_secret is None else None
+        )
+        self._api_key = store_key or env_key
+        self._api_secret = store_secret or env_secret
         self._watchdog = get_broker_watchdog()
 
         if not safe_mode:

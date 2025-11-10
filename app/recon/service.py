@@ -170,8 +170,11 @@ def _extract_balance_amount(row: Mapping[str, object]) -> float:
     if free not in (None, ""):
         try:
             return float(free)
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            LOGGER.debug(
+                "failed to normalise balance amount",
+                extra={"field": "free", "error": str(exc)},
+            )
     return 0.0
 
 

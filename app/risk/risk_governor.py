@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Sliding-window risk governor with throttling and auto-hold escalation."""
 
+import logging
 import math
 import os
 import threading
@@ -31,12 +32,29 @@ from ..watchdog.core import (
 _ORDER_OK = "ok"
 _ORDER_ERROR = "error"
 
+LOGGER = logging.getLogger(__name__)
+
+
 _STATE_ORDER = {STATE_UP: 2, STATE_DEGRADED: 1, STATE_DOWN: 0}
 _DEFAULT_WINDOW_SEC = 3600.0
 _DEFAULT_MIN_SUCCESS = 0.985
 _DEFAULT_MAX_ERROR = 0.01
 _DEFAULT_MIN_STATE = STATE_UP
 _DEFAULT_HOLD_AFTER = 2
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
 
 _INF = float("inf")
@@ -294,8 +312,10 @@ class RiskGovernor:
         set_risk_throttled(True, reason)
         try:
             runtime.update_risk_throttle(True, reason=reason, source="risk_governor_v2")
-        except Exception:  # pragma: no cover - defensive
-            pass
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "failed to update runtime throttle", extra={"error": str(exc), "reason": reason}
+            )
 
     # ------------------------------------------------------------------
     def _build_context(self, ctx: Mapping[str, object] | None) -> Dict[str, object]:
@@ -307,13 +327,12 @@ class RiskGovernor:
             "per_symbol_notional": {},
         }
         if isinstance(ctx, Mapping):
-            try:
-                context.update({
-                    "global_notional": float(ctx.get("global_notional", 0.0) or 0.0),
-                    "global_positions": int(float(ctx.get("global_positions", 0) or 0)),
-                })
-            except (TypeError, ValueError):
-                pass
+            context["global_notional"] = _safe_float(
+                ctx.get("global_notional"), context["global_notional"]
+            )
+            context["global_positions"] = _safe_int(
+                ctx.get("global_positions"), context["global_positions"]
+            )
             per_strategy_notional = ctx.get("per_strategy_notional")
             if isinstance(per_strategy_notional, Mapping):
                 context["per_strategy_notional"] = {
@@ -339,16 +358,12 @@ class RiskGovernor:
             snapshot = accounting.get_risk_snapshot()
             totals = snapshot.get("totals") if isinstance(snapshot, Mapping) else {}
             if isinstance(totals, Mapping):
-                try:
-                    context["global_notional"] = float(totals.get("open_notional", context["global_notional"]))
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    context["global_positions"] = int(
-                        float(totals.get("open_positions", context["global_positions"]))
-                    )
-                except (TypeError, ValueError):
-                    pass
+                context["global_notional"] = _safe_float(
+                    totals.get("open_notional"), context["global_notional"]
+                )
+                context["global_positions"] = _safe_int(
+                    totals.get("open_positions"), context["global_positions"]
+                )
             per_strategy = snapshot.get("per_strategy") if isinstance(snapshot, Mapping) else {}
             if isinstance(per_strategy, Mapping):
                 strategy_notional: Dict[str, float] = {}
@@ -539,8 +554,10 @@ class RiskGovernor:
         set_risk_throttled(True, reason)
         try:
             runtime.update_risk_throttle(True, reason=reason, source="risk_governor_v2")
-        except Exception:  # pragma: no cover - defensive
-            pass
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "failed to update runtime throttle", extra={"error": str(exc), "reason": reason}
+            )
         totals = self._velocity.totals()
         self._update_velocity_metrics(*totals)
 
@@ -860,12 +877,17 @@ class SlidingRiskGovernor:
         while self._events and self._events[0][0] < threshold:
             ts, kind, category = self._events.popleft()
             if kind == _ORDER_ERROR:
-                try:
-                    self._error_breakdown[category] -= 1
-                    if self._error_breakdown[category] <= 0:
-                        del self._error_breakdown[category]
-                except KeyError:
-                    pass
+                remaining = self._error_breakdown.get(category)
+                if remaining is None:
+                    LOGGER.debug(
+                        "missing error breakdown bucket", extra={"category": category, "ts": ts}
+                    )
+                else:
+                    updated = remaining - 1
+                    if updated > 0:
+                        self._error_breakdown[category] = updated
+                    else:
+                        self._error_breakdown.pop(category, None)
 
     def _counts(self) -> tuple[int, int, int]:
         total = len(self._events)
