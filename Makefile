@@ -37,7 +37,10 @@ test:
 	$(PYTEST) -q --maxfail=1
 
 golden-check:
-	PYTHONPATH=. python -m app.cli_golden check
+        PYTHONPATH=. python -m app.cli_golden check
+
+golden-replay:
+        PYTHONPATH=. python -m app.golden.replay
 
 # Acceptance targets:
 #   make acceptance_smoke   → quick smoke tests in CI/local env

@@ -14,6 +14,7 @@ from ..metrics import record_trade_execution, slo
 from ..routing import effective_fee_for_quote, extract_funding_inputs
 from ..risk.core import risk_gate
 from ..risk.telemetry import record_risk_skip
+from ..golden.recorder import record_execution
 from ..universe.gate import check_pair_allowed, is_universe_enforced
 from ..risk.accounting import (
     get_risk_snapshot as get_risk_accounting_snapshot,
@@ -38,6 +39,33 @@ from .runtime import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _record_golden_report(
+    plan: "Plan",
+    report: "ExecutionReport",
+    *,
+    reason: str | None,
+    hold: bool,
+) -> None:
+    try:
+        plan_payload = plan.as_dict()
+    except Exception:  # pragma: no cover - defensive guard
+        plan_payload = {"symbol": plan.symbol, "legs": []}
+    runtime_state = {"plan": plan_payload, "report_state": report.state}
+    if plan.reason:
+        runtime_state["plan_reason"] = plan.reason
+    if report.risk_gate:
+        runtime_state["risk_gate"] = report.risk_gate
+    record_execution(
+        symbol=plan.symbol,
+        plan_payload=plan_payload,
+        orders=report.orders,
+        reason=reason,
+        runtime_state=runtime_state,
+        hold=hold,
+        dry_run=bool(report.dry_run or report.simulated),
+    )
 
 
 def _emit_ops_alert(kind: str, text: str, extra: Dict[str, object] | None = None) -> None:
@@ -492,7 +520,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
                     "details": {"reason": "universe"},
                 }
                 snapshot = get_risk_accounting_snapshot()
-                return ExecutionReport(
+                report = ExecutionReport(
                     symbol=plan.symbol,
                     simulated=simulated,
                     pnl_usdt=0.0,
@@ -508,6 +536,8 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
                     risk_gate=gate_result,
                     risk_snapshot=snapshot,
                 )
+                _record_golden_report(plan, report, reason=reason_code, hold=False)
+                return report
 
         intent_payload = {
             "strategy": strategy_name,
@@ -525,7 +555,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
                 },
             )
             snapshot = get_risk_accounting_snapshot()
-            return ExecutionReport(
+            report = ExecutionReport(
                 symbol=plan.symbol,
                 simulated=simulated,
                 pnl_usdt=0.0,
@@ -541,6 +571,8 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
                 risk_gate=gate_result,
                 risk_snapshot=snapshot,
             )
+            _record_golden_report(plan, report, reason=gate_result.get("reason"), hold=False)
+            return report
     
         snapshot, intent_result = accounting_record_intent(
             strategy_name, plan.notional, simulated=simulated
@@ -564,7 +596,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             if "details" in intent_result:
                 risk_gate_payload["details"] = intent_result["details"]
             snapshot = get_risk_accounting_snapshot()
-            return ExecutionReport(
+            report = ExecutionReport(
                 symbol=plan.symbol,
                 simulated=simulated,
                 pnl_usdt=0.0,
@@ -580,9 +612,31 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
                 risk_gate=risk_gate_payload,
                 risk_snapshot=snapshot,
             )
+            _record_golden_report(plan, report, reason=reason_code, hold=False)
+            return report
     
         try:
             result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
+        except HoldActiveError as exc:
+            accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
+            hold_report = ExecutionReport(
+                symbol=plan.symbol,
+                simulated=True,
+                pnl_usdt=0.0,
+                pnl_bps=0.0,
+                legs=plan.legs,
+                plan_viable=plan.viable,
+                safe_mode=safe_mode,
+                dry_run=True,
+                orders=[],
+                exposures=[],
+                pnl_summary={},
+                state="HOLD",
+                risk_gate={"reason": exc.reason},
+                risk_snapshot={},
+            )
+            _record_golden_report(plan, hold_report, reason=exc.reason, hold=True)
+            raise
         except Exception:
             accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
             raise
@@ -605,7 +659,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
                 "pnl_usdt": pnl_usdt,
             },
         )
-        return ExecutionReport(
+        report = ExecutionReport(
             symbol=plan.symbol,
             simulated=simulated,
             pnl_usdt=pnl_usdt,
@@ -621,6 +675,8 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             risk_gate=gate_result,
             risk_snapshot=snapshot,
         )
+        _record_golden_report(plan, report, reason=report.state, hold=False)
+        return report
     
     
 def execute_plan(plan: Plan) -> ExecutionReport:
