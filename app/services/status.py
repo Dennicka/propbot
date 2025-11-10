@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
 from .partial_hedge_runner import get_partial_hedge_status
@@ -840,17 +840,39 @@ def _recon_overview(safety_snapshot: Mapping[str, object]) -> Dict[str, object]:
     payload = safety_snapshot.get("reconciliation")
     if not isinstance(payload, Mapping):
         payload = {}
-    worst = str(payload.get("state") or payload.get("status") or "UNKNOWN").upper()
-    last_ts = _coerce_last_ts(payload.get("last_ts") or payload.get("last_checked"))
+    status = str(payload.get("status") or payload.get("state") or "UNKNOWN").upper()
+    last_ts = _coerce_last_ts(
+        payload.get("last_run_ts")
+        or payload.get("last_ts")
+        or payload.get("last_checked")
+    )
     auto_hold = bool(payload.get("auto_hold"))
     if safety_snapshot.get("hold_active"):
         reason = str(safety_snapshot.get("hold_reason") or "")
         if reason.upper().startswith("RECON_DIVERGENCE"):
             auto_hold = True
+    issues_sample = []
+    raw_sample = payload.get("issues_last_sample")
+    if isinstance(raw_sample, Sequence):
+        for item in raw_sample:
+            if not isinstance(item, Mapping):
+                continue
+            issues_sample.append(
+                {
+                    "kind": str(item.get("kind") or "UNKNOWN"),
+                    "code": str(item.get("code") or "UNKNOWN"),
+                    "severity": str(item.get("severity") or "UNKNOWN"),
+                    "venue": str(item.get("venue") or ""),
+                    "symbol": item.get("symbol"),
+                }
+            )
     return {
-        "worst_state": worst,
+        "status": status,
+        "worst_state": status,
         "last_ts": last_ts,
+        "last_run_ts": last_ts,
         "auto_hold": auto_hold,
+        "issues_last_sample": issues_sample,
     }
 
 

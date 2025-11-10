@@ -665,7 +665,22 @@ def test_pre_trade_gate_blocks_when_throttled(monkeypatch):
 
 
 def test_system_status_exposes_recon_block(monkeypatch, client) -> None:
-    recon_block = {"worst_state": "CRITICAL", "last_ts": 123.0, "auto_hold": True}
+    recon_block = {
+        "status": "CRITICAL",
+        "worst_state": "CRITICAL",
+        "last_ts": 123.0,
+        "last_run_ts": 123.0,
+        "auto_hold": True,
+        "issues_last_sample": [
+            {
+                "kind": "POSITION",
+                "code": "POSITION_MISMATCH",
+                "severity": "CRITICAL",
+                "venue": "binance-um",
+                "symbol": "ETHUSDT",
+            }
+        ],
+    }
     sample_snapshot = {
         "ts": "2023-01-01T00:00:00Z",
         "components": [],

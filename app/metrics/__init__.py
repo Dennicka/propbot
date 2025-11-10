@@ -57,7 +57,14 @@ from .orders import (
     observe_replace_chain,
     record_open_intents,
 )
-from .recon import RECON_AUTO_HOLD_COUNTER, RECON_DIFF_NOTIONAL_GAUGE, RECON_STATUS_GAUGE
+from .recon import (
+    RECON_AUTO_HOLD_COUNTER,
+    RECON_DIFF_NOTIONAL_GAUGE,
+    RECON_ISSUES_TOTAL,
+    RECON_LAST_RUN_TS,
+    RECON_LAST_STATUS,
+    RECON_STATUS_GAUGE,
+)
 from .pretrade import PRETRADE_AUTOFIX_TOTAL, PRETRADE_BLOCKS_TOTAL, PRETRADE_CHECKS_TOTAL
 from .risk_governor import (
     increment_window as increment_risk_window,
@@ -79,6 +86,9 @@ __all__ = [
     "RECON_DIFF_NOTIONAL_GAUGE",
     "RECON_STATUS_GAUGE",
     "RECON_AUTO_HOLD_COUNTER",
+    "RECON_ISSUES_TOTAL",
+    "RECON_LAST_RUN_TS",
+    "RECON_LAST_STATUS",
     "RISK_BREACHES_COUNTER",
     "TRADES_EXECUTED_COUNTER",
     "WATCHDOG_STATE_GAUGE",

@@ -1,136 +1,576 @@
-"""Core reconciliation logic for comparing local and exchange state."""
+"""Core reconciliation utilities for comparing local and remote state."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import logging
 import time
-from types import SimpleNamespace
-from typing import Mapping, MutableMapping, Sequence, Literal
+from typing import Mapping, NamedTuple, Sequence
 
 from .. import ledger
-from ..metrics.recon import PNL_LEDGER_REALIZED_TODAY
 from ..services import runtime
-from .reconciler import Reconciler
-
+from ..util.venues import VENUE_ALIASES
 
 LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_WARN = Decimal("5")
-_DEFAULT_CRITICAL = Decimal("25")
+_CONFIG_OVERRIDE: _ReconConfig | None = None
 
 
-@dataclass(slots=True, frozen=True)
-class ReconSnapshot:
-    """Snapshot of a reconciliation check for a single venue/symbol/asset."""
+class ReconIssue(NamedTuple):
+    """Detected divergence between local state and the exchange."""
 
+    kind: str  # "POSITION" | "BALANCE" | "ORDER" | "PNL"
     venue: str
-    asset: str
     symbol: str | None
-    side: str | None
-    exch_position: Decimal | None
-    local_position: Decimal | None
-    exch_balance: Decimal | None
-    local_balance: Decimal | None
-    diff_abs: Decimal
-    status: Literal["OK", "WARN", "CRITICAL"]
-    reason: str
+    severity: str  # "INFO" | "WARN" | "CRITICAL"
+    code: str
+    details: str
+
+
+class ReconResult(NamedTuple):
+    """Result of a reconciliation sweep."""
+
     ts: float
+    issues: list[ReconIssue]
 
 
-@dataclass(slots=True, frozen=True)
-class ReconSettings:
-    warn_notional_usd: Decimal = _DEFAULT_WARN
-    critical_notional_usd: Decimal = _DEFAULT_CRITICAL
+@dataclass(slots=True)
+class _ReconConfig:
+    epsilon_position: Decimal
+    epsilon_balance: Decimal
+    epsilon_notional: Decimal
+    auto_hold_on_critical: bool
 
 
-def reconcile_once(ctx: object | None = None) -> list[ReconSnapshot]:
-    """Perform a single reconciliation sweep and return detailed snapshots."""
+_DEFAULT_CONFIG = _ReconConfig(
+    epsilon_position=Decimal("0.0001"),
+    epsilon_balance=Decimal("0.5"),
+    epsilon_notional=Decimal("5.0"),
+    auto_hold_on_critical=True,
+)
 
-    settings = _resolve_settings(ctx)
-    timestamp = time.time()
 
-    reconciler = Reconciler()
-    exchange_positions = _fetch_exchange_positions(reconciler)
-    ledger_positions = _fetch_ledger_positions(reconciler)
-    state = _resolve_state(ctx)
+@dataclass(slots=True)
+class _PositionEntry:
+    venue: str
+    symbol: str
+    qty: Decimal
+    notional: Decimal | None
 
-    position_snapshots = _build_position_snapshots(
-        exchange_positions,
-        ledger_positions,
-        state,
-        settings,
-        timestamp,
-    )
 
-    balance_snapshots = _build_balance_snapshots(ctx, settings, timestamp)
+@dataclass(slots=True)
+class _OrderEntry:
+    venue: str
+    symbol: str
+    order_id: str
+    qty: Decimal
+    price: Decimal | None
+    notional: Decimal | None
 
-    _record_ledger_realized_today(timestamp)
 
-    return position_snapshots + balance_snapshots
+def compare_positions(
+    local: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    remote: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+) -> list[ReconIssue]:
+    """Compare local vs remote positions and return detected divergences."""
+
+    config = _get_recon_config()
+    local_entries = _normalise_positions(local)
+    remote_entries = _normalise_positions(remote)
+
+    issues: list[ReconIssue] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, symbol in sorted(keys):
+        local_entry = local_entries.get((venue, symbol))
+        remote_entry = remote_entries.get((venue, symbol))
+
+        local_qty = local_entry.qty if local_entry else Decimal("0")
+        remote_qty = remote_entry.qty if remote_entry else Decimal("0")
+        delta = remote_qty - local_qty
+        abs_qty = abs(delta)
+
+        if abs_qty <= config.epsilon_position:
+            continue
+
+        notional_delta = _position_notional_delta(local_entry, remote_entry, delta)
+        abs_notional = abs(notional_delta) if notional_delta is not None else abs_qty
+
+        severity = _severity_for_delta(
+            abs_qty,
+            abs_notional,
+            config,
+            missing=local_entry is None or remote_entry is None,
+        )
+        issue = ReconIssue(
+            kind="POSITION",
+            venue=venue,
+            symbol=symbol,
+            severity=severity,
+            code="POSITION_MISMATCH",
+            details=(
+                f"local_qty={local_qty:f} remote_qty={remote_qty:f} "
+                f"delta={delta:f} notional={abs_notional:f}"
+            ),
+        )
+        issues.append(issue)
+    return issues
+
+
+def compare_balances(
+    local: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    remote: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+) -> list[ReconIssue]:
+    """Compare wallet balances between local snapshot and remote data."""
+
+    config = _get_recon_config()
+    local_entries = _normalise_balances(local)
+    remote_entries = _normalise_balances(remote)
+
+    issues: list[ReconIssue] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, asset in sorted(keys):
+        local_value = local_entries.get((venue, asset), Decimal("0"))
+        remote_value = remote_entries.get((venue, asset), Decimal("0"))
+        delta = remote_value - local_value
+        abs_delta = abs(delta)
+        if abs_delta <= config.epsilon_balance:
+            continue
+        severity = _severity_for_delta(
+            abs_delta,
+            abs_delta,
+            config,
+            missing=(local_value == 0 or remote_value == 0),
+        )
+        issue = ReconIssue(
+            kind="BALANCE",
+            venue=venue,
+            symbol=asset,
+            severity=severity,
+            code="BALANCE_MISMATCH",
+            details=(
+                f"local_total={local_value:f} remote_total={remote_value:f} delta={delta:f}"
+            ),
+        )
+        issues.append(issue)
+    return issues
+
+
+def compare_open_orders(
+    local: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
+    remote: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
+) -> list[ReconIssue]:
+    """Compare open order books and flag desynchronisation."""
+
+    config = _get_recon_config()
+    local_entries = _normalise_orders(local)
+    remote_entries = _normalise_orders(remote)
+
+    issues: list[ReconIssue] = []
+
+    for key, remote_entry in remote_entries.items():
+        local_entry = local_entries.get(key)
+        if local_entry is None:
+            abs_notional = _order_notional(remote_entry)
+            severity = _severity_for_delta(
+                abs(remote_entry.qty),
+                abs_notional,
+                config,
+                missing=True,
+            )
+            issues.append(
+                ReconIssue(
+                    kind="ORDER",
+                    venue=remote_entry.venue,
+                    symbol=remote_entry.symbol,
+                    severity=severity,
+                    code="ORDER_DESYNC",
+                    details=(
+                        f"remote_only order_id={remote_entry.order_id} qty={remote_entry.qty:f} "
+                        f"price={_format_decimal(remote_entry.price)} notional={abs_notional:f}"
+                    ),
+                )
+            )
+            continue
+
+        qty_delta = remote_entry.qty - local_entry.qty
+        if abs(qty_delta) > config.epsilon_position:
+            abs_notional = _order_notional(remote_entry) or _order_notional(local_entry)
+            severity = _severity_for_delta(
+                abs(qty_delta),
+                abs_notional or abs(qty_delta),
+                config,
+            )
+            issues.append(
+                ReconIssue(
+                    kind="ORDER",
+                    venue=remote_entry.venue,
+                    symbol=remote_entry.symbol,
+                    severity=severity,
+                    code="ORDER_SIZE_MISMATCH",
+                    details=(
+                        f"order_id={remote_entry.order_id} local_qty={local_entry.qty:f} "
+                        f"remote_qty={remote_entry.qty:f} delta={qty_delta:f}"
+                    ),
+                )
+            )
+
+    for key, local_entry in local_entries.items():
+        if key in remote_entries:
+            continue
+        abs_notional = _order_notional(local_entry)
+        severity = "WARN"
+        if abs_notional is not None and abs_notional >= config.epsilon_notional:
+            severity = "CRITICAL"
+        issues.append(
+            ReconIssue(
+                kind="ORDER",
+                venue=local_entry.venue,
+                symbol=local_entry.symbol,
+                severity=severity,
+                code="ORDER_LOCAL_ONLY",
+                details=(
+                    f"local_only order_id={local_entry.order_id} qty={local_entry.qty:f} "
+                    f"price={_format_decimal(local_entry.price)} notional={_format_decimal(abs_notional)}"
+                ),
+            )
+        )
+
+    return issues
+
+
+def reconcile_once(ctx: object | None = None) -> ReconResult:
+    """Fetch ledger/runtime snapshots and run reconciliation once."""
+
+    config = _get_recon_config(ctx)
+    ts = time.time()
+
+    local_positions = _load_local_positions(ctx)
+    remote_positions = _load_remote_positions(ctx)
+    local_balances = _load_local_balances(ctx)
+    remote_balances = _load_remote_balances(ctx)
+    local_orders = _load_local_orders(ctx)
+    remote_orders = _load_remote_orders(ctx)
+
+    global _CONFIG_OVERRIDE
+    previous_override = _CONFIG_OVERRIDE
+    _CONFIG_OVERRIDE = config
+    try:
+        issues: list[ReconIssue] = []
+        issues.extend(compare_positions(local_positions, remote_positions))
+        issues.extend(compare_balances(local_balances, remote_balances))
+        issues.extend(compare_open_orders(local_orders, remote_orders))
+    finally:
+        _CONFIG_OVERRIDE = previous_override
+
+    return ReconResult(ts=ts, issues=issues)
 
 
 # ---------------------------------------------------------------------------
-# Helpers – configuration & state resolution
+# Normalisation helpers
+# ---------------------------------------------------------------------------
 
 
-def _resolve_settings(ctx: object | None) -> ReconSettings:
-    warn = _DEFAULT_WARN
-    critical = _DEFAULT_CRITICAL
+def _normalise_positions(
+    payload: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+) -> dict[tuple[str, str], _PositionEntry]:
+    entries: dict[tuple[str, str], _PositionEntry] = {}
+    if payload is None:
+        return entries
 
-    if ctx is not None:
-        cfg = getattr(ctx, "cfg", None)
-        recon_cfg = getattr(cfg, "recon", None) if cfg is not None else None
-        warn, critical = _extract_thresholds(recon_cfg, warn, critical)
+    if isinstance(payload, Mapping):
+        iterable = payload.items()
+        for key, value in iterable:
+            venue, symbol = key
+            entry = _coerce_position(venue, symbol, value)
+            if entry is not None:
+                entries[(entry.venue, entry.symbol)] = entry
+        return entries
+
+    for row in payload:
+        if not isinstance(row, Mapping):
+            continue
+        venue = row.get("venue") or row.get("exchange")
+        symbol = row.get("symbol") or row.get("instrument")
+        entry = _coerce_position(venue, symbol, row)
+        if entry is not None:
+            entries[(entry.venue, entry.symbol)] = entry
+    return entries
+
+
+def _coerce_position(venue: object, symbol: object, value: object) -> _PositionEntry | None:
+    venue_name = _normalise_venue(venue)
+    symbol_name = _normalise_symbol(symbol)
+    if not venue_name or not symbol_name:
+        return None
+
+    qty = Decimal("0")
+    notional: Decimal | None = None
+
+    if isinstance(value, Mapping):
+        qty = _to_decimal(
+            value.get("qty")
+            or value.get("base_qty")
+            or value.get("position_amt")
+            or value.get("position")
+            or value.get("size"),
+            default=Decimal("0"),
+        )
+        notional_value = value.get("notional") or value.get("notional_usd")
+        if notional_value is None:
+            price = _to_decimal(value.get("price") or value.get("mark_price"), default=None)
+            if price is not None:
+                notional_value = abs(qty) * price
+        if notional_value is not None:
+            notional = _to_decimal(notional_value, default=None)
     else:
-        state = _resolve_state(ctx)
-        recon_cfg = getattr(getattr(state, "config", None), "data", None)
-        recon_cfg = getattr(recon_cfg, "recon", None) if recon_cfg is not None else None
-        warn, critical = _extract_thresholds(recon_cfg, warn, critical)
+        qty = _to_decimal(value, default=Decimal("0"))
 
-    return ReconSettings(warn_notional_usd=warn, critical_notional_usd=critical)
+    return _PositionEntry(venue=venue_name, symbol=symbol_name, qty=qty, notional=notional)
 
 
-def _extract_thresholds(
-    recon_cfg: object | None, warn_default: Decimal, crit_default: Decimal
-) -> tuple[Decimal, Decimal]:
-    warn = warn_default
-    critical = crit_default
-    if recon_cfg is None:
-        return warn, critical
+def _position_notional_delta(
+    local_entry: _PositionEntry | None,
+    remote_entry: _PositionEntry | None,
+    qty_delta: Decimal,
+) -> Decimal | None:
+    local_notional = local_entry.notional if local_entry else None
+    remote_notional = remote_entry.notional if remote_entry else None
 
-    warn_raw = getattr(recon_cfg, "warn_notional_usd", None)
-    critical_raw = getattr(recon_cfg, "critical_notional_usd", None)
-    if warn_raw is None:
-        warn_raw = getattr(recon_cfg, "diff_abs_usd_warn", None)
-    if critical_raw is None:
-        critical_raw = getattr(recon_cfg, "diff_abs_usd_crit", None)
+    if local_notional is None and remote_notional is None:
+        if remote_entry and remote_entry.notional is not None:
+            remote_notional = remote_entry.notional
+        elif local_entry and local_entry.notional is not None:
+            local_notional = local_entry.notional
+        else:
+            return abs(qty_delta)
 
-    warn = _coerce_decimal(warn_raw, warn)
-    critical = _coerce_decimal(critical_raw, critical)
-    if critical < warn:
-        critical = warn
-    return warn, critical
+    return (remote_notional or Decimal("0")) - (local_notional or Decimal("0"))
 
 
-def _resolve_state(ctx: object | None) -> object:
+def _normalise_balances(
+    payload: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+) -> dict[tuple[str, str], Decimal]:
+    entries: dict[tuple[str, str], Decimal] = {}
+    if payload is None:
+        return entries
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            venue, asset = key
+            venue_name = _normalise_venue(venue)
+            asset_name = _normalise_symbol(asset)
+            if not venue_name or not asset_name:
+                continue
+            entries[(venue_name, asset_name)] = _to_decimal(value, default=Decimal("0"))
+        return entries
+
+    for row in payload:
+        if not isinstance(row, Mapping):
+            continue
+        venue_name = _normalise_venue(row.get("venue") or row.get("exchange"))
+        asset_name = _normalise_symbol(
+            row.get("asset") or row.get("currency") or row.get("symbol")
+        )
+        if not venue_name or not asset_name:
+            continue
+        amount = (
+            row.get("total")
+            or row.get("qty")
+            or row.get("balance")
+            or row.get("amount")
+            or row.get("walletBalance")
+            or row.get("equity")
+            or row.get("free")
+            or row.get("availableBalance")
+        )
+        entries[(venue_name, asset_name)] = entries.get((venue_name, asset_name), Decimal("0")) + _to_decimal(
+            amount,
+            default=Decimal("0"),
+        )
+    return entries
+
+
+def _normalise_orders(
+    payload: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
+) -> dict[tuple[str, str], _OrderEntry]:
+    entries: dict[tuple[str, str], _OrderEntry] = {}
+    if payload is None:
+        return entries
+
+    rows: list[Mapping[str, object]] = []
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            venue, order_id = key
+            if not isinstance(value, Mapping):
+                continue
+            row = dict(value)
+            row.setdefault("venue", venue)
+            row.setdefault("id", order_id)
+            rows.append(row)
+    else:
+        rows = [row for row in payload if isinstance(row, Mapping)]
+
+    for row in rows:
+        venue = _normalise_venue(row.get("venue") or row.get("exchange"))
+        order_id = _normalise_order_id(row)
+        symbol = _normalise_symbol(row.get("symbol") or row.get("instrument"))
+        if not venue or not order_id:
+            continue
+        qty = _to_decimal(
+            row.get("qty")
+            or row.get("quantity")
+            or row.get("origQty")
+            or row.get("size"),
+            default=Decimal("0"),
+        )
+        price = _to_decimal(
+            row.get("price")
+            or row.get("limit_price")
+            or row.get("avgPrice"),
+            default=None,
+        )
+        notional_val = row.get("notional") or row.get("notional_usd")
+        if notional_val is None and price is not None:
+            notional_val = abs(qty) * price
+        notional = _to_decimal(notional_val, default=None)
+        entries[(venue, order_id)] = _OrderEntry(
+            venue=venue,
+            symbol=symbol or None,
+            order_id=order_id,
+            qty=qty,
+            price=price,
+            notional=notional,
+        )
+    return entries
+
+
+def _order_notional(entry: _OrderEntry | None) -> Decimal | None:
+    if entry is None:
+        return None
+    if entry.notional is not None:
+        return abs(entry.notional)
+    if entry.price is not None:
+        return abs(entry.qty) * entry.price
+    return abs(entry.qty)
+
+
+# ---------------------------------------------------------------------------
+# Loaders
+# ---------------------------------------------------------------------------
+
+
+def _load_local_positions(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "local_positions")
+    if provider is not None:
+        return provider
+    try:
+        return ledger.fetch_positions()
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_positions_failed")
+        return []
+
+
+def _load_remote_positions(ctx: object | None) -> Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "remote_positions")
+    if provider is not None:
+        return provider
+    try:
+        from .reconciler import Reconciler
+
+        reconciler = Reconciler()
+        return reconciler.fetch_exchange_positions()
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_remote_positions_failed")
+        return {}
+
+
+def _load_local_balances(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "local_balances")
+    if provider is not None:
+        return provider
+    try:
+        return ledger.fetch_balances()
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_balances_failed")
+        return []
+
+
+def _load_remote_balances(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "remote_balances")
+    if provider is not None:
+        return provider
+    return []
+
+
+def _load_local_orders(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "local_orders")
+    if provider is not None:
+        return provider
+    try:
+        return ledger.fetch_open_orders()
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_orders_failed")
+        return []
+
+
+def _load_remote_orders(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "remote_orders")
+    if provider is not None:
+        return provider
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+
+def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
+    if ctx is None and _CONFIG_OVERRIDE is not None:
+        return _CONFIG_OVERRIDE
+    source = None
     if ctx is not None:
-        candidate = getattr(ctx, "state", None)
-        if candidate is not None:
-            return candidate
-        candidate = getattr(ctx, "runtime", None)
-        state_getter = getattr(candidate, "get_state", None)
-        if callable(state_getter):
-            try:
-                return state_getter()
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("ctx.runtime.get_state failed", exc_info=True)
-    return runtime.get_state()
+        source = getattr(ctx, "cfg", None)
+    if source is None:
+        state = runtime.get_state()
+        source = getattr(getattr(state, "config", None), "data", None)
+    recon_cfg = None
+    if isinstance(source, Mapping):
+        recon_cfg = source.get("recon")
+    else:
+        recon_cfg = getattr(source, "recon", None)
+    if recon_cfg is None and ctx is not None:
+        recon_cfg = getattr(ctx, "recon", None)
+    config = _DEFAULT_CONFIG
+    if recon_cfg is None:
+        return config
+
+    epsilon_position = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_position"), config.epsilon_position)
+    epsilon_balance = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_balance"), config.epsilon_balance)
+    epsilon_notional = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_notional"), config.epsilon_notional)
+
+    auto_hold = _cfg_get(recon_cfg, "auto_hold_on_critical")
+    auto_hold_bool = bool(auto_hold) if auto_hold is not None else config.auto_hold_on_critical
+
+    return _ReconConfig(
+        epsilon_position=epsilon_position or config.epsilon_position,
+        epsilon_balance=epsilon_balance or config.epsilon_balance,
+        epsilon_notional=epsilon_notional or config.epsilon_notional,
+        auto_hold_on_critical=auto_hold_bool,
+    )
 
 
-def _coerce_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
+def _cfg_get(cfg: object, name: str) -> object | None:
+    if isinstance(cfg, Mapping):
+        if name in cfg:
+            return cfg[name]
+        return None
+    return getattr(cfg, name, None)
+
+
+def _coerce_decimal(value: object, default: Decimal | None = None) -> Decimal | None:
+    if value is None:
+        return default
     if isinstance(value, Decimal):
         return value
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -143,368 +583,81 @@ def _coerce_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
     return default
 
 
-def _record_ledger_realized_today(now: float) -> None:
-    today_key = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
-    try:
-        ledger_obj = ledger.build_ledger_from_history(None, now - 7 * 24 * 60 * 60)
-    except Exception:  # pragma: no cover - defensive
-        PNL_LEDGER_REALIZED_TODAY.set(0.0)
-        return
-    try:
-        snapshots = ledger_obj.daily_snapshots()
-    except AttributeError:
-        PNL_LEDGER_REALIZED_TODAY.set(0.0)
-        return
-    realized = Decimal("0")
-    for snapshot in snapshots:
-        if getattr(snapshot, "date", None) == today_key:
-            realized += getattr(snapshot, "realized_pnl", Decimal("0"))
-    PNL_LEDGER_REALIZED_TODAY.set(float(realized))
-
-
-# ---------------------------------------------------------------------------
-# Position reconciliation helpers
-
-
-def _fetch_exchange_positions(reconciler: Reconciler) -> Mapping[tuple[str, str], Decimal]:
-    payload = reconciler.fetch_exchange_positions()
-    return {
-        (venue, symbol): _coerce_decimal(qty)
-        for (venue, symbol), qty in payload.items()
-    }
-
-
-def _fetch_ledger_positions(reconciler: Reconciler) -> Mapping[tuple[str, str], dict[str, Decimal]]:
-    entries = reconciler.fetch_ledger_positions()
-    converted: dict[tuple[str, str], dict[str, Decimal]] = {}
-    for key, entry in entries.items():
-        qty = _coerce_decimal(entry.get("qty"), Decimal("0"))
-        avg_price = _coerce_decimal(entry.get("avg_price"), Decimal("0"))
-        converted[key] = {"qty": qty, "avg_price": avg_price}
-    return converted
-
-
-def _build_position_snapshots(
-    exchange_positions: Mapping[tuple[str, str], Decimal],
-    ledger_positions: Mapping[tuple[str, str], Mapping[str, Decimal]],
-    state: object,
-    settings: ReconSettings,
-    ts: float,
-) -> list[ReconSnapshot]:
-    keys = set(exchange_positions) | set(ledger_positions)
-    if not keys:
-        return []
-
-    price_context = _build_price_context(exchange_positions, ledger_positions, state)
-    snapshots: list[ReconSnapshot] = []
-
-    for venue, symbol in sorted(keys):
-        exch_qty = exchange_positions.get((venue, symbol), Decimal("0"))
-        ledger_entry = ledger_positions.get((venue, symbol))
-        local_qty = ledger_entry.get("qty") if ledger_entry else Decimal("0")
-        delta = exch_qty - local_qty
-        notional = _estimate_notional(symbol, delta, price_context)
-        status = _classify(notional, settings)
-        side = _resolve_side(exch_qty, local_qty)
-        reason = "position_mismatch" if not _is_close(delta) else "position_ok"
-        snapshots.append(
-            ReconSnapshot(
-                venue=venue,
-                asset=_derive_asset(symbol),
-                symbol=symbol,
-                side=side,
-                exch_position=exch_qty,
-                local_position=local_qty,
-                exch_balance=None,
-                local_balance=None,
-                diff_abs=notional,
-                status=status,
-                reason=reason,
-                ts=ts,
-            )
-        )
-    return snapshots
-
-
-def _build_price_context(
-    exchange_positions: Mapping[tuple[str, str], Decimal],
-    ledger_positions: Mapping[tuple[str, str], Mapping[str, Decimal]],
-    state: object,
-) -> SimpleNamespace:
-    risk_snapshot = getattr(getattr(state, "safety", None), "risk_snapshot", {})
-    exposures = risk_snapshot.get("exposure_by_symbol") if isinstance(risk_snapshot, Mapping) else {}
-    risk_notional: dict[str, Decimal] = {}
-    if isinstance(exposures, Mapping):
-        for symbol, value in exposures.items():
-            risk_notional[str(symbol).upper()] = _coerce_decimal(value, Decimal("0"))
-
-    symbol_totals: dict[str, Decimal] = {}
-    symbol_prices: dict[str, Decimal] = {}
-    for (venue, symbol), entry in ledger_positions.items():
-        qty = abs(entry.get("qty", Decimal("0")))
-        if qty <= Decimal("0"):
-            continue
-        symbol_totals[symbol] = symbol_totals.get(symbol, Decimal("0")) + qty
-        avg_price = entry.get("avg_price", Decimal("0"))
-        symbol_prices[symbol] = symbol_prices.get(symbol, Decimal("0")) + qty * avg_price
-
-    exchange_totals: dict[str, Decimal] = {}
-    for (_, symbol), qty in exchange_positions.items():
-        exchange_totals[symbol] = exchange_totals.get(symbol, Decimal("0")) + abs(qty)
-
-    weighted_price: dict[str, Decimal] = {}
-    for symbol, total in symbol_totals.items():
-        if total > Decimal("0"):
-            avg = symbol_prices[symbol] / total
-            weighted_price[symbol] = avg
-
-    symbol_candidates: dict[str, set[str]] = {}
-    for venue, symbol in set(exchange_positions) | set(ledger_positions):
-        symbol_candidates.setdefault(symbol, set()).add(venue)
-
-    reconciler = Reconciler()
-    mark_prices_float = reconciler._fetch_mark_prices(symbol_candidates)  # type: ignore[attr-defined]
-    mark_prices: dict[str, Decimal] = {}
-    for symbol, price in mark_prices_float.items():
-        mark_prices[symbol] = _coerce_decimal(price, Decimal("0"))
-
-    return SimpleNamespace(
-        risk_notional=risk_notional,
-        weighted_price=weighted_price,
-        ledger_totals=symbol_totals,
-        exchange_totals=exchange_totals,
-        mark_prices=mark_prices,
-    )
-
-
-def _estimate_notional(symbol: str, delta: Decimal, ctx: SimpleNamespace) -> Decimal:
-    abs_qty = abs(delta)
-    if abs_qty == 0:
-        return Decimal("0")
-
-    price = _resolve_price(symbol, ctx)
-    if price <= 0:
-        return abs_qty
-    return abs_qty * price
-
-
-def _resolve_price(symbol: str, ctx: SimpleNamespace) -> Decimal:
-    norm_symbol = symbol
-    risk_notional = ctx.risk_notional.get(norm_symbol, Decimal("0"))
-    ledger_total = ctx.ledger_totals.get(norm_symbol, Decimal("0"))
-    exchange_total = ctx.exchange_totals.get(norm_symbol, Decimal("0"))
-    weighted_price = ctx.weighted_price.get(norm_symbol, Decimal("0"))
-    mark_price = ctx.mark_prices.get(norm_symbol, Decimal("0"))
-
-    if risk_notional > 0 and ledger_total > 0:
-        return risk_notional / ledger_total
-    if risk_notional > 0 and exchange_total > 0:
-        return risk_notional / exchange_total
-    if weighted_price > 0:
-        return weighted_price
-    if mark_price > 0:
-        return mark_price
-    if risk_notional > 0:
-        return risk_notional
-    return Decimal("0")
-
-
-def _resolve_side(exchange_qty: Decimal, local_qty: Decimal) -> str | None:
-    for qty in (exchange_qty, local_qty):
-        if qty is not None and qty != 0:
-            return "LONG" if qty > 0 else "SHORT"
-    return None
-
-
-def _derive_asset(symbol: str) -> str:
-    clean = str(symbol or "").upper()
-    if not clean:
-        return "UNKNOWN"
-    for separator in ("-", "/", ":"):
-        if separator in clean:
-            parts = clean.split(separator)
-            if len(parts) > 1:
-                return parts[-1]
-    if clean.endswith("USDT"):
-        return "USDT"
-    if clean.endswith("USD"):
-        return "USD"
-    return clean
-
-
-def _is_close(delta: Decimal) -> bool:
-    return abs(delta) <= Decimal("0")
-
-
-def _classify(value: Decimal, settings: ReconSettings) -> Literal["OK", "WARN", "CRITICAL"]:
-    if value >= settings.critical_notional_usd:
+def _severity_for_delta(
+    abs_qty: Decimal,
+    abs_notional: Decimal,
+    config: _ReconConfig,
+    *,
+    missing: bool = False,
+) -> str:
+    if missing and abs_qty >= config.epsilon_position:
         return "CRITICAL"
-    if value >= settings.warn_notional_usd:
+    if abs_notional >= config.epsilon_notional:
+        return "CRITICAL"
+    if abs_qty >= config.epsilon_position:
         return "WARN"
-    return "OK"
+    return "INFO"
 
 
-# ---------------------------------------------------------------------------
-# Balance reconciliation helpers
-
-
-def _build_balance_snapshots(
-    ctx: object | None,
-    settings: ReconSettings,
-    ts: float,
-) -> list[ReconSnapshot]:
-    local_rows = _resolve_local_balances(ctx)
-    remote_rows = _resolve_remote_balances(ctx)
-    price_lookup = _resolve_price_lookup(ctx)
-
-    local_map = _normalise_balances(local_rows)
-    remote_map = _normalise_balances(remote_rows)
-
-    keys = set(local_map) | set(remote_map)
-    if not keys:
-        return []
-
-    snapshots: list[ReconSnapshot] = []
-    for venue, asset in sorted(keys):
-        local_value = local_map.get((venue, asset), Decimal("0"))
-        remote_value = remote_map.get((venue, asset), Decimal("0"))
-        delta = remote_value - local_value
-        abs_delta = abs(delta)
-        multiplier = _asset_usd_multiplier(asset, price_lookup)
-        notional = abs_delta * multiplier if multiplier is not None else abs_delta
-        status = _classify(notional, settings)
-        reason = "balance_mismatch" if abs_delta > Decimal("0") else "balance_ok"
-        snapshots.append(
-            ReconSnapshot(
-                venue=venue,
-                asset=asset,
-                symbol=None,
-                side=None,
-                exch_position=None,
-                local_position=None,
-                exch_balance=remote_value,
-                local_balance=local_value,
-                diff_abs=notional,
-                status=status,
-                reason=reason,
-                ts=ts,
-            )
-        )
-    return snapshots
-
-
-def _resolve_local_balances(ctx: object | None) -> Sequence[Mapping[str, object]]:
-    if ctx is not None:
-        candidate = getattr(ctx, "local_balances", None)
-        rows = _maybe_rows(candidate)
-        if rows is not None:
-            return rows
-        ledger_candidate = getattr(ctx, "ledger", None)
-        rows = _maybe_rows(getattr(ledger_candidate, "fetch_balances", None))
-        if rows is not None:
-            return rows
-    return ledger.fetch_balances()
-
-
-def _resolve_remote_balances(ctx: object | None) -> Sequence[Mapping[str, object]]:
-    if ctx is not None:
-        candidate = getattr(ctx, "remote_balances", None)
-        rows = _maybe_rows(candidate)
-        if rows is not None:
-            return rows
-        runtime_candidate = getattr(ctx, "runtime", None)
-        rows = _maybe_rows(getattr(runtime_candidate, "remote_balances", None))
-        if rows is not None:
-            return rows
-    return []
-
-
-def _maybe_rows(candidate) -> Sequence[Mapping[str, object]] | None:
-    if candidate is None:
-        return None
-    if callable(candidate):
-        try:
-            result = candidate()
-        except Exception:  # pragma: no cover - defensive
-            LOGGER.debug("recon.balance_source_failed", exc_info=True)
-            return None
-    else:
-        result = candidate
-    if isinstance(result, Sequence):
-        rows: list[Mapping[str, object]] = []
-        for row in result:
-            if isinstance(row, Mapping):
-                rows.append(row)
-        return rows
-    return None
-
-
-def _normalise_balances(
-    rows: Sequence[Mapping[str, object]]
-) -> MutableMapping[tuple[str, str], Decimal]:
-    mapping: MutableMapping[tuple[str, str], Decimal] = {}
-    for row in rows:
-        venue = str(row.get("venue") or row.get("exchange") or "").lower()
-        asset = str(row.get("asset") or row.get("currency") or row.get("symbol") or "").upper()
-        if not venue or not asset:
-            continue
-        amount = _coerce_decimal(_extract_balance_amount(row), Decimal("0"))
-        mapping[(venue, asset)] = mapping.get((venue, asset), Decimal("0")) + amount
-    return mapping
-
-
-def _extract_balance_amount(row: Mapping[str, object]) -> object:
-    for key in ("total", "qty", "balance", "amount", "walletBalance", "equity"):
-        if key in row:
-            value = row.get(key)
-            if value not in (None, ""):
-                return value
-    for key in ("free", "availableBalance"):
-        if key in row:
-            value = row.get(key)
-            if value not in (None, ""):
-                return value
-    return 0
-
-
-def _resolve_price_lookup(ctx: object | None):
+def _resolve_provider(ctx: object | None, name: str):
     if ctx is None:
         return None
-    candidate = getattr(ctx, "asset_prices", None)
-    if isinstance(candidate, Mapping):
-        lookup: dict[str, Decimal] = {}
-        for key, value in candidate.items():
-            try:
-                lookup[str(key).upper()] = _coerce_decimal(value, Decimal("0"))
-            except InvalidOperation:
-                continue
-        return lookup
-    candidate = getattr(ctx, "get_asset_price", None)
-    if callable(candidate):
-        return candidate
-    return None
-
-
-def _asset_usd_multiplier(asset: str, lookup) -> Decimal | None:
-    stable = {"USD", "USDT", "USDC", "BUSD", "USDP", "DAI", "TUSD"}
-    if asset in stable:
-        return Decimal("1")
-    if lookup is None:
-        return None
-    if isinstance(lookup, Mapping):
-        value = lookup.get(asset)
-        if value is None:
+    value = getattr(ctx, name, None)
+    if callable(value):
+        try:
+            return value()
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.exception("recon.provider_failed", extra={"provider": name})
             return None
-        return _coerce_decimal(value, Decimal("0"))
-    try:
-        price = lookup(asset)
-    except Exception:  # pragma: no cover - defensive
-        return None
-    try:
-        return _coerce_decimal(price, Decimal("0"))
-    except InvalidOperation:
-        return None
+    return value
 
 
-__all__ = ["ReconSnapshot", "ReconSettings", "reconcile_once"]
+def _normalise_venue(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    canonical = VENUE_ALIASES.get(text, text)
+    return canonical.replace("_", "-")
 
+
+def _normalise_symbol(value: object) -> str:
+    text = str(value or "").strip().upper()
+    return text.replace("-", "").replace("_", "") if text else ""
+
+
+def _to_decimal(value: object, *, default: Decimal | None) -> Decimal | None:
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        try:
+            return Decimal(value)
+        except InvalidOperation:
+            return default
+    return default
+
+
+def _normalise_order_id(row: Mapping[str, object]) -> str:
+    for key in ("id", "order_id", "client_order_id", "idemp_key", "orderId", "origClientOrderId"):
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        return str(value)
+    return ""
+
+
+def _format_decimal(value: Decimal | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:f}"
+
+
+__all__ = [
+    "ReconIssue",
+    "ReconResult",
+    "compare_positions",
+    "compare_balances",
+    "compare_open_orders",
+    "reconcile_once",
+]

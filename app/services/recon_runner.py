@@ -1,3 +1,5 @@
+"""Background runner wiring for the reconciliation daemon."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,15 +9,11 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from ..metrics import RECON_DIFFS_GAUGE, RECON_EXCEPTIONS_COUNTER
-from ..recon.daemon import ReconDaemon
+from ..metrics import RECON_EXCEPTIONS_COUNTER
+from ..recon.daemon import ReconDaemon, _resolve_daemon_config
 from . import runtime
 
 LOGGER = logging.getLogger(__name__)
-
-RECON_INTERVAL_SEC = 30.0
-RECON_ENABLED = False
-RECON_SIGNAL_HOLD = False
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -36,94 +34,61 @@ def _env_float(name: str, default: float) -> float:
 
 
 class ReconRunner:
-    def __init__(
-        self,
-        _reconciler: Any | None = None,
-        *,
-        interval: float | None = None,
-    ) -> None:
-        loop_interval = interval or _env_float(
-            "RECON_LOOP_INTERVAL_SEC",
-            _env_float("RECON_INTERVAL_SEC", RECON_INTERVAL_SEC),
-        )
-        self._interval = loop_interval
-        self._enabled = _env_flag("RECON_ENABLED", RECON_ENABLED)
-        self._signal_hold = _env_flag("ENABLE_RECON_HOLD", RECON_SIGNAL_HOLD)
-        self._task: asyncio.Task[None] | None = None
-        self._stop = asyncio.Event()
-        self._daemon: ReconDaemon | None = None
+    """Lightweight wrapper exposing the reconciliation daemon lifecycle."""
 
-    @property
-    def auto_hold_enabled(self) -> bool:
-        return self._signal_hold
-
-    @auto_hold_enabled.setter
-    def auto_hold_enabled(self, enabled: bool) -> None:
-        self._signal_hold = bool(enabled)
+    def __init__(self, *, interval: float | None = None) -> None:
+        config = _resolve_daemon_config()
+        if interval is not None:
+            config.interval_sec = interval
+        else:
+            config.interval_sec = _env_float("RECON_INTERVAL_SEC", config.interval_sec)
+        enabled_override = _env_flag("RECON_ENABLED", config.enabled)
+        config.enabled = enabled_override
+        auto_hold_override = os.getenv("RECON_AUTO_HOLD_ON_CRITICAL")
+        if auto_hold_override is not None:
+            config.auto_hold_on_critical = _env_flag(
+                "RECON_AUTO_HOLD_ON_CRITICAL", config.auto_hold_on_critical
+            )
+        self._config = config
+        self._daemon = ReconDaemon(config)
+        self._start_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        if not self._enabled:
+        if not self._config.enabled:
             LOGGER.info("reconciliation runner disabled by configuration")
             return
-        if self._task and not self._task.done():
+        if self._start_task and not self._start_task.done():
             return
-        self._stop.clear()
-        self._task = asyncio.create_task(self._run())
+        self._start_task = asyncio.create_task(self._daemon.start())
+        await asyncio.sleep(0)  # allow start scheduling
 
     async def stop(self) -> None:
-        if not self._task:
-            return
-        self._stop.set()
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-            pass
-        finally:
-            self._task = None
+        if self._start_task and not self._start_task.done():
+            self._start_task.cancel()
+            try:
+                await self._start_task
+            except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
+                LOGGER.debug("recon.runner_start_task_cancelled")
+        await self._daemon.stop()
+        self._start_task = None
 
-    async def run_once(self) -> dict[str, object]:
-        if self._daemon is None:
-            self._daemon = ReconDaemon()
+    async def run_once(self) -> Any:
         try:
-            snapshots = await self._daemon.run_once()
-        except Exception as exc:  # pragma: no cover - defensive logging
+            return await self._daemon.run_once()
+        except Exception as exc:
             RECON_EXCEPTIONS_COUNTER.inc()
             runtime.update_reconciliation_status(
+                issues=[],
                 diffs=[],
                 desync_detected=True,
-                metadata={"error": str(exc), "state": "ERROR"},
+                metadata={"error": str(exc), "status": "ERROR", "state": "ERROR"},
             )
             raise
-        diff_count = len([snapshot for snapshot in snapshots if snapshot.status != "OK"])
-        RECON_DIFFS_GAUGE.set(diff_count)
-        worst = "OK"
-        for snapshot in snapshots:
-            status = snapshot.status if isinstance(snapshot.status, str) else "OK"
-            if status == "CRITICAL":
-                worst = "CRITICAL"
-                break
-            if status == "WARN" and worst != "CRITICAL":
-                worst = "WARN"
-        return {
-            "snapshots": snapshots,
-            "worst_state": worst,
-            "auto_hold": self._daemon.auto_hold_active if self._daemon else False,
-        }
 
-    async def _run(self) -> None:
-        LOGGER.info("reconciliation runner started with interval=%ss", self._interval)
-        while not self._stop.is_set():
-            try:
-                await self.run_once()
-            except Exception:
-                # run_once already logged and updated metrics; continue loop
-                pass
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
-            except asyncio.TimeoutError:
-                continue
-        LOGGER.info("reconciliation runner stopped")
+    @property
+    def daemon(self) -> ReconDaemon:
+        return self._daemon
+
 
 _RUNNER = ReconRunner()
 

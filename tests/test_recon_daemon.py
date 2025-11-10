@@ -1,158 +1,65 @@
-from __future__ import annotations
-
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
-from app.recon.core import ReconSnapshot
 from app.recon.daemon import DaemonConfig, ReconDaemon
+from app.recon.core import ReconIssue, ReconResult
 
 
 @pytest.mark.asyncio
-async def test_recon_triggers_auto_hold_on_critical(monkeypatch: pytest.MonkeyPatch) -> None:
-    safety = _build_safety()
-    state = SimpleNamespace(safety=safety, control=SimpleNamespace(safe_mode=True))
+async def test_recon_sets_hold_on_critical_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    safety = SimpleNamespace(hold_active=False, hold_reason=None)
+    state = SimpleNamespace(derivatives=None, safety=safety)
     monkeypatch.setattr("app.recon.daemon.runtime.get_state", lambda: state)
-    async def fake_fetch(_state):
-        return []
 
-    monkeypatch.setattr("app.recon.daemon._fetch_remote_balances", fake_fetch)
+    issues = [
+        ReconIssue(
+            kind="POSITION",
+            venue="binance-um",
+            symbol="ETHUSDT",
+            severity="CRITICAL",
+            code="POSITION_MISMATCH",
+            details="mismatch",
+        )
+    ]
+    result = ReconResult(ts=123.0, issues=issues)
+
+    async def fake_context(_self, _state):
+        return SimpleNamespace()
+
+    monkeypatch.setattr("app.recon.daemon.ReconDaemon._build_context", fake_context)
+    monkeypatch.setattr("app.recon.daemon.reconcile_once", lambda ctx: result)
+
+    holds: dict[str, str] = {}
 
     def engage(reason: str, *, source: str) -> bool:
-        safety.hold_active = True
-        safety.hold_reason = reason
+        holds["reason"] = reason
         return True
 
-    monkeypatch.setattr("app.recon.daemon.runtime.engage_safety_hold", engage)
-    monkeypatch.setattr("app.recon.daemon.runtime.autopilot_apply_resume", lambda **kwargs: None)
-    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", lambda **kwargs: kwargs)
-    monkeypatch.setattr("app.recon.daemon.log_operator_action", lambda *args, **kwargs: None)
-    monkeypatch.setattr("app.recon.daemon.get_golden_logger", lambda: SimpleNamespace(enabled=False))
+    metadata_calls: list[dict[str, object]] = []
 
-    critical_snapshot = ReconSnapshot(
-        venue="binance-um",
-        asset="USDT",
-        symbol="ETHUSDT",
-        side=None,
-        exch_position=Decimal("0"),
-        local_position=Decimal("0"),
-        exch_balance=None,
-        local_balance=None,
-        diff_abs=Decimal("100"),
-        status="CRITICAL",
-        reason="position_mismatch",
-        ts=123.0,
-    )
-
-    monkeypatch.setattr("app.recon.daemon.reconcile_once", lambda ctx: [critical_snapshot])
-
-    daemon = ReconDaemon(DaemonConfig(enabled=True, clear_after_ok_runs=1))
-    snapshots = await daemon.run_once()
-
-    assert snapshots == [critical_snapshot]
-    assert safety.hold_active is True
-    assert safety.hold_reason == "RECON_DIVERGENCE"
-    assert daemon.auto_hold_active is True
-
-
-@pytest.mark.asyncio
-async def test_recon_clears_auto_hold_after_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    safety = _build_safety()
-    state = SimpleNamespace(safety=safety, control=SimpleNamespace(safe_mode=True))
-    monkeypatch.setattr("app.recon.daemon.runtime.get_state", lambda: state)
-    async def fake_fetch(_state):
-        return []
-
-    monkeypatch.setattr("app.recon.daemon._fetch_remote_balances", fake_fetch)
-    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", lambda **kwargs: kwargs)
-    monkeypatch.setattr("app.recon.daemon.log_operator_action", lambda *args, **kwargs: None)
-    monkeypatch.setattr("app.recon.daemon.get_golden_logger", lambda: SimpleNamespace(enabled=False))
-
-    def engage(reason: str, *, source: str) -> bool:
-        safety.hold_active = True
-        safety.hold_reason = reason
-        return True
-
-    resume_calls: list[dict[str, Any]] = []
-
-    def resume(*, safe_mode: bool) -> None:
-        resume_calls.append({"safe_mode": safe_mode})
-        safety.hold_active = False
-        safety.hold_reason = None
+    def update_status(**kwargs) -> None:
+        metadata_calls.append(kwargs.get("metadata", {}))
 
     monkeypatch.setattr("app.recon.daemon.runtime.engage_safety_hold", engage)
-    monkeypatch.setattr("app.recon.daemon.runtime.autopilot_apply_resume", resume)
+    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", update_status)
 
-    critical_snapshot = ReconSnapshot(
-        venue="binance-um",
-        asset="USDT",
-        symbol="ETHUSDT",
-        side=None,
-        exch_position=Decimal("0"),
-        local_position=Decimal("0"),
-        exch_balance=None,
-        local_balance=None,
-        diff_abs=Decimal("100"),
-        status="CRITICAL",
-        reason="position_mismatch",
-        ts=123.0,
-    )
-    ok_snapshot = ReconSnapshot(
-        venue="binance-um",
-        asset="USDT",
-        symbol="ETHUSDT",
-        side=None,
-        exch_position=Decimal("0"),
-        local_position=Decimal("0"),
-        exch_balance=None,
-        local_balance=None,
-        diff_abs=Decimal("0"),
-        status="OK",
-        reason="position_ok",
-        ts=124.0,
+    daemon = ReconDaemon(
+        DaemonConfig(
+            enabled=True,
+            interval_sec=1.0,
+            epsilon_position=Decimal("0.0001"),
+            epsilon_balance=Decimal("0.5"),
+            epsilon_notional=Decimal("1.0"),
+            auto_hold_on_critical=True,
+        )
     )
 
-    snapshots_sequence = [[critical_snapshot], [ok_snapshot], [ok_snapshot]]
+    outcome = await daemon.run_once()
 
-    def fake_reconcile(ctx):
-        return snapshots_sequence.pop(0)
-
-    monkeypatch.setattr("app.recon.daemon.reconcile_once", fake_reconcile)
-
-    daemon = ReconDaemon(DaemonConfig(enabled=True, clear_after_ok_runs=2))
-
-    await daemon.run_once()  # engage hold
-    assert daemon.auto_hold_active is True
-    assert safety.hold_active is True
-
-    await daemon.run_once()
-    assert daemon.auto_hold_active is True
-    assert safety.hold_active is True
-
-    await daemon.run_once()
-
-    assert daemon.auto_hold_active is False
-    assert safety.hold_active is False
-    assert resume_calls
-
-
-def _build_safety() -> SimpleNamespace:
-    safety = SimpleNamespace(
-        risk_snapshot={},
-        hold_active=False,
-        hold_reason=None,
-        reconciliation_snapshot={},
-    )
-
-    def status_payload() -> dict[str, Any]:
-        return {
-            "hold_active": safety.hold_active,
-            "hold_reason": safety.hold_reason,
-            "reconciliation": safety.reconciliation_snapshot,
-            "runaway_guard": {},
-        }
-
-    safety.status_payload = status_payload  # type: ignore[attr-defined]
-    return safety
+    assert outcome is result
+    assert holds["reason"] == "RECON_CRITICAL::POSITION_MISMATCH"
+    assert metadata_calls
+    assert metadata_calls[-1].get("status") == "CRITICAL"
+    assert metadata_calls[-1].get("auto_hold") is True

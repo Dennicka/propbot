@@ -1659,7 +1659,19 @@ def update_reconciliation_status(
         "diff_count": len(diff_list),
     }
     if metadata:
-        snapshot.update({str(key): value for key, value in metadata.items()})
+        for key, value in metadata.items():
+            key_text = str(key)
+            if key_text == "issues_last_sample" and isinstance(value, Sequence):
+                snapshot[key_text] = [
+                    dict(item) for item in value if isinstance(item, Mapping)
+                ]
+                continue
+            snapshot[key_text] = value
+
+    snapshot.setdefault("status", snapshot.get("state", "UNKNOWN"))
+    snapshot.setdefault("last_run_ts", snapshot.get("last_checked"))
+    if "issues_last_sample" not in snapshot:
+        snapshot["issues_last_sample"] = [dict(item) for item in issue_list]
 
     persist_snapshot: Dict[str, Any] | None = None
     with _STATE_LOCK:
