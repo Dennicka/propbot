@@ -1235,7 +1235,8 @@ service. When active the daemon:
 * invokes the same `/api/arb/execute` flow as the manual REST path so all
   guardrails (limits, runaway breaker, approvals) remain intact;
 * records each automatic fill or rejection in `data/hedge_log.json` with the
-  initiator set to `YOUR_NAME_OR_TOKEN`.
+  initiator sourced from the `AUTO_HEDGE_INITIATOR` environment variable (default
+  `auto-hedge-daemon`).
 
 Review the log via the new read-only endpoint:
 

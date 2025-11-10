@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 
 from prometheus_client import Counter
@@ -13,6 +14,9 @@ __all__ = [
     "WS_RESYNC_TOTAL",
     "reset_for_tests",
 ]
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 _LOCK = threading.Lock()
@@ -68,5 +72,5 @@ def reset_for_tests() -> None:  # pragma: no cover - best effort cleanup
     ):
         try:
             metric._metrics.clear()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("failed to reset ws metric collector=%s error=%s", metric, exc)

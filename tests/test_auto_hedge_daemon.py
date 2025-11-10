@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict
-
+import os
 from typing import Dict
 
 import pytest
@@ -86,7 +85,7 @@ async def test_auto_daemon_executes_success(monkeypatch, tmp_path) -> None:
     entries = read_entries()
     assert len(entries) == 1
     assert entries[0]["result"] == "accepted"
-    assert entries[0]["initiator"] == "YOUR_NAME_OR_TOKEN"
+    assert entries[0]["initiator"] == os.getenv("AUTO_HEDGE_INITIATOR", "auto-hedge-daemon")
 
     state = runtime.get_state()
     assert state.auto_hedge.last_execution_result == "ok"

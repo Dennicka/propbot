@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, List, Mapping
 
 from ..runtime import leader_lock
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _log_path() -> Path:
@@ -47,8 +51,8 @@ def append_entry(entry: Mapping[str, Any]) -> dict:
     path = _log_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("hedge_log parent creation failed path=%s error=%s", path.parent, exc)
 
     entries = _load_entries(path)
     entries.append(record)
@@ -56,9 +60,9 @@ def append_entry(entry: Mapping[str, Any]) -> dict:
     try:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(entries, handle, indent=2, sort_keys=True)
-    except OSError:
+    except OSError as exc:
         # Best-effort persistence; ignore failures but still return the record.
-        pass
+        LOGGER.warning("hedge_log write failed path=%s error=%s", path, exc)
     return record
 
 
@@ -70,13 +74,16 @@ def reset_log() -> None:
         path.unlink()
     except FileNotFoundError:
         return
-    except OSError:
+    except OSError as exc:
         # If unlink fails, overwrite with empty list.
+        LOGGER.warning("hedge_log unlink failed path=%s error=%s", path, exc)
         try:
             with path.open("w", encoding="utf-8") as handle:
                 json.dump([], handle)
-        except OSError:
-            pass
+        except OSError as rewrite_exc:
+            LOGGER.error(
+                "hedge_log reset failed path=%s error=%s", path, rewrite_exc
+            )
 
 
 __all__ = ["append_entry", "read_entries", "reset_log"]

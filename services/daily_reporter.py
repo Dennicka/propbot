@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,9 @@ from typing import Any, Iterable, Mapping, Sequence
 from pnl_history_store import list_snapshots as list_pnl_snapshots
 from positions_store import list_records as list_position_records
 from services.execution_stats_store import list_recent as list_recent_execution_stats
+
+
+LOGGER = logging.getLogger(__name__)
 
 _STORE_ENV = "DAILY_REPORTS_PATH"
 _DEFAULT_STORE_PATH = Path("data/daily_reports.json")
@@ -44,8 +48,8 @@ def _alerts_path() -> Path:
 def _ensure_parent(path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("daily reporter parent creation failed path=%s error=%s", path.parent, exc)
 
 
 def _load_json_list(path: Path) -> list[dict[str, Any]]:
@@ -76,8 +80,8 @@ def _write_json_list(path: Path, entries: Iterable[Mapping[str, Any]]) -> None:
     try:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(snapshot, handle, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        LOGGER.warning("daily reporter write failed path=%s error=%s", path, exc)
 
 
 def _parse_ts(value: Any) -> datetime | None:

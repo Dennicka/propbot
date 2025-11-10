@@ -16,6 +16,16 @@ prevent accidental leakage during development or deployment.
   the secrets store. Environment variables remain a fallback for local testing,
   but real keys must **not** be committed to the repository.
 
+### Handling new secrets
+
+* Provision new API tokens or credentials by updating the JSON bundle referenced
+  by `SECRETS_STORE_PATH`. Never hardcode tokens, passwords or chat identifiers
+  in source files or tests.
+* Operators interacting with automation (auto hedge daemon, approvals) should
+  provide human-readable identifiers via environment variables such as
+  `AUTO_HEDGE_INITIATOR`. These defaults are safe placeholders but should be
+  overridden during deployment to aid audit trails.
+
 ## Live profile requirements
 
 * Launching with `PROFILE=live` is blocked when the secrets store is missing or
@@ -32,6 +42,26 @@ prevent accidental leakage during development or deployment.
 * Risk, router, broker and reconciliation modules avoid placeholder constructs
   (`pass`, `print`, `eval`, etc.). The `tests/test_no_placeholders.py` test keeps
   these paths clean.
+
+## Operator roles
+
+* The RBAC model recognises `viewer`, `auditor`, and `operator` roles. Only
+  operators may execute privileged actions such as `HOLD`, `RESUME`, or
+  `KILL`. Viewer and auditor tokens are strictly read-only and attempts to use
+  them for privileged endpoints are logged and rejected.
+* Operator tokens must be stored in the secrets store. `viewer` level accounts
+  are appropriate for dashboards, health checks, and audit snapshots.
+
+## Forbidden artefacts
+
+* Never commit raw API keys, secrets, authentication cookies, or Telegram
+  credentials. Use `make secrets-dump` tooling (see `scripts/`) to rotate and
+  provision secrets safely.
+* Do not add placeholder defaults such as `changeme` or `YOUR_NAME` to
+  production code paths. Runtime validation explicitly fails when placeholders
+  are detected.
+* All outbound HTTP requests must set explicit timeouts and rely on HTTPS with
+  certificate verification (the default behaviour of `requests`).
 
 ## Continuous integration
 

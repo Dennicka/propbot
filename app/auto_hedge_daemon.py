@@ -32,7 +32,7 @@ from .telemetry import observe_core_latency, set_hedge_daemon_ok
 
 logger = logging.getLogger(__name__)
 
-INITIATOR = "YOUR_NAME_OR_TOKEN"
+INITIATOR = os.getenv("AUTO_HEDGE_INITIATOR", "auto-hedge-daemon")
 _FAIL_WINDOW = 60.0
 
 STRATEGY_NAME = "cross_exchange_arb"
@@ -41,12 +41,13 @@ STRATEGY_NAME = "cross_exchange_arb"
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     try:
         from .opsbot.notifier import emit_alert
-    except Exception:
+    except Exception as exc:
+        logger.warning("ops notifier import failed kind=%s error=%s", kind, exc)
         return
     try:
         emit_alert(kind=kind, text=text, extra=extra or None)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("ops notifier emit failed kind=%s error=%s", kind, exc)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -139,7 +140,7 @@ class AutoHedgeDaemon:
         try:
             await self._task
         except asyncio.CancelledError:
-            pass
+            logger.debug("auto hedge stop requested during cycle")
         finally:
             self._task = None
 

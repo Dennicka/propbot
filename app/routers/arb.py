@@ -80,12 +80,13 @@ def _maybe_skip_for_risk(intent: Mapping[str, object]) -> dict | None:
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     try:
         from ..opsbot.notifier import emit_alert
-    except Exception:
+    except Exception as exc:
+        logger.warning("ops notifier import failed kind=%s error=%s", kind, exc)
         return
     try:
         emit_alert(kind=kind, text=text, extra=extra or None)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("ops notifier emit failed kind=%s error=%s", kind, exc)
 
 
 class PreviewRequest(BaseModel):

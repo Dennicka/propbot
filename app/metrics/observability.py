@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from typing import Iterable
@@ -21,6 +22,9 @@ __all__ = [
     "register_slo_metrics",
     "reset_for_tests",
 ]
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _env_flag(raw: str | None, default: bool = False) -> bool:
@@ -187,13 +191,13 @@ def reset_for_tests() -> None:  # pragma: no cover - best effort cleanup
     for metric in collectors:
         try:
             metric._metrics.clear()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("failed to reset metric collector=%s error=%s", metric, exc)
     if API_LATENCY is not None:
         try:
             API_LATENCY._sum.set(0.0)  # type: ignore[attr-defined]
             API_LATENCY._count.set(0.0)  # type: ignore[attr-defined]
             for bucket in API_LATENCY._buckets:  # type: ignore[attr-defined]
                 bucket.set(0.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("failed to reset api latency histogram error=%s", exc)

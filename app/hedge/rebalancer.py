@@ -130,7 +130,7 @@ class PartialHedgeRebalancer:
         try:
             await self._task
         except asyncio.CancelledError:
-            pass
+            LOGGER.debug("rebalancer stop awaited cancellation")
         finally:
             self._task = None
 
