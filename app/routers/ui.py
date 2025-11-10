@@ -484,7 +484,11 @@ async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
     now = time.time()
     window_seconds = 7 * 24 * 60 * 60
     ctx = getattr(request.app.state, "ledger", None)
-    ledger_obj = build_ledger_from_history(ctx, now - window_seconds)
+    ledger_obj = build_ledger_from_history(
+        ctx,
+        now - window_seconds,
+        exclude_simulated=exclude_simulated,
+    )
     daily_snapshots = []
     try:
         daily_snapshots = ledger_obj.daily_snapshots()
