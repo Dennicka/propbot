@@ -53,6 +53,7 @@ from .metrics.observability import observe_api_latency, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
 from .profile_config import ProfileConfigError, load_profile_config
+from .config.profiles import resolve_guard_status
 from .startup_resume import perform_resume as perform_startup_resume
 from services.opportunity_scanner import setup_scanner as setup_opportunity_scanner
 from .services.autopilot import setup_autopilot
@@ -121,6 +122,17 @@ def create_app() -> FastAPI:
             profile_cfg.risk_limits.max_drawdown_bps,
             profile_cfg.flags.as_dict(),
         )
+        guards = resolve_guard_status(profile_cfg)
+        logger.info(
+            "Guard toggles: slo=%s health=%s hedge=%s (partial=%s auto=%s) recon=%s watchdog=%s",
+            guards.get("slo"),
+            guards.get("health"),
+            guards.get("hedge"),
+            guards.get("partial_hedge"),
+            guards.get("auto_hedge"),
+            guards.get("recon"),
+            guards.get("watchdog"),
+        )
     resume_ok, resume_payload = perform_startup_resume()
     build_version = os.getenv("BUILD_VERSION") or APP_VERSION
     logger.info(
@@ -128,6 +140,25 @@ def create_app() -> FastAPI:
         build_version,
         APP_VERSION,
     )
+    try:
+        state = runtime_service.get_state()
+    except Exception:  # pragma: no cover - defensive logging
+        logger.debug("Не удалось получить runtime state для логирования", exc_info=True)
+    else:
+        control = getattr(state, "control", None)
+        if control is not None:
+            mode = str(getattr(control, "mode", "HOLD") or "HOLD").upper()
+            hold_active = mode != "RUN"
+            logger.info(
+                "Control state: mode=%s hold=%s safe_mode=%s dry_run=%s dry_run_mode=%s two_man=%s",
+                mode,
+                hold_active,
+                getattr(control, "safe_mode", True),
+                getattr(control, "dry_run", False),
+                getattr(control, "dry_run_mode", False),
+                getattr(control, "two_man_rule", True),
+            )
+
     app = FastAPI(title="PropBot API")
     static_dir = Path(__file__).resolve().parent / "static"
     if static_dir.is_dir():

@@ -59,13 +59,13 @@ run:
 $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
 
 run-paper:
-PROFILE=paper $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+$(PY) -m app.cli run-profile paper
 
 run-testnet:
-PROFILE=testnet $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+$(PY) -m app.cli run-profile testnet
 
 run-live:
-PROFILE=live $(UVICORN) app.main:app --host 127.0.0.1 --port 8000
+$(PY) -m app.cli run-profile live
 
 dryrun.once:
 	$(PY) -m app.cli exec --profile paper
