@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
+from .pnl_sources import build_ledger_from_history
+
 from ..runtime import leader_lock
 
 LEDGER_PATH = Path("data/ledger.db")
@@ -747,6 +749,7 @@ __all__ = [
     "fetch_events",
     "fetch_events_page",
     "fetch_positions",
+    "build_ledger_from_history",
     "init_db",
     "record_event",
     "record_fill",

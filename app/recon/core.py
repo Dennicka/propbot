@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import logging
 import time
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 from typing import Mapping, MutableMapping, Sequence, Literal
 
 from .. import ledger
+from ..metrics.recon import PNL_LEDGER_REALIZED_TODAY
 from ..services import runtime
 from .reconciler import Reconciler
 
@@ -64,6 +66,8 @@ def reconcile_once(ctx: object | None = None) -> list[ReconSnapshot]:
     )
 
     balance_snapshots = _build_balance_snapshots(ctx, settings, timestamp)
+
+    _record_ledger_realized_today(timestamp)
 
     return position_snapshots + balance_snapshots
 
@@ -137,6 +141,25 @@ def _coerce_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
         except InvalidOperation:
             return default
     return default
+
+
+def _record_ledger_realized_today(now: float) -> None:
+    today_key = datetime.fromtimestamp(now, tz=timezone.utc).date().isoformat()
+    try:
+        ledger_obj = ledger.build_ledger_from_history(None, now - 7 * 24 * 60 * 60)
+    except Exception:  # pragma: no cover - defensive
+        PNL_LEDGER_REALIZED_TODAY.set(0.0)
+        return
+    try:
+        snapshots = ledger_obj.daily_snapshots()
+    except AttributeError:
+        PNL_LEDGER_REALIZED_TODAY.set(0.0)
+        return
+    realized = Decimal("0")
+    for snapshot in snapshots:
+        if getattr(snapshot, "date", None) == today_key:
+            realized += getattr(snapshot, "realized_pnl", Decimal("0"))
+    PNL_LEDGER_REALIZED_TODAY.set(float(realized))
 
 
 # ---------------------------------------------------------------------------

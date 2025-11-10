@@ -4,11 +4,13 @@ import asyncio
 import csv
 import io
 import json
+import logging
 import math
 import os
-import logging
 import secrets
+import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
@@ -18,8 +20,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, conint, confloat
 
+LOGGER = logging.getLogger(__name__)
+
 from .. import ledger
+from ..ledger import build_ledger_from_history
 from ..metrics import set_auto_trade_state
+from ..metrics.pnl import publish_daily_snapshots
 from ..audit_log import list_recent_operator_actions, log_operator_action
 from ..dashboard_helpers import render_dashboard_response
 from ..version import APP_VERSION
@@ -406,6 +412,60 @@ def _strategy_pnl_cache_vary(request: Request, _args, _kwargs) -> tuple[object, 
     return tuple(parts)
 
 
+def _strategy_rows_from_ledger(
+    ledger_obj,
+    *,
+    exclude_simulated: bool,
+    window_seconds: float,
+    now: float,
+) -> list[dict[str, object]]:
+    try:
+        entries = list(ledger_obj.iter_entries())
+    except AttributeError:
+        return []
+    if not entries:
+        return []
+    today_cutoff = now - 24 * 60 * 60
+    window_cutoff = now - window_seconds
+    grouped: dict[str, list] = {}
+    for entry in entries:
+        simulated = bool(getattr(entry, "simulated", False))
+        if exclude_simulated and simulated:
+            continue
+        name = (entry.symbol or "").strip() or "UNKNOWN"
+        grouped.setdefault(name, []).append(entry)
+    result: list[dict[str, object]] = []
+    for name, symbol_entries in grouped.items():
+        symbol_entries.sort(key=lambda item: item.ts)
+        realized_today = Decimal("0")
+        realized_window = Decimal("0")
+        running = Decimal("0")
+        peak = Decimal("0")
+        max_drawdown = Decimal("0")
+        for entry in symbol_entries:
+            delta = entry.realized_pnl - entry.fee + entry.funding + entry.rebate
+            if entry.ts >= window_cutoff:
+                running += delta
+                realized_window += delta
+                if entry.ts >= today_cutoff:
+                    realized_today += delta
+                if running > peak:
+                    peak = running
+                else:
+                    drawdown = peak - running
+                    if drawdown > max_drawdown:
+                        max_drawdown = drawdown
+        result.append(
+            {
+                "name": name,
+                "realized_today": float(realized_today),
+                "realized_7d": float(realized_window),
+                "max_drawdown_7d": float(max_drawdown),
+            }
+        )
+    return result
+
+
 @router.get("/strategy_pnl")
 @cache_response(2.0, vary=_strategy_pnl_cache_vary)
 async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
@@ -420,20 +480,51 @@ async def strategy_pnl_overview(request: Request) -> dict[str, Any]:
     else:
         exclude_simulated = bool(stored_flag)
 
+    now = time.time()
+    window_seconds = 7 * 24 * 60 * 60
+    ctx = getattr(request.app.state, "ledger", None)
+    ledger_obj = build_ledger_from_history(ctx, now - window_seconds)
+    daily_snapshots = []
+    try:
+        daily_snapshots = ledger_obj.daily_snapshots()
+    except AttributeError:
+        daily_snapshots = []
+    if daily_snapshots:
+        publish_daily_snapshots(daily_snapshots)
+        latest = daily_snapshots[-1]
+        LOGGER.info(
+            "pnl.daily_snapshot",
+            extra={
+                "event": "pnl_daily_snapshot",
+                "date": latest.date,
+                "realized_pnl": str(latest.realized_pnl),
+                "fees": str(latest.fees),
+                "funding": str(latest.funding),
+                "rebates": str(latest.rebates),
+                "net_pnl": str(latest.net_pnl),
+            },
+        )
+    ledger_rows = _strategy_rows_from_ledger(
+        ledger_obj,
+        exclude_simulated=exclude_simulated,
+        window_seconds=window_seconds,
+        now=now,
+    )
     snapshot = tracker.snapshot(exclude_simulated=exclude_simulated)
-    strategies: list[dict[str, object]] = []
+    strategies_map: dict[str, dict[str, object]] = {}
     for name, entry in snapshot.items():
         realized_today = float(entry.get("realized_today", 0.0))
         realized_7d = float(entry.get("realized_7d", 0.0))
         max_drawdown_7d = float(entry.get("max_drawdown_7d", 0.0))
-        strategies.append(
-            {
-                "name": name,
-                "realized_today": realized_today,
-                "realized_7d": realized_7d,
-                "max_drawdown_7d": max_drawdown_7d,
-            }
-        )
+        strategies_map[name] = {
+            "name": name,
+            "realized_today": realized_today,
+            "realized_7d": realized_7d,
+            "max_drawdown_7d": max_drawdown_7d,
+        }
+    for row in ledger_rows:
+        strategies_map[row["name"]] = row
+    strategies = list(strategies_map.values())
     strategies.sort(key=lambda item: item["realized_today"])
     return {
         "strategies": strategies,
