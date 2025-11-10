@@ -1,5 +1,8 @@
 from __future__ import annotations
-import logging, sys, json
+
+import json
+import logging
+import sys
 
 def setup_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)

@@ -482,7 +482,17 @@ def execute_hedged_trade(
     
         spread_info = check_spread(symbol)
         spread_value = float(spread_info["spread"])
-    
+        risk_manager = get_strategy_risk_manager()
+
+        def _record_failure(reason: str) -> None:
+            try:
+                risk_manager.record_failure(STRATEGY_NAME, reason)
+            except Exception:
+                LOGGER.exception(
+                    "failed to record strategy failure",
+                    extra={"strategy": STRATEGY_NAME, "reason": reason},
+                )
+
         if spread_value < float(min_spread):
             _record_failure("spread_below_threshold")
             return {
@@ -506,7 +516,6 @@ def execute_hedged_trade(
     
         dry_run_mode = is_dry_run_mode()
         budget_manager = get_strategy_budget_manager()
-        risk_manager = get_strategy_risk_manager()
     
         if not risk_manager.is_enabled(STRATEGY_NAME):
             return {
@@ -526,15 +535,6 @@ def execute_hedged_trade(
                 "reason": "strategy_frozen",
                 "strategy": STRATEGY_NAME,
             }
-    
-        def _record_failure(reason: str) -> None:
-            try:
-                risk_manager.record_failure(STRATEGY_NAME, reason)
-            except Exception:
-                LOGGER.exception(
-                    "failed to record strategy failure",
-                    extra={"strategy": STRATEGY_NAME, "reason": reason},
-                )
     
         def _record_success() -> None:
             try:

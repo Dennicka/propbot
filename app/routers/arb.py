@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Dict, List, Literal, Mapping, Union
+import logging
 import os
 import secrets
 
@@ -27,6 +28,9 @@ from services.cross_exchange_arb import check_spread, execute_hedged_trade
 from services.risk_manager import can_open_new_position
 
 router = APIRouter()
+
+
+logger = logging.getLogger(__name__)
 
 
 STRATEGY_NAME = "cross_exchange_arb"

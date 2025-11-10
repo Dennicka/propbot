@@ -23,35 +23,35 @@ _LOCK = threading.Lock()
 _WS_METRICS_INITIALISED = False
 
 
-WS_CONNECT_TOTAL: Counter
-WS_DISCONNECT_TOTAL: Counter
-WS_GAP_DETECTED_TOTAL: Counter
-WS_RESYNC_TOTAL: Counter
+WS_CONNECT_TOTAL: Counter | None = None
+WS_DISCONNECT_TOTAL: Counter | None = None
+WS_GAP_DETECTED_TOTAL: Counter | None = None
+WS_RESYNC_TOTAL: Counter | None = None
 
 
 def _ensure_metrics() -> None:
-    global _WS_METRICS_INITIALISED
+    global _WS_METRICS_INITIALISED, WS_CONNECT_TOTAL, WS_DISCONNECT_TOTAL, WS_GAP_DETECTED_TOTAL, WS_RESYNC_TOTAL
     if _WS_METRICS_INITIALISED:
         return
     with _LOCK:
         if _WS_METRICS_INITIALISED:
             return
-        globals()["WS_CONNECT_TOTAL"] = Counter(
+        WS_CONNECT_TOTAL = Counter(
             "ws_connect_total",
             "Total websocket connections established by venue.",
             ("venue",),
         )
-        globals()["WS_DISCONNECT_TOTAL"] = Counter(
+        WS_DISCONNECT_TOTAL = Counter(
             "ws_disconnect_total",
             "Total websocket disconnects by venue and reason.",
             ("venue", "reason"),
         )
-        globals()["WS_GAP_DETECTED_TOTAL"] = Counter(
+        WS_GAP_DETECTED_TOTAL = Counter(
             "ws_gap_detected_total",
             "Total detected websocket diff gaps by venue and symbol.",
             ("venue", "symbol"),
         )
-        globals()["WS_RESYNC_TOTAL"] = Counter(
+        WS_RESYNC_TOTAL = Counter(
             "ws_resync_total",
             "Total websocket resync operations triggered by venue and symbol.",
             ("venue", "symbol"),
@@ -70,6 +70,8 @@ def reset_for_tests() -> None:  # pragma: no cover - best effort cleanup
         WS_GAP_DETECTED_TOTAL,
         WS_RESYNC_TOTAL,
     ):
+        if metric is None:
+            continue
         try:
             metric._metrics.clear()  # type: ignore[attr-defined]
         except Exception as exc:

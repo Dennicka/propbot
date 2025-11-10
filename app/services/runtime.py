@@ -2346,26 +2346,26 @@ def _normalise_control_patch(patch: Mapping[str, object]) -> Dict[str, object]:
         "loop_venues",
     }
     normalised: Dict[str, object] = {}
-    for field, value in patch.items():
-        if field not in allowed_fields or value is None:
+    for field_name, value in patch.items():
+        if field_name not in allowed_fields or value is None:
             continue
-        if field in {"safe_mode", "dry_run_only", "two_man_rule", "auto_loop"}:
-            normalised[field] = _coerce_bool(field, value)
+        if field_name in {"safe_mode", "dry_run_only", "two_man_rule", "auto_loop"}:
+            normalised[field_name] = _coerce_bool(field_name, value)
             continue
-        if field == "max_slippage_bps":
-            normalised[field] = _coerce_int(field, value, minimum=0, maximum=50)
+        if field_name == "max_slippage_bps":
+            normalised[field_name] = _coerce_int(field_name, value, minimum=0, maximum=50)
             continue
-        if field == "min_spread_bps":
-            normalised[field] = _coerce_float(field, value, minimum=0.0, maximum=100.0)
+        if field_name == "min_spread_bps":
+            normalised[field_name] = _coerce_float(field_name, value, minimum=0.0, maximum=100.0)
             continue
-        if field == "order_notional_usdt":
-            normalised[field] = _coerce_float(field, value, minimum=1.0, maximum=1_000_000.0)
+        if field_name == "order_notional_usdt":
+            normalised[field_name] = _coerce_float(field_name, value, minimum=1.0, maximum=1_000_000.0)
             continue
-        if field == "loop_pair":
-            normalised[field] = _coerce_loop_pair(value)
+        if field_name == "loop_pair":
+            normalised[field_name] = _coerce_loop_pair(value)
             continue
-        if field == "loop_venues":
-            normalised[field] = _coerce_loop_venues(value)
+        if field_name == "loop_venues":
+            normalised[field_name] = _coerce_loop_venues(value)
             continue
     return normalised
 
@@ -2442,12 +2442,12 @@ def _coerce_loop_venues(value: object) -> List[str]:
 
 def _apply_control_updates(control: ControlState, updates: Mapping[str, object]) -> Dict[str, object]:
     changes: Dict[str, object] = {}
-    for field, value in updates.items():
-        target_field = "dry_run" if field == "dry_run_only" else field
+    for field_name, value in updates.items():
+        target_field = "dry_run" if field_name == "dry_run_only" else field_name
         current = getattr(control, target_field, None)
         if current != value:
             setattr(control, target_field, value)
-            changes[field] = value
+            changes[field_name] = value
     return changes
 
 
@@ -2965,7 +2965,7 @@ def _load_persisted_state(state: RuntimeState) -> None:
             except (TypeError, ValueError) as exc:
                 LOGGER.debug(
                     "invalid reconciliation snapshot field=%s error=%s",
-                    key,
+                    "max_daily_loss_usdt",
                     exc,
                 )
 

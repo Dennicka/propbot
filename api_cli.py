@@ -25,10 +25,12 @@ def _perform_get(
     url: str, params: dict[str, Any], headers: dict[str, str] | None = None
 ) -> requests.Response:
     try:
-        request_kwargs: dict[str, Any] = {"params": params, "timeout": REQUEST_TIMEOUT}
-        if headers:
-            request_kwargs["headers"] = headers
-        response = requests.get(url, **request_kwargs)
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+        )
     except requests.RequestException as exc:  # pragma: no cover - defensive
         raise CLIError(f"Request failed: {exc}") from exc
     if response.status_code >= 400:
