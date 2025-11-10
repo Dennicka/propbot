@@ -126,6 +126,27 @@ _PROFILE_DEFAULTS: dict[RuntimeProfile, _ProfileDefaults] = {
 }
 
 
+_LIVE_CONFIRM_TOKEN = "I_KNOW_WHAT_I_AM_DOING"
+
+_LIVE_LIMIT_ENV_REQUIREMENTS: tuple[tuple[str, str, bool], ...] = (
+    (
+        "MAX_TOTAL_NOTIONAL_USDT",
+        "задай MAX_TOTAL_NOTIONAL_USDT (> 0) — лимит совокупного ноционала",
+        True,
+    ),
+    (
+        "DAILY_LOSS_CAP_USDT",
+        "задай DAILY_LOSS_CAP_USDT (> 0) — дневной лимит убытков",
+        True,
+    ),
+    (
+        "MAX_OPEN_POSITIONS",
+        "задай MAX_OPEN_POSITIONS (> 0) — лимит одновременно открытых сделок",
+        True,
+    ),
+)
+
+
 def apply_profile_environment(
     profile: RuntimeProfile,
     profile_cfg: ProfileConfig,
@@ -242,6 +263,46 @@ def ensure_live_prerequisites(
         )
 
 
+def ensure_live_acknowledged(
+    profile_cfg: ProfileConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Ensure the operator explicitly acknowledged live launch risk limits."""
+
+    _ = profile_cfg  # currently unused but kept for future linkage to limits
+    env = environ if environ is not None else os.environ
+    errors: list[str] = []
+
+    token = (env.get("LIVE_CONFIRM") or "").strip()
+    if token != _LIVE_CONFIRM_TOKEN:
+        errors.append(
+            "LIVE_CONFIRM должен быть установлен в 'I_KNOW_WHAT_I_AM_DOING' перед запуском live"
+        )
+
+    for name, description, require_positive in _LIVE_LIMIT_ENV_REQUIREMENTS:
+        raw = env.get(name)
+        if raw is None or not str(raw).strip():
+            errors.append(f"{description}: переменная {name} не задана")
+            continue
+        try:
+            numeric = float(str(raw))
+        except ValueError:
+            errors.append(
+                f"{description}: переменная {name} должна быть числом (получено {raw!r})"
+            )
+            continue
+        if require_positive and numeric <= 0:
+            errors.append(f"{description}: значение {name} должно быть > 0 (получено {numeric})")
+
+    if errors:
+        details = "\n".join(f"- {entry}" for entry in errors)
+        raise ProfileSafetyError(
+            "LIVE запуск заблокирован политикой risk-confirmation:\n" f"{details}",
+            reasons=errors,
+        )
+
+
 def ensure_profile_safe(
     profile: RuntimeProfile,
     profile_cfg: ProfileConfig,
@@ -252,12 +313,14 @@ def ensure_profile_safe(
 
     if profile is RuntimeProfile.LIVE:
         ensure_live_prerequisites(profile_cfg, environ=environ)
+        ensure_live_acknowledged(profile_cfg, environ=environ)
 
 
 __all__ = [
     "ProfileSafetyError",
     "RuntimeProfile",
     "apply_profile_environment",
+    "ensure_live_acknowledged",
     "ensure_live_prerequisites",
     "ensure_profile_safe",
     "load_profile",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from typing import Any
@@ -10,6 +11,9 @@ from fastapi.responses import HTMLResponse
 from .secrets_store import SecretsStore
 from .security import is_auth_enabled, require_token
 from .services.operator_dashboard import build_dashboard_context, render_dashboard_html
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def resolve_operator(request: Request, token: str | None) -> dict[str, str]:
@@ -23,7 +27,11 @@ def resolve_operator(request: Request, token: str | None) -> dict[str, str]:
         store: SecretsStore | None
         try:
             store = SecretsStore()
-        except Exception:
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "dashboard.resolve_operator.secrets_store_failed",
+                extra={"error": str(exc)},
+            )
             store = None
         if store:
             resolved = store.get_operator_by_token(token)

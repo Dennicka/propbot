@@ -6,10 +6,11 @@
 
 ## Профили и запуск
 
-* **Старт через CLI.** Для paper/testnet/live профилей используем `make run-paper`,
-  `make run-testnet` и `make run-live`. Цели Makefile вызывают `python -m app.cli
-  run-profile <profile>`, который выставляет набор стандартных env-флагов и
-  блокирует запуск при отсутствии guard’ов или secrets. 【F:Makefile†L33-L44】【F:app/config/profiles.py†L70-L185】
+* **Старт через CLI.** Для paper/testnet/live профилей используем `make run_paper`,
+  `make run_testnet` и `make run_live`. Цель `run_live` проверяет, что выставлены
+  лимиты (`MAX_TOTAL_NOTIONAL_USDT`, `MAX_OPEN_POSITIONS`, `DAILY_LOSS_CAP_USDT`) и
+  подтверждение `LIVE_CONFIRM=I_KNOW_WHAT_I_AM_DOING`. Без этих значений запуск
+  завершается с ошибкой. 【F:Makefile†L33-L51】【F:scripts/run_profile.py†L1-L99】【F:app/config/profiles.py†L36-L214】
 * **Логи bootstrap.** При старте в лог попадает профиль, активные лимиты и
   снимок guard’ов (SLO, hedge, recon, watchdog) плюс контрольные флаги HOLD,
   SAFE_MODE и DRY_RUN. Если что-то отключено, логи сразу подскажут. 【F:app/main.py†L62-L109】

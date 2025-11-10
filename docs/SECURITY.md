@@ -34,14 +34,19 @@ prevent accidental leakage during development or deployment.
 * Mandatory secrets for the live profile are defined in
   `configs/profile.live.yaml` and validated by `ensure_required_secrets`. Missing
   entries prevent the service from starting.
+* `scripts/run_profile.py` also requires `LIVE_CONFIRM=I_KNOW_WHAT_I_AM_DOING`
+  and non-zero limits `MAX_TOTAL_NOTIONAL_USDT`, `MAX_OPEN_POSITIONS`,
+  `DAILY_LOSS_CAP_USDT` before launching the live profile. 【F:scripts/run_profile.py†L1-L99】【F:app/config/profiles.py†L154-L214】
 
 ## Runtime guards
 
 * Startup validation also checks for placeholder values, unsafe feature flags,
   and critical filesystem paths before allowing the application to continue.
+  【F:app/startup_validation.py†L38-L185】
 * Risk, router, broker and reconciliation modules avoid placeholder constructs
-  (`pass`, `print`, `eval`, etc.). The `tests/test_no_placeholders.py` test keeps
-  these paths clean.
+  (`pass`, `print`, `eval`, etc.). `tests/test_code_hygiene.py` enforces the
+  guardrail and additionally blocks HTTP calls without timeouts or silent
+  `except Exception`. 【F:tests/test_code_hygiene.py†L1-L183】
 
 ## Operator roles
 

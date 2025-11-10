@@ -256,8 +256,16 @@ class StrategyOrchestrator:
                     kind="orchestrator_alert",
                     extra=extra,
                 )
-            except Exception:
-                continue
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    "orchestrator.alert_failed",
+                    extra={
+                        "strategy": name,
+                        "decision": decision,
+                        "reason": reason,
+                        "error": str(exc),
+                    },
+                )
 
 
 orchestrator = StrategyOrchestrator()

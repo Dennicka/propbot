@@ -10,6 +10,7 @@ from app.config.profiles import (
     ProfileSafetyError,
     RuntimeProfile,
     apply_profile_environment,
+    ensure_live_acknowledged,
     ensure_live_prerequisites,
 )
 from app.secrets_store import reset_secrets_store_cache
@@ -97,3 +98,25 @@ def test_live_prerequisites_fail_without_secrets(monkeypatch) -> None:
     monkeypatch.delenv("SECRETS_STORE_PATH", raising=False)
     with pytest.raises(ProfileSafetyError):
         ensure_live_prerequisites(live_cfg)
+
+
+def test_live_acknowledgement_requires_limits(monkeypatch) -> None:
+    live_cfg = _load("live")
+    env_updates = apply_profile_environment(RuntimeProfile.LIVE, live_cfg, environ={})
+    for key, value in env_updates.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USDT", raising=False)
+    monkeypatch.delenv("MAX_OPEN_POSITIONS", raising=False)
+    monkeypatch.delenv("DAILY_LOSS_CAP_USDT", raising=False)
+    monkeypatch.delenv("LIVE_CONFIRM", raising=False)
+
+    with pytest.raises(ProfileSafetyError):
+        ensure_live_acknowledged(live_cfg)
+
+    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "50000")
+    monkeypatch.setenv("MAX_OPEN_POSITIONS", "5")
+    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "2000")
+    monkeypatch.setenv("LIVE_CONFIRM", "I_KNOW_WHAT_I_AM_DOING")
+
+    ensure_live_acknowledged(live_cfg)

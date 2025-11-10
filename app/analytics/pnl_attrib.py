@@ -51,7 +51,10 @@ def _load_tier_table_for_path(config_path: str | None) -> TierTable | None:
         return None
     try:
         loaded = load_app_config(config_path)
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning(
+            "tca.config.load_failed", extra={"path": config_path, "reason": str(exc)}
+        )
         return None
     tca_cfg = getattr(loaded.data, "tca", None)
     tiers_cfg = getattr(tca_cfg, "tiers", None) if tca_cfg else None
