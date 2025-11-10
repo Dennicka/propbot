@@ -16,6 +16,7 @@ from ..metrics.execution import (
     ORDER_RETRIES_TOTAL,
     STUCK_ORDERS_TOTAL,
     STUCK_RESOLVER_ACTIVE_INTENTS,
+    STUCK_RESOLVER_FAILURES_TOTAL,
     STUCK_RESOLVER_RETRIES_TOTAL,
 )
 from ..persistence import order_store
@@ -399,15 +400,37 @@ class StuckOrderResolver:
         if intent_id in self._maxed_out:
             return
         self._maxed_out.add(intent_id)
+        venue = "unknown"
+        symbol = "unknown"
+        request_id = None
+        with self._order_store.session_scope() as session:
+            intent = self._order_store.load_intent(session, intent_id)
+            if intent is not None:
+                venue = _normalise_venue(intent.venue)
+                symbol = _normalise_symbol(intent.symbol)
+                request_id = intent.request_id
         self._ctx.record_stuck_resolver_error(intent_id, "STUCK_MAX_RETRIES")
         self._ctx.record_incident(
             "ops_event",
             {
                 "reason": "STUCK_MAX_RETRIES",
                 "intent_id": intent_id,
+                "venue": venue,
+                "symbol": symbol,
+                "request_id": request_id,
             },
         )
-        self._logger.warning("stuck resolver max retries reached", extra={"intent_id": intent_id})
+        STUCK_RESOLVER_FAILURES_TOTAL.labels(venue, symbol, "max_retries").inc()
+        self._logger.warning(
+            "stuck resolver max retries reached",
+            extra={
+                "intent_id": intent_id,
+                "request_id": request_id,
+                "venue": venue,
+                "symbol": symbol,
+                "reason": "STUCK_MAX_RETRIES",
+            },
+        )
 
     def _backoff_delay(self, retries: int, config: _ResolverConfig) -> float:
         if not config.backoff:
@@ -454,7 +477,15 @@ class StuckOrderResolver:
             )
         except OrderRouterError:
             self._logger.exception(
-                "stuck resolver cancel failed", extra={"intent_id": intent_id, "order_id": broker_order_id}
+                "stuck resolver cancel failed",
+                extra={
+                    "event": "stuck_resolver_cancel_failed",
+                    "intent_id": intent_id,
+                    "request_id": previous_request_id,
+                    "venue": _normalise_venue(venue),
+                    "symbol": _normalise_symbol(symbol),
+                    "broker_order_id": broker_order_id,
+                },
             )
             return
         if config.cancel_grace > 0:
@@ -490,7 +521,16 @@ class StuckOrderResolver:
                 request_id=new_request_id,
             )
         except OrderRouterError:
-            self._logger.exception("stuck resolver retry failed", extra={"intent_id": intent_id})
+            self._logger.exception(
+                "stuck resolver retry failed",
+                extra={
+                    "event": "stuck_resolver_retry_failed",
+                    "intent_id": intent_id,
+                    "request_id": new_request_id,
+                    "venue": _normalise_venue(venue),
+                    "symbol": _normalise_symbol(symbol),
+                },
+            )
             return
         self._retry_counts[intent_id] = retries + 1
         delay = self._backoff_delay(retries + 1, config)

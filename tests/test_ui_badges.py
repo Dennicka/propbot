@@ -63,6 +63,29 @@ def test_non_report_includes_badges(client, monkeypatch):
     assert rerun.json()["auto_trade"] == "OFF"
 
 
+def test_ui_badges_include_stuck_resolver_status(client, monkeypatch):
+    reset_exchange_watchdog_for_tests()
+    state = get_state()
+    state.execution.stuck_resolver.enabled = True
+    state.control.auto_loop = False
+    monkeypatch.setenv("RISK_CHECKS_ENABLED", "true")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+
+    monkeypatch.setattr(
+        "app.services.runtime_badges.get_daily_loss_cap_state",
+        lambda: {"breached": False},
+    )
+
+    watchdog = get_exchange_watchdog()
+    watchdog.check_once(lambda: {"binance": {"ok": True}})
+
+    response = client.get("/api/ui/runtime_badges")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "stuck_resolver" in payload
+    assert re.match(r"^ON \(retries 1h: \d+\)$", payload["stuck_resolver"])
+
+
 def test_runtime_badges_endpoint_failure_modes(client, monkeypatch):
     reset_exchange_watchdog_for_tests()
     state = get_state()
