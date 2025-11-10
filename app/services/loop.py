@@ -293,7 +293,7 @@ class LoopController:
         try:
             await task
         except asyncio.CancelledError:  # pragma: no cover - expected path
-            pass
+            LOGGER.debug("loop task cancellation acknowledged")
 
     async def _worker(self) -> None:
         try:

@@ -243,8 +243,12 @@ def _record_execution_stat(
     }
     try:
         store_execution_stat(record)
-    except Exception:  # pragma: no cover - store must not break hedge flow
-        pass
+    except Exception as exc:  # pragma: no cover - store must not break hedge flow  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb execution stat persistence failed",
+            extra={"symbol": symbol, "side": side},
+            exc_info=exc,
+        )
 
 
 def _log_edge_guard_block(
@@ -275,8 +279,12 @@ def _log_edge_guard_block(
     }
     try:
         append_entry(entry)
-    except Exception:  # pragma: no cover - logging best effort
-        pass
+    except Exception as exc:  # pragma: no cover - logging best effort  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb hedge log append failed",
+            extra={"symbol": symbol, "reason": reason},
+            exc_info=exc,
+        )
     try:
         record_incident(
             "edge_guard_blocked",
@@ -286,8 +294,12 @@ def _log_edge_guard_block(
                 "spread_bps": float(spread_info.get("spread_bps", 0.0)),
             },
         )
-    except Exception:  # pragma: no cover - incident log best effort
-        pass
+    except Exception as exc:  # pragma: no cover - incident log best effort  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb incident record failed",
+            extra={"symbol": symbol, "reason": reason},
+            exc_info=exc,
+        )
 
 
 def check_spread(symbol: str) -> dict:

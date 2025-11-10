@@ -101,7 +101,7 @@ class ExchangeWatchdogRunner:
             try:
                 await self._health_task
             except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-                pass
+                LOGGER.debug("exchange watchdog health task cancelled during stop")
             finally:
                 self._health_task = None
 
@@ -110,7 +110,7 @@ class ExchangeWatchdogRunner:
             try:
                 await self._task
             except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-                pass
+                LOGGER.debug("exchange watchdog loop cancelled during stop")
             finally:
                 self._task = None
 

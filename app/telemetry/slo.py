@@ -135,7 +135,7 @@ class SLOMonitor:
         try:
             await self._task
         except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-            pass
+            LOGGER.debug("SLO monitor cancelled during stop")
         finally:
             self._task = None
 

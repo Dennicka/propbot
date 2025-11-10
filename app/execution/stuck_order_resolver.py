@@ -243,7 +243,7 @@ class StuckOrderResolver:
         try:
             await self._task
         except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-            pass
+            self._logger.debug("stuck resolver task cancelled during stop")
         finally:
             self._task = None
 

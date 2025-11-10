@@ -145,8 +145,8 @@ def _to_zoneinfo(value: str | None, default: ZoneInfo) -> ZoneInfo:
     if value:
         try:
             return ZoneInfo(value)
-        except Exception:  # pragma: no cover - invalid tz falls back
-            pass
+        except Exception as exc:  # pragma: no cover - invalid tz falls back  # noqa: BLE001
+            LOGGER.warning("invalid timezone override", extra={"value": value}, exc_info=exc)
     return default
 
 

@@ -44,7 +44,7 @@ class _AlertLoop:
         try:
             await self._task
         except asyncio.CancelledError:  # pragma: no cover - lifecycle clean-up
-            pass
+            LOGGER.debug("orchestrator alerts loop cancelled during stop")
         finally:
             self._task = None
 

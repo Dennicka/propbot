@@ -144,8 +144,12 @@ def _analyse_limits(venue: str, limits: Mapping[str, Any], min_hedge: float) -> 
             if current_leverage >= max_leverage:
                 risk_ok = False
                 reasons.append("max leverage reached")
-        except TypeError:  # pragma: no cover - defensive
-            pass
+        except TypeError as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "balance monitor leverage comparison failed",
+                extra={"venue": venue},
+                exc_info=exc,
+            )
     if not reasons:
         reasons.append("ok")
     reason = "; ".join(reasons)
