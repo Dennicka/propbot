@@ -148,7 +148,9 @@ def build_ledger_from_history(
         exclude_simulated = _exclude_simulated_default()
     ledger = PnLLedger()
 
-    for row in sorted(_fill_rows(ctx, since_ts), key=lambda item: _coerce_timestamp(item.get("ts"))):
+    for row in sorted(
+        _fill_rows(ctx, since_ts), key=lambda item: _coerce_timestamp(item.get("ts"))
+    ):
         venue = str(row.get("venue") or row.get("exchange") or "unknown")
         symbol = _normalise_symbol(row.get("symbol"))
         price = _coerce_decimal(row.get("price"))
@@ -179,10 +181,7 @@ def build_ledger_from_history(
             except Exception:
                 payload = {}
         amount = _coerce_decimal(
-            payload.get("amount")
-            or payload.get("pnl")
-            or event.get("amount")
-            or event.get("pnl")
+            payload.get("amount") or payload.get("pnl") or event.get("amount") or event.get("pnl")
         )
         if amount == 0:
             continue
@@ -191,7 +190,9 @@ def build_ledger_from_history(
             continue
         venue = str(payload.get("venue") or event.get("venue") or "unknown")
         symbol = _normalise_symbol(payload.get("symbol") or event.get("symbol"))
-        asset = str(payload.get("asset") or payload.get("currency") or event.get("asset") or "").upper()
+        asset = str(
+            payload.get("asset") or payload.get("currency") or event.get("asset") or ""
+        ).upper()
         ts = _coerce_timestamp(event.get("ts"))
         funding_event = FundingEvent(
             venue=venue,

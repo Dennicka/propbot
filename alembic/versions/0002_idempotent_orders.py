@@ -64,4 +64,3 @@ def downgrade():
     op.drop_table("cancel_intents")
     op.drop_index("ix_order_intents_broker_order_id", table_name="order_intents")
     op.drop_table("order_intents")
-

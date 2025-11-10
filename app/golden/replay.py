@@ -138,7 +138,9 @@ async def replay_trace(
         else:
             actual_orders = _normalise_orders(report.orders)
             actual_reason = getattr(report, "state", None)
-            actual_dry_run = bool(getattr(report, "dry_run", False) or getattr(report, "simulated", False))
+            actual_dry_run = bool(
+                getattr(report, "dry_run", False) or getattr(report, "simulated", False)
+            )
 
         mismatch_reasons: Dict[str, Any] = {}
         if actual_orders != expected_orders:

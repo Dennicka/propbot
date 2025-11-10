@@ -179,8 +179,7 @@ class FreezeRegistry:
                 venue_value = venue.strip().lower()
                 expected_value = expected_venue.lower()
                 if not (
-                    venue_value == expected_value
-                    or venue_value.startswith(f"{expected_value}-")
+                    venue_value == expected_value or venue_value.startswith(f"{expected_value}-")
                 ):
                     return False
             return candidate_symbol == expected_symbol.upper()
@@ -191,8 +190,7 @@ class FreezeRegistry:
                 expected_venue = venue_part.strip().lower()
                 venue_value = venue.strip().lower()
                 if not (
-                    venue_value == expected_venue
-                    or venue_value.startswith(f"{expected_venue}-")
+                    venue_value == expected_venue or venue_value.startswith(f"{expected_venue}-")
                 ):
                     return False
             suffix_symbol = symbol_part
@@ -225,4 +223,3 @@ def reset_freeze_registry() -> None:
 
 
 __all__ = ["FreezeRule", "FreezeRegistry", "get_freeze_registry", "reset_freeze_registry"]
-

@@ -49,4 +49,3 @@ __all__ = [
     "STUCK_RESOLVER_RETRIES_TOTAL",
     "STUCK_ORDERS_TOTAL",
 ]
-

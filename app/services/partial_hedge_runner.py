@@ -124,9 +124,7 @@ class HedgeTotals:
         return {
             "orders": self.orders,
             "notional_usdt": self.notional_usdt,
-            "symbols": {
-                symbol: dict(payload) for symbol, payload in self.symbols.items()
-            },
+            "symbols": {symbol: dict(payload) for symbol, payload in self.symbols.items()},
         }
 
 
@@ -325,9 +323,7 @@ class PartialHedgeRunner:
             _STATE.last_error = reason
             streak = _STATE.failure_streak
         lowered = reason.lower()
-        if streak > 3 and (
-            "insufficient" in lowered or "price out of bounds" in lowered
-        ):
+        if streak > 3 and ("insufficient" in lowered or "price out of bounds" in lowered):
             already_triggered = False
             async with _STATE_LOCK:
                 already_triggered = _STATE.auto_hold_triggered
@@ -375,9 +371,7 @@ class PartialHedgeRunner:
                     "qty": balance.free,
                 }
             )
-        self._planner.update_market_snapshot(
-            positions=positions_payload, balances=balances_payload
-        )
+        self._planner.update_market_snapshot(positions=positions_payload, balances=balances_payload)
         return residuals
 
     async def _default_execute_orders(self, orders: PlanOrders) -> list[dict[str, Any]]:

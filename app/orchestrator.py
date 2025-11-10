@@ -58,7 +58,9 @@ def check_risk_gates() -> Dict[str, object | None]:
 
     hold_active = bool(getattr(safety, "hold_active", False))
     safe_mode = bool(getattr(control, "safe_mode", False))
-    dry_run_mode = bool(getattr(control, "dry_run_mode", False) or getattr(control, "dry_run", False))
+    dry_run_mode = bool(
+        getattr(control, "dry_run_mode", False) or getattr(control, "dry_run", False)
+    )
     autopilot_enabled = bool(getattr(autopilot, "enabled", False))
 
     metrics = _current_risk_metrics()
@@ -72,10 +74,18 @@ def check_risk_gates() -> Dict[str, object | None]:
     if hold_active or safe_mode:
         risk_caps_ok = False
         reason_if_blocked = "hold_active"
-    elif max_open_positions and max_open_positions > 0 and metrics.open_positions > max_open_positions:
+    elif (
+        max_open_positions
+        and max_open_positions > 0
+        and metrics.open_positions > max_open_positions
+    ):
         risk_caps_ok = False
         reason_if_blocked = "risk_limit"
-    elif max_total_notional and max_total_notional > 0 and metrics.total_notional > max_total_notional:
+    elif (
+        max_total_notional
+        and max_total_notional > 0
+        and metrics.total_notional > max_total_notional
+    ):
         risk_caps_ok = False
         reason_if_blocked = "risk_limit"
 
@@ -187,7 +197,9 @@ class StrategyOrchestrator:
             if not callable(emit_alert):
                 return
 
-            def _fallback_alert(*, text: str, kind: str = "ops_alert", extra: Mapping[str, object] | None = None) -> None:
+            def _fallback_alert(
+                *, text: str, kind: str = "ops_alert", extra: Mapping[str, object] | None = None
+            ) -> None:
                 emit_alert(kind=kind, text=text, extra=extra or None)
 
             send_alert = _fallback_alert
@@ -210,7 +222,10 @@ class StrategyOrchestrator:
                     continue
 
                 decision = str(entry.get("decision") or "").lower()
-                raw_reason = str(entry.get("reason") or "").strip() or str(entry.get("status_reason") or "").strip()
+                raw_reason = (
+                    str(entry.get("reason") or "").strip()
+                    or str(entry.get("status_reason") or "").strip()
+                )
                 last_result = str(entry.get("last_result") or "").lower()
 
                 reason = raw_reason or "ok"

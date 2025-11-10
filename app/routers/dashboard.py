@@ -31,6 +31,7 @@ def _dashboard_cache_vary(request: Request, _args, _kwargs) -> tuple[str, ...]:
         parts.append(marker)
     return tuple(parts)
 
+
 async def _require_token(request: Request) -> str | None:
     return require_token(request)
 
@@ -109,4 +110,3 @@ async def dashboard_kill(
         operator=operator,
         reason=reason,
     )
-

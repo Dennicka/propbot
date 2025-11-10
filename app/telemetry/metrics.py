@@ -126,7 +126,9 @@ def _core_key(operation: str) -> str:
     return label
 
 
-def observe_ui_latency(path: str, duration_ms: float, *, status_code: int | None = None, error: bool = False) -> None:
+def observe_ui_latency(
+    path: str, duration_ms: float, *, status_code: int | None = None, error: bool = False
+) -> None:
     value = _coerce_duration(duration_ms)
     endpoint = _normalise_endpoint(path)
     UI_LATENCY.labels(endpoint=endpoint).observe(value)

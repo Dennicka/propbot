@@ -76,4 +76,3 @@ RECON_LAST_RUN_TS.set(0.0)
 for status in ("OK", "WARN", "CRITICAL"):
     RECON_LAST_STATUS.labels(status=status).set(1.0 if status == "OK" else 0.0)
 RECON_LAST_SEVERITY.set(0.0)
-

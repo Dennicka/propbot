@@ -35,7 +35,9 @@ def runtime_state() -> dict:
     }
     risk_state = state.risk.as_dict()
     risk_blocked = bool(state.risk.breaches)
-    risk_reasons = [breach.get("detail") or breach.get("limit") for breach in risk_state["breaches"]]
+    risk_reasons = [
+        breach.get("detail") or breach.get("limit") for breach in risk_state["breaches"]
+    ]
     dryrun = None
     if state.dryrun:
         dryrun = {

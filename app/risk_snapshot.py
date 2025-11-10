@@ -17,7 +17,11 @@ async def build_risk_snapshot() -> Dict[str, Any]:
     if positions:
         positions_snapshot = await build_positions_snapshot(state, positions)
     else:
-        positions_snapshot = {"positions": [], "exposure": {}, "totals": {"unrealized_pnl_usdt": 0.0}}
+        positions_snapshot = {
+            "positions": [],
+            "exposure": {},
+            "totals": {"unrealized_pnl_usdt": 0.0},
+        }
 
     per_venue_summary: dict[str, dict[str, float | int]] = defaultdict(
         lambda: {"net_exposure_usd": 0.0, "unrealised_pnl_usd": 0.0, "open_positions_count": 0}

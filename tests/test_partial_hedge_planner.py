@@ -29,9 +29,7 @@ def planner_factory():
 
 
 def test_selects_best_venue_by_expected_cost(planner_factory):
-    positions = [
-        {"venue": "okx", "symbol": "BTCUSDT", "base_qty": 0.7, "avg_price": 20_000.0}
-    ]
+    positions = [{"venue": "okx", "symbol": "BTCUSDT", "base_qty": 0.7, "avg_price": 20_000.0}]
     balances = [
         {"venue": "binance", "asset": "USDT", "qty": 20_000.0},
         {"venue": "okx", "asset": "USDT", "qty": 5_000.0},
@@ -79,9 +77,7 @@ def test_selects_best_venue_by_expected_cost(planner_factory):
 
 
 def test_split_respects_balance_and_max(planner_factory):
-    positions = [
-        {"venue": "binance", "symbol": "ETHUSDT", "base_qty": -10.0, "avg_price": 1_000.0}
-    ]
+    positions = [{"venue": "binance", "symbol": "ETHUSDT", "base_qty": -10.0, "avg_price": 1_000.0}]
     balances = [
         {"venue": "binance", "asset": "USDT", "qty": 6_000.0},
     ]

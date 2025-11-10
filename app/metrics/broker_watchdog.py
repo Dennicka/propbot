@@ -57,7 +57,14 @@ for state in _STATE_LABELS:
     WATCHDOG_STATE_GAUGE.labels(venue="unknown", state=state).set(0.0)
 
 
-def update_metrics(venue: str, *, ws_lag_ms_p95: float, rest_5xx_rate: float, rest_timeouts_rate: float, order_reject_rate: float) -> None:
+def update_metrics(
+    venue: str,
+    *,
+    ws_lag_ms_p95: float,
+    rest_5xx_rate: float,
+    rest_timeouts_rate: float,
+    order_reject_rate: float,
+) -> None:
     label = venue or "unknown"
     WS_LAG_GAUGE.labels(venue=label).set(float(ws_lag_ms_p95))
     REST_5XX_GAUGE.labels(venue=label).set(float(rest_5xx_rate))

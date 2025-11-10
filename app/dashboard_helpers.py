@@ -37,7 +37,7 @@ def resolve_operator(request: Request, token: str | None) -> dict[str, str]:
             resolved = store.get_operator_by_token(token)
             if resolved:
                 raw_name, raw_role = resolved
-                operator_name = (str(raw_name).strip() or "operator")
+                operator_name = str(raw_name).strip() or "operator"
                 normalized_role = str(raw_role or "").strip().lower()
                 if normalized_role in {"operator", "auditor", "viewer"}:
                     operator_role = normalized_role

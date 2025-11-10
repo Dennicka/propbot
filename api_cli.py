@@ -18,7 +18,11 @@ class CLIError(RuntimeError):
 
 
 def _build_url(base_url: str, path: str) -> str:
-    return f"{base_url.rstrip('/')}{path}" if path.startswith('/') else f"{base_url.rstrip('/')}/{path}"
+    return (
+        f"{base_url.rstrip('/')}{path}"
+        if path.startswith("/")
+        else f"{base_url.rstrip('/')}/{path}"
+    )
 
 
 def _perform_get(
@@ -123,9 +127,13 @@ def build_parser() -> argparse.ArgumentParser:
     events_parser = subparsers.add_parser("events", help="Export UI events")
     events_parser.add_argument("--format", choices=["csv", "json"], default="csv")
     events_parser.add_argument("--out", type=Path, default=None, help="Output file path")
-    events_parser.add_argument("--limit", type=int, default=100, help="Maximum number of events to download (<=1000)")
+    events_parser.add_argument(
+        "--limit", type=int, default=100, help="Maximum number of events to download (<=1000)"
+    )
     events_parser.add_argument("--offset", type=int, default=0, help="Pagination offset")
-    events_parser.add_argument("--order", choices=["asc", "desc"], default="desc", help="Sorting order")
+    events_parser.add_argument(
+        "--order", choices=["asc", "desc"], default="desc", help="Sorting order"
+    )
     events_parser.add_argument("--venue")
     events_parser.add_argument("--symbol")
     events_parser.add_argument("--level")

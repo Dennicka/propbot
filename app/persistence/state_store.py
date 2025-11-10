@@ -43,7 +43,9 @@ def _normalise_positions(entries: Iterable[Mapping[str, Any]]) -> list[dict[str,
     return normalised
 
 
-def dump(*, control: Mapping[str, Any], safety: Mapping[str, Any], positions: Iterable[Mapping[str, Any]]) -> Path | None:
+def dump(
+    *, control: Mapping[str, Any], safety: Mapping[str, Any], positions: Iterable[Mapping[str, Any]]
+) -> Path | None:
     """Persist the provided runtime snapshot to disk."""
 
     path = _resolve_path()
@@ -104,4 +106,3 @@ def load() -> dict[str, Any]:
 
 
 __all__ = ["dump", "load"]
-

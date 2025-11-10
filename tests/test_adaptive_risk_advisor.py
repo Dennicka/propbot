@@ -2,7 +2,9 @@ from services import adaptive_risk_advisor
 from app.services import risk_guard
 
 
-def _snapshot(pnl: float, exposure: float, *, open_positions: int = 2, partial_positions: int = 0) -> dict:
+def _snapshot(
+    pnl: float, exposure: float, *, open_positions: int = 2, partial_positions: int = 0
+) -> dict:
     return {
         "unrealized_pnl_total": pnl,
         "total_exposure_usd_total": exposure,

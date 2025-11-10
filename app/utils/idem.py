@@ -92,7 +92,9 @@ class IdempotencyCache:
         body: bytes,
     ) -> None:
         expires_at = self._now() + self._ttl
-        header_items = [(name, value) for name, value in headers if name.lower() != "idempotent-replay"]
+        header_items = [
+            (name, value) for name, value in headers if name.lower() != "idempotent-replay"
+        ]
         with self._lock:
             self._prune()
             self._entries[key] = CachedResponse(
@@ -160,7 +162,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             require_token(request)
         except HTTPException as exc:
             headers = dict(exc.headers or {})
-            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=headers)
+            return JSONResponse(
+                {"detail": exc.detail}, status_code=exc.status_code, headers=headers
+            )
 
         key = request.headers.get("Idempotency-Key")
         fingerprint: str | None = None

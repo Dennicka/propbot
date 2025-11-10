@@ -209,7 +209,11 @@ def compute_tca_preview(
 
     qty_value = float(qty) if qty is not None else 0.0
     if qty_value <= 0.0:
-        reference_notional = float(notional) if notional else float(getattr(state.control, "order_notional_usdt", 0.0))
+        reference_notional = (
+            float(notional)
+            if notional
+            else float(getattr(state.control, "order_notional_usdt", 0.0))
+        )
         mid_prices = []
         for book in orderbooks.values():
             bid = float(book.get("bid", 0.0))
@@ -252,8 +256,12 @@ def compute_tca_preview(
         short_venue = short_meta["venue"]
         long_book = orderbooks.get(long_venue, {})
         short_book = orderbooks.get(short_venue, {})
-        long_symbol_raw, long_symbol_norm = _resolve_leg_symbol(config, long_venue, long_meta["symbol"], symbol_norm)
-        short_symbol_raw, short_symbol_norm = _resolve_leg_symbol(config, short_venue, short_meta["symbol"], symbol_norm)
+        long_symbol_raw, long_symbol_norm = _resolve_leg_symbol(
+            config, long_venue, long_meta["symbol"], symbol_norm
+        )
+        short_symbol_raw, short_symbol_norm = _resolve_leg_symbol(
+            config, short_venue, short_meta["symbol"], symbol_norm
+        )
 
         long_price = float(long_book.get("ask", 0.0))
         short_price = float(short_book.get("bid", 0.0))
@@ -357,7 +365,9 @@ def compute_tca_preview(
             }
         )
 
-    best_route = min(evaluated_routes, key=lambda item: item["total_bps"]) if evaluated_routes else None
+    best_route = (
+        min(evaluated_routes, key=lambda item: item["total_bps"]) if evaluated_routes else None
+    )
 
     LOGGER.debug(
         "tca preview evaluated routes",

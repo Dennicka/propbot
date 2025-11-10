@@ -41,7 +41,7 @@ def _check_http_timeouts(text: str) -> list[tuple[int, str]]:
             elif char == ")":
                 depth -= 1
             index += 1
-        call_source = text[match.start():index]
+        call_source = text[match.start() : index]
         if "timeout" not in call_source:
             line = text.count("\n", 0, match.start()) + 1
             snippet = call_source.splitlines()[0]

@@ -27,9 +27,7 @@ def build_strategy_status() -> Dict[str, Dict[str, Any]]:
 
     risk_snapshot = get_strategy_risk_manager().full_snapshot()
     strategies_payload = (
-        risk_snapshot.get("strategies")
-        if isinstance(risk_snapshot, Mapping)
-        else {}
+        risk_snapshot.get("strategies") if isinstance(risk_snapshot, Mapping) else {}
     )
     risk_strategies = strategies_payload if isinstance(strategies_payload, Mapping) else {}
 
@@ -42,9 +40,13 @@ def build_strategy_status() -> Dict[str, Dict[str, Any]]:
     for name in sorted(strategy_names):
         risk_entry = risk_strategies.get(name)
         risk_mapping = risk_entry if isinstance(risk_entry, Mapping) else {}
-        state_payload = risk_mapping.get("state") if isinstance(risk_mapping.get("state"), Mapping) else {}
+        state_payload = (
+            risk_mapping.get("state") if isinstance(risk_mapping.get("state"), Mapping) else {}
+        )
         pnl_entry = pnl_snapshot.get(name) if isinstance(pnl_snapshot.get(name), Mapping) else {}
-        budget_entry = budget_snapshot.get(name) if isinstance(budget_snapshot.get(name), Mapping) else {}
+        budget_entry = (
+            budget_snapshot.get(name) if isinstance(budget_snapshot.get(name), Mapping) else {}
+        )
 
         frozen = bool(
             (state_payload.get("frozen") if isinstance(state_payload, Mapping) else False)
@@ -61,15 +63,17 @@ def build_strategy_status() -> Dict[str, Dict[str, Any]]:
             )
         else:
             freeze_reason = str(
-                risk_mapping.get("freeze_reason")
-                or risk_mapping.get("reason")
-                or ""
+                risk_mapping.get("freeze_reason") or risk_mapping.get("reason") or ""
             )
         breach_reasons = []
         if isinstance(risk_mapping.get("breach_reasons"), list):
             breach_reasons = [str(reason) for reason in risk_mapping.get("breach_reasons")]
         consecutive_failures = _coerce_int(
-            state_payload.get("consecutive_failures") if isinstance(state_payload, Mapping) else None,
+            (
+                state_payload.get("consecutive_failures")
+                if isinstance(state_payload, Mapping)
+                else None
+            ),
             default=0,
         )
         status = {
@@ -91,9 +95,11 @@ def build_strategy_status() -> Dict[str, Dict[str, Any]]:
                 "max_open_positions": budget_entry.get("max_open_positions"),
                 "current_open_positions": budget_entry.get("current_open_positions", 0),
             },
-            "risk_limits": dict(risk_mapping.get("limits", {}))
-            if isinstance(risk_mapping.get("limits"), Mapping)
-            else {},
+            "risk_limits": (
+                dict(risk_mapping.get("limits", {}))
+                if isinstance(risk_mapping.get("limits"), Mapping)
+                else {}
+            ),
             "state": dict(state_payload) if isinstance(state_payload, Mapping) else {},
         }
         statuses[name] = status

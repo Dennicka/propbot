@@ -13,4 +13,3 @@ VENUE_ALIASES = {
 
 
 __all__ = ["VENUE_ALIASES"]
-

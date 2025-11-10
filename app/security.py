@@ -12,6 +12,7 @@ from .secrets_store import SecretsStore
 
 LOGGER = logging.getLogger(__name__)
 
+
 def _truthy(value: str | None) -> bool:
     if value is None:
         return False

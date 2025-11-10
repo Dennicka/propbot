@@ -109,7 +109,9 @@ def _mock_snapshot() -> Dict[str, Dict[str, Any]]:
 
 
 def _analyse_limits(venue: str, limits: Mapping[str, Any], min_hedge: float) -> Dict[str, Any]:
-    available = _float(limits.get("available_balance") or limits.get("free") or limits.get("available"))
+    available = _float(
+        limits.get("available_balance") or limits.get("free") or limits.get("available")
+    )
     total_keys = ("total_balance", "total_equity", "equity", "balance")
     total = 0.0
     for key in total_keys:

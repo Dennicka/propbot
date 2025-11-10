@@ -46,7 +46,9 @@ async def test_risk_limit_breach_sets_hold(monkeypatch):
     monkeypatch.setenv("MAX_DAILY_LOSS_USD", "5")
 
     async def fake_snapshot():
-        return await _stub_snapshot(pnl_totals={"realized": -10.0, "unrealized": 0.0, "total": -10.0})
+        return await _stub_snapshot(
+            pnl_totals={"realized": -10.0, "unrealized": 0.0, "total": -10.0}
+        )
 
     monkeypatch.setattr(portfolio, "snapshot", fake_snapshot)
     monkeypatch.setattr(risk_governor, "_collect_clock_skew_ms", lambda state: None)
@@ -102,12 +104,14 @@ async def test_exchange_watchdog_triggers_auto_hold(monkeypatch):
     captured: list[dict[str, object]] = []
 
     def fake_log_operator_action(name, role, action, details=None):
-        captured.append({
-            "name": name,
-            "role": role,
-            "action": action,
-            "details": details,
-        })
+        captured.append(
+            {
+                "name": name,
+                "role": role,
+                "action": action,
+                "details": details,
+            }
+        )
 
     monkeypatch.setattr(runtime, "log_operator_action", fake_log_operator_action)
 

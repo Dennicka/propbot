@@ -185,7 +185,9 @@ def refresh_runtime_state(
     open_orders_payload = list(open_orders) if open_orders is not None else None
     orders = _open_orders_from_payload(open_orders_payload)
     daily_loss = _daily_realized_loss()
-    metrics = RiskMetrics(positions_usdt=positions, open_orders=orders, daily_realized_usdt=daily_loss)
+    metrics = RiskMetrics(
+        positions_usdt=positions, open_orders=orders, daily_realized_usdt=daily_loss
+    )
     state.risk.current.position_usdt = dict(positions)
     state.risk.current.open_orders = dict(orders)
     state.risk.current.daily_loss_usdt = daily_loss
@@ -201,7 +203,9 @@ def refresh_runtime_state(
 def _plan_order_counts(plan: "Plan") -> Counter[str]:
     counts: Counter[str] = Counter()
     for leg in plan.legs:
-        venue = VENUE_ALIASES.get(str(getattr(leg, "exchange", "")).lower(), str(getattr(leg, "exchange", "")).lower())
+        venue = VENUE_ALIASES.get(
+            str(getattr(leg, "exchange", "")).lower(), str(getattr(leg, "exchange", "")).lower()
+        )
         counts[_normalise_venue(venue)] += 1
     return counts
 

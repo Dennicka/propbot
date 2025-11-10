@@ -254,8 +254,12 @@ def evaluate(*, now: Optional[datetime] = None) -> List[str]:
                 triggered.append(REASON_RUNAWAY_POSITIONS)
                 return triggered
 
-    partial_threshold = _env_float("PARTIAL_HEDGE_THROTTLE_SECONDS", _env_float("PARTIAL_HEDGE_ALERT_SECONDS", 300.0))
-    stalled = _partial_stalled(active_positions, now=evaluation_ts, threshold_seconds=partial_threshold)
+    partial_threshold = _env_float(
+        "PARTIAL_HEDGE_THROTTLE_SECONDS", _env_float("PARTIAL_HEDGE_ALERT_SECONDS", 300.0)
+    )
+    stalled = _partial_stalled(
+        active_positions, now=evaluation_ts, threshold_seconds=partial_threshold
+    )
     if stalled:
         age_seconds = 0
         opened_at = _parse_timestamp(stalled.get("timestamp"))
@@ -271,7 +275,9 @@ def evaluate(*, now: Optional[datetime] = None) -> List[str]:
             return triggered
 
     auto_state = runtime.get_auto_hedge_state()
-    failure_threshold = _env_int("RISK_GUARD_AUTO_HEDGE_FAILURES", max(_env_int("MAX_AUTO_FAILS_PER_MIN", 3), 3))
+    failure_threshold = _env_int(
+        "RISK_GUARD_AUTO_HEDGE_FAILURES", max(_env_int("MAX_AUTO_FAILS_PER_MIN", 3), 3)
+    )
     consecutive_failures = int(getattr(auto_state, "consecutive_failures", 0) or 0)
     if failure_threshold > 0 and consecutive_failures >= failure_threshold:
         details = {
@@ -309,4 +315,3 @@ __all__ = [
     "evaluate",
     "force_hold",
 ]
-

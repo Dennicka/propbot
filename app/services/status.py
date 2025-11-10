@@ -190,7 +190,11 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
             title="Leader/Fencing",
             group="P0",
             status="OK" if split_brain_events == 0 else "ERROR",
-            summary="split-brain=0" if split_brain_events == 0 else f"split-brain events: {split_brain_events}",
+            summary=(
+                "split-brain=0"
+                if split_brain_events == 0
+                else f"split-brain events: {split_brain_events}"
+            ),
             metrics={"split_brain_events": split_brain_events},
             links=[{"title": "High-Availability", "href": "/docs/VPS_HANDBOOK_ru.md"}],
         )
@@ -228,9 +232,7 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
     partial_error = partial_snapshot.get("last_error")
     partial_enabled = bool(partial_snapshot.get("enabled"))
     partial_status = "OK" if partial_enabled else "WARN"
-    partial_summary = (
-        f"orders={partial_orders}, notional={partial_notional:.2f}"
-    )
+    partial_summary = f"orders={partial_orders}, notional={partial_notional:.2f}"
     if partial_error:
         partial_status = "ERROR"
         partial_summary = f"error={partial_error}"
@@ -405,7 +407,9 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
                     summary="connected" if connected else "unreachable",
                     metrics={
                         "symbols": len(runtime.config.symbols),
-                        "hedge_mode": int(getattr(runtime.client, "position_mode", "hedge") == "hedge"),
+                        "hedge_mode": int(
+                            getattr(runtime.client, "position_mode", "hedge") == "hedge"
+                        ),
                     },
                     links=[{"title": "Venue", "href": f"/api/deriv/{venue_id}"}],
                 )
@@ -459,9 +463,11 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
             status="OK",
             summary="loaded",
             metrics={
-                "symbols": sum(len(v.config.symbols) for v in state.derivatives.venues.values())
-                if state.derivatives
-                else 0
+                "symbols": (
+                    sum(len(v.config.symbols) for v in state.derivatives.venues.values())
+                    if state.derivatives
+                    else 0
+                )
             },
             links=[{"title": "Universe", "href": "/api/ui/universe"}],
         )
@@ -738,7 +744,9 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     snapshot["risk_throttle_reason"] = safety_snapshot.get("risk_throttle_reason")
     risk_payload = safety_snapshot.get("risk")
     if isinstance(risk_payload, Mapping):
-        governor_snapshot = risk_payload.get("governor") if isinstance(risk_payload, Mapping) else None
+        governor_snapshot = (
+            risk_payload.get("governor") if isinstance(risk_payload, Mapping) else None
+        )
         success_rate = None
         if isinstance(governor_snapshot, Mapping):
             try:
@@ -842,9 +850,7 @@ def _recon_overview(safety_snapshot: Mapping[str, object]) -> Dict[str, object]:
         payload = {}
     status = str(payload.get("status") or payload.get("state") or "UNKNOWN").upper()
     last_ts = _coerce_last_ts(
-        payload.get("last_run_ts")
-        or payload.get("last_ts")
-        or payload.get("last_checked")
+        payload.get("last_run_ts") or payload.get("last_ts") or payload.get("last_checked")
     )
     auto_hold = bool(payload.get("auto_hold"))
     if safety_snapshot.get("hold_active"):
@@ -900,4 +906,3 @@ def _coerce_last_ts(raw: object) -> float | None:
     if isinstance(raw, datetime):
         return raw.timestamp()
     return None
-

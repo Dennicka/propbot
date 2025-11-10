@@ -23,5 +23,3 @@ def test_audit_snapshot_endpoint(client, monkeypatch) -> None:
     assert isinstance(payload["entries"], list)
     assert payload["limit"] == 100
     assert any(entry.get("action") == "HOLD" for entry in payload["entries"])
-
-

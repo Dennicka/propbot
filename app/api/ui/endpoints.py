@@ -19,4 +19,3 @@ __all__ = [
     "get_pretrade_status",
     "system_status",
 ]
-

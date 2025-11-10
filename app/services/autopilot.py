@@ -63,9 +63,7 @@ def _check_blockers(state) -> str | None:
     if frozen:
         return f"strategy_frozen:{','.join(sorted(frozen))}"
     budget_blocked = [
-        name
-        for name, entry in strategy_status.items()
-        if entry.get("budget_blocked")
+        name for name, entry in strategy_status.items() if entry.get("budget_blocked")
     ]
     if budget_blocked:
         return f"strategy_budget_blocked:{','.join(sorted(budget_blocked))}"
@@ -84,7 +82,11 @@ async def evaluate_startup() -> None:
     if blocker:
         LOGGER.warning("autopilot refused to arm: %s", blocker)
         autopilot_mark_action("refused", blocker, armed=False)
-        decision_code = "blocked_by_risk" if "strategy_" in blocker or "risk" in blocker or "budget" in blocker else "refused"
+        decision_code = (
+            "blocked_by_risk"
+            if "strategy_" in blocker or "risk" in blocker or "budget" in blocker
+            else "refused"
+        )
         set_autopilot_decision(decision_code, reason=blocker)
         ledger.record_event(
             level="WARNING",
@@ -92,7 +94,11 @@ async def evaluate_startup() -> None:
             payload={"initiator": "autopilot", "reason": blocker},
         )
         try:
-            emit_alert("autopilot_refused", f"AUTOPILOT refused to arm (reason={blocker})", {"reason": blocker})
+            emit_alert(
+                "autopilot_refused",
+                f"AUTOPILOT refused to arm (reason={blocker})",
+                {"reason": blocker},
+            )
         except Exception:
             LOGGER.debug("failed to emit autopilot refusal alert", exc_info=True)
         return

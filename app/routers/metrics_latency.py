@@ -8,7 +8,11 @@ from ..services.runtime import append_latency_sample
 
 router = APIRouter()
 
-LAT_HIST = Histogram("app_latency_ms", "Synthetic latency histogram", buckets=(5, 10, 25, 50, 100, 200, 400, 800, 1600))
+LAT_HIST = Histogram(
+    "app_latency_ms",
+    "Synthetic latency histogram",
+    buckets=(5, 10, 25, 50, 100, 200, 400, 800, 1600),
+)
 
 
 @router.get("/latency")

@@ -13,4 +13,3 @@ __all__ = [
     "effective_fee_for_quote",
     "extract_funding_inputs",
 ]
-

@@ -179,7 +179,9 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
         "entry_spread_bps": float(payload.get("entry_spread_bps") or 0.0),
         "leverage": float(leverage) if leverage not in (None, "") else None,
         "entry_long_price": float(entry_long_price) if entry_long_price not in (None, "") else None,
-        "entry_short_price": float(entry_short_price) if entry_short_price not in (None, "") else None,
+        "entry_short_price": (
+            float(entry_short_price) if entry_short_price not in (None, "") else None
+        ),
         "pnl_usdt": float(payload.get("pnl_usdt") or 0.0),
         "base_size": float(base_size),
     }
@@ -243,20 +245,42 @@ def _prepare_record(payload: Mapping[str, Any]) -> Dict[str, Any]:
             price_override = (
                 override.get("entry_price")
                 if override.get("entry_price") not in (None, "")
-                else override.get("price")
-                if override.get("price") not in (None, "")
-                else override.get("avg_price")
+                else (
+                    override.get("price")
+                    if override.get("price") not in (None, "")
+                    else override.get("avg_price")
+                )
             )
             new_leg = _normalise_leg(
                 venue=str(venue_override),
                 symbol=str(override.get("symbol") or leg["symbol"]),
                 side=leg["side"],
-                notional_usdt=float(notional_override) if notional_override not in (None, "") else leg["notional_usdt"],
-                entry_price=price_override if price_override not in (None, "") else leg.get("entry_price"),
-                leverage=float(leverage_override) if leverage_override not in (None, "") else leg.get("leverage"),
-                timestamp=str(timestamp_override) if timestamp_override not in (None, "") else leg["timestamp"],
-                status=str(status_override) if status_override not in (None, "") else leg.get("status"),
-                simulated=bool(simulated_override) if simulated_override is not None else leg.get("simulated"),
+                notional_usdt=(
+                    float(notional_override)
+                    if notional_override not in (None, "")
+                    else leg["notional_usdt"]
+                ),
+                entry_price=(
+                    price_override if price_override not in (None, "") else leg.get("entry_price")
+                ),
+                leverage=(
+                    float(leverage_override)
+                    if leverage_override not in (None, "")
+                    else leg.get("leverage")
+                ),
+                timestamp=(
+                    str(timestamp_override)
+                    if timestamp_override not in (None, "")
+                    else leg["timestamp"]
+                ),
+                status=(
+                    str(status_override) if status_override not in (None, "") else leg.get("status")
+                ),
+                simulated=(
+                    bool(simulated_override)
+                    if simulated_override is not None
+                    else leg.get("simulated")
+                ),
                 filled_qty=override.get("filled_qty"),
                 base_size=override.get("base_size"),
             )
@@ -320,7 +344,9 @@ def update_record(
                     override = overrides.get(str(leg.get("side") or "").lower())
                     if not override:
                         continue
-                    venue_override = override.get("venue") or override.get("exchange") or leg.get("venue")
+                    venue_override = (
+                        override.get("venue") or override.get("exchange") or leg.get("venue")
+                    )
                     notional_override = override.get("notional_usdt")
                     leverage_override = override.get("leverage")
                     timestamp_override = override.get("timestamp")
@@ -329,20 +355,46 @@ def update_record(
                     price_override = (
                         override.get("entry_price")
                         if override.get("entry_price") not in (None, "")
-                        else override.get("price")
-                        if override.get("price") not in (None, "")
-                        else override.get("avg_price")
+                        else (
+                            override.get("price")
+                            if override.get("price") not in (None, "")
+                            else override.get("avg_price")
+                        )
                     )
                     new_leg = _normalise_leg(
                         venue=str(venue_override or leg.get("venue")),
                         symbol=str(override.get("symbol") or leg.get("symbol")),
                         side=str(leg.get("side") or "long"),
-                        notional_usdt=float(notional_override) if notional_override not in (None, "") else float(leg.get("notional_usdt", 0.0)),
-                        entry_price=price_override if price_override not in (None, "") else leg.get("entry_price"),
-                        leverage=float(leverage_override) if leverage_override not in (None, "") else leg.get("leverage"),
-                        timestamp=str(timestamp_override) if timestamp_override not in (None, "") else str(leg.get("timestamp")),
-                        status=str(status_override) if status_override not in (None, "") else str(leg.get("status")),
-                        simulated=bool(simulated_override) if simulated_override is not None else leg.get("simulated"),
+                        notional_usdt=(
+                            float(notional_override)
+                            if notional_override not in (None, "")
+                            else float(leg.get("notional_usdt", 0.0))
+                        ),
+                        entry_price=(
+                            price_override
+                            if price_override not in (None, "")
+                            else leg.get("entry_price")
+                        ),
+                        leverage=(
+                            float(leverage_override)
+                            if leverage_override not in (None, "")
+                            else leg.get("leverage")
+                        ),
+                        timestamp=(
+                            str(timestamp_override)
+                            if timestamp_override not in (None, "")
+                            else str(leg.get("timestamp"))
+                        ),
+                        status=(
+                            str(status_override)
+                            if status_override not in (None, "")
+                            else str(leg.get("status"))
+                        ),
+                        simulated=(
+                            bool(simulated_override)
+                            if simulated_override is not None
+                            else leg.get("simulated")
+                        ),
                         filled_qty=override.get("filled_qty"),
                         base_size=override.get("base_size"),
                     )
@@ -356,7 +408,9 @@ def update_record(
         return {str(key): value for key, value in target.items()}
 
 
-def _locate_entry(entries: List[MutableMapping[str, Any]], position_id: str) -> MutableMapping[str, Any] | None:
+def _locate_entry(
+    entries: List[MutableMapping[str, Any]], position_id: str
+) -> MutableMapping[str, Any] | None:
     for entry in entries:
         if str(entry.get("id")) == str(position_id):
             return entry
@@ -388,7 +442,9 @@ def mark_closed(
             except ZeroDivisionError:
                 base_size = 0.0
         long_qty = float(long_leg.get("base_size")) if isinstance(long_leg, Mapping) else base_size
-        short_qty = float(short_leg.get("base_size")) if isinstance(short_leg, Mapping) else base_size
+        short_qty = (
+            float(short_leg.get("base_size")) if isinstance(short_leg, Mapping) else base_size
+        )
         quantity = long_qty or short_qty or base_size
         pnl = (float(exit_short_price) - float(exit_long_price)) * float(quantity)
         target.update(
@@ -434,4 +490,3 @@ __all__ = [
     "update_record",
     "reset_store",
 ]
-

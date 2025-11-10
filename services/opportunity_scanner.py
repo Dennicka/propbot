@@ -80,7 +80,9 @@ class OpportunityScanner:
         try:
             state = get_state()
             control = state.control
-            loop_pair = getattr(control, "loop_pair", None) or getattr(state.loop_config, "pair", None)
+            loop_pair = getattr(control, "loop_pair", None) or getattr(
+                state.loop_config, "pair", None
+            )
             symbol = (loop_pair or "BTCUSDT").upper()
             spread_info = await asyncio.to_thread(check_spread, symbol)
             cheap_exchange = str(spread_info.get("cheap"))

@@ -112,7 +112,9 @@ def _profile_defaults(name: str | None) -> dict[str, float | int]:
     return profiles.get(name.strip().lower(), {})
 
 
-def _extract_config_value(config: Mapping[str, Any] | Any, key: str, default: float | int = 0) -> Any:
+def _extract_config_value(
+    config: Mapping[str, Any] | Any, key: str, default: float | int = 0
+) -> Any:
     if config is None:
         return default
     if isinstance(config, Mapping):
@@ -135,9 +137,7 @@ def resolve_settings(config: Mapping[str, Any] | Any | None = None) -> ChaosSett
     )
     rest_default = _parse_float(
         profile_defaults.get("rest_timeout_p"),
-        _parse_float(
-            _extract_config_value(config, "rest_timeout_probability", 0.0), 0.0
-        ),
+        _parse_float(_extract_config_value(config, "rest_timeout_probability", 0.0), 0.0),
     )
     order_delay_default = _parse_int(
         profile_defaults.get("order_delay_ms"),
@@ -145,12 +145,8 @@ def resolve_settings(config: Mapping[str, Any] | Any | None = None) -> ChaosSett
     )
 
     ws_drop_p = _parse_float(os.getenv("CHAOS_WS_DROP_P"), ws_default)
-    rest_timeout_p = _parse_float(
-        os.getenv("CHAOS_REST_TIMEOUT_P"), rest_default
-    )
-    order_delay_ms = _parse_int(
-        os.getenv("CHAOS_ORDER_DELAY_MS"), order_delay_default
-    )
+    rest_timeout_p = _parse_float(os.getenv("CHAOS_REST_TIMEOUT_P"), rest_default)
+    order_delay_ms = _parse_int(os.getenv("CHAOS_ORDER_DELAY_MS"), order_delay_default)
 
     profile_label = str(profile_name or "custom").strip().lower() or "custom"
 
@@ -218,4 +214,3 @@ __all__ = [
     "resolve_settings",
     "should_drop_ws_update",
 ]
-

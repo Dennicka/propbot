@@ -282,7 +282,6 @@ def _compute_leg(
     return pnl, legs
 
 
-
 def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     state = get_state()
     symbol_normalised = (symbol or "").upper()
@@ -313,7 +312,7 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     aggregator = get_market_data()
     try:
         binance_book = aggregator.top_of_book("binance-um", symbol_normalised)
-        okx_book     = aggregator.top_of_book("okx-perp",    symbol_normalised)
+        okx_book = aggregator.top_of_book("okx-perp", symbol_normalised)
     except Exception as exc:  # pragma: no cover
         logger.exception("failed to fetch books for %s", symbol_normalised)
         plan.reason = f"failed to fetch books: {exc}"
@@ -367,8 +366,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
             )
 
     # Две стороны арбитража с поправкой на слиппедж
-    okx_buy       = okx_book["ask"]     * _slippage_multiplier(slippage_bps, side="buy")
-    binance_sell  = binance_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
+    okx_buy = okx_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
+    binance_sell = binance_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
     spread_a, legs_a = _compute_leg(
         buy_exchange="okx",
         buy_price=okx_buy,
@@ -380,8 +379,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         sell_fee_bps=funding_overrides.get("binance", {}).get("short"),
     )
 
-    binance_buy   = binance_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
-    okx_sell      = okx_book["bid"]     * _slippage_multiplier(slippage_bps, side="sell")
+    binance_buy = binance_book["ask"] * _slippage_multiplier(slippage_bps, side="buy")
+    okx_sell = okx_book["bid"] * _slippage_multiplier(slippage_bps, side="sell")
     spread_b, legs_b = _compute_leg(
         buy_exchange="binance",
         buy_price=binance_buy,
@@ -400,18 +399,18 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
     plan.venues = ["binance-um", "okx-perp"]
 
     if spread_a >= spread_b:
-        pnl       = spread_a
-        legs      = legs_a
-        spread_bps= spread_a_bps
+        pnl = spread_a
+        legs = legs_a
+        spread_bps = spread_a_bps
     else:
-        pnl       = spread_b
-        legs      = legs_b
-        spread_bps= spread_b_bps
+        pnl = spread_b
+        legs = legs_b
+        spread_bps = spread_b_bps
 
-    plan.legs          = legs
-    plan.est_pnl_usdt  = pnl
-    plan.est_pnl_bps   = (pnl / notional_value) * 10_000 if notional_value else 0.0
-    plan.spread_bps    = spread_bps
+    plan.legs = legs
+    plan.est_pnl_usdt = pnl
+    plan.est_pnl_bps = (pnl / notional_value) * 10_000 if notional_value else 0.0
+    plan.spread_bps = spread_bps
 
     # Причины по "спреду" (но они вторичны относительно "risk:*")
     min_spread = float(state.control.min_spread_bps)
@@ -451,6 +450,8 @@ def build_plan(symbol: str, notional: float, slippage_bps: int) -> Plan:
         },
     )
     return plan
+
+
 def plan_from_payload(payload: Dict[str, Any]) -> Plan:
     symbol = payload.get("symbol", "").upper()
     notional = float(payload.get("notional", 0.0))
@@ -574,7 +575,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             )
             _record_golden_report(plan, report, reason=gate_result.get("reason"), hold=False)
             return report
-    
+
         snapshot, intent_result = accounting_record_intent(
             strategy_name, plan.notional, simulated=simulated
         )
@@ -615,7 +616,7 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             )
             _record_golden_report(plan, report, reason=reason_code, hold=False)
             return report
-    
+
         try:
             result = await router.execute_plan(plan, allow_safe_mode=allow_safe_mode)
         except HoldActiveError as exc:
@@ -641,14 +642,16 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
         except Exception:
             accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
             raise
-    
+
         pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}
         orders = result.get("orders", []) if isinstance(result, dict) else []
         exposures = result.get("exposures", []) if isinstance(result, dict) else []
         pnl_usdt = float(pnl_summary.get("total", plan.est_pnl_usdt if plan.viable else 0.0))
         pnl_bps = (pnl_usdt / plan.notional) * 10_000 if plan.notional else 0.0
         pnl_delta = 0.0 if simulated else pnl_usdt
-        snapshot = accounting_record_fill(strategy_name, plan.notional, pnl_delta, simulated=simulated)
+        snapshot = accounting_record_fill(
+            strategy_name, plan.notional, pnl_delta, simulated=simulated
+        )
         if not simulated and not state.control.dry_run_mode:
             record_trade_execution()
         logger.info(
@@ -678,8 +681,8 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
         )
         _record_golden_report(plan, report, reason=report.state, hold=False)
         return report
-    
-    
+
+
 def execute_plan(plan: Plan) -> ExecutionReport:
     """Synchronous wrapper for CLI contexts."""
     return asyncio.run(execute_plan_async(plan, allow_safe_mode=True))
@@ -760,7 +763,9 @@ class ArbitrageEngine:
     def _check_connectivity(self) -> PreflightCheck:
         for venue_id, runtime in self.runtime.venues.items():
             if not runtime.client.ping():
-                return PreflightCheck(name=f"connectivity:{venue_id}", ok=False, detail="ping failed")
+                return PreflightCheck(
+                    name=f"connectivity:{venue_id}", ok=False, detail="ping failed"
+                )
         return PreflightCheck(name="connectivity", ok=True, detail="all venues reachable")
 
     def _check_modes(self) -> PreflightCheck:
@@ -797,7 +802,9 @@ class ArbitrageEngine:
             return PreflightCheck(name="funding_window", ok=True, detail="no derivatives config")
         avoid_minutes = cfg.funding.avoid_window_minutes
         # In SAFE_MODE tests we simulate as outside funding window
-        return PreflightCheck(name="funding_window", ok=True, detail=f"outside {avoid_minutes}m window")
+        return PreflightCheck(
+            name="funding_window", ok=True, detail=f"outside {avoid_minutes}m window"
+        )
 
     def _check_filters(self) -> PreflightCheck:
         failures: List[str] = []
@@ -854,7 +861,14 @@ class ArbitrageEngine:
         record_incident("hedge", {"pair": self._pair_id(pair), "size": size, "order": order})
         return order
 
-    def execute(self, pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False, dry_run: bool = True) -> Dict[str, object]:
+    def execute(
+        self,
+        pair_id: str | None,
+        size: float | None,
+        *,
+        force_leg_b_fail: bool = False,
+        dry_run: bool = True,
+    ) -> Dict[str, object]:
         strategy_name = "cross_exchange_arb"
         manager = get_strategy_risk_manager()
         if not manager.is_enabled(strategy_name):
@@ -909,7 +923,9 @@ class ArbitrageEngine:
         long_rt = self.runtime.venues[pair_cfg.long.venue]
         short_rt = self.runtime.venues[pair_cfg.short.venue]
 
-        policies = state.config.data.derivatives.arbitrage if state.config.data.derivatives else None
+        policies = (
+            state.config.data.derivatives.arbitrage if state.config.data.derivatives else None
+        )
         long_order_args = {
             "symbol": pair_cfg.long.symbol,
             "side": "BUY",
@@ -923,16 +939,20 @@ class ArbitrageEngine:
         if policies and policies.post_only_maker:
             long_top = long_rt.client.get_orderbook_top(pair_cfg.long.symbol)
             short_top = short_rt.client.get_orderbook_top(pair_cfg.short.symbol)
-            long_order_args.update({
-                "type": "LIMIT",
-                "price": long_top["bid"],
-                "post_only": True,
-            })
-            short_order_args.update({
-                "type": "LIMIT",
-                "price": short_top["ask"],
-                "post_only": True,
-            })
+            long_order_args.update(
+                {
+                    "type": "LIMIT",
+                    "price": long_top["bid"],
+                    "post_only": True,
+                }
+            )
+            short_order_args.update(
+                {
+                    "type": "LIMIT",
+                    "price": short_top["ask"],
+                    "post_only": True,
+                }
+            )
         else:
             long_order_args["time_in_force"] = "IOC"
             short_order_args["time_in_force"] = "IOC"
@@ -1035,7 +1055,9 @@ def current_edges() -> List[Dict[str, object]]:
     return engine.compute_edges()
 
 
-def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False) -> Dict[str, object]:
+def execute_trade(
+    pair_id: str | None, size: float | None, *, force_leg_b_fail: bool = False
+) -> Dict[str, object]:
     strategy_name = "cross_exchange_arb"
     manager = get_strategy_risk_manager()
     if not manager.is_enabled(strategy_name):
@@ -1061,7 +1083,12 @@ def execute_trade(pair_id: str | None, size: float | None, *, force_leg_b_fail: 
     report = engine.run_preflight()
     payload = report.as_dict()
     if not report.ok:
-        return {"ok": False, "state": "ABORTED", "preflight": payload, "safe_mode": state.control.safe_mode}
+        return {
+            "ok": False,
+            "state": "ABORTED",
+            "preflight": payload,
+            "safe_mode": state.control.safe_mode,
+        }
     dry_run = state.control.safe_mode
     if force_leg_b_fail:
         # allow rescue path to execute even under SAFE_MODE so guardrails are exercised

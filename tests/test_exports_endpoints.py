@@ -10,8 +10,16 @@ from app.services.portfolio import PortfolioBalance, PortfolioPosition, Portfoli
 
 def test_events_export_endpoints(client) -> None:
     ledger.reset()
-    ledger.record_event(level="INFO", code="alpha", payload={"venue": "binance-um", "symbol": "BTCUSDT", "message": "Alpha"})
-    ledger.record_event(level="ERROR", code="beta", payload={"venue": "okx-perp", "symbol": "ETHUSDT", "message": "Beta"})
+    ledger.record_event(
+        level="INFO",
+        code="alpha",
+        payload={"venue": "binance-um", "symbol": "BTCUSDT", "message": "Alpha"},
+    )
+    ledger.record_event(
+        level="ERROR",
+        code="beta",
+        payload={"venue": "okx-perp", "symbol": "ETHUSDT", "message": "Beta"},
+    )
 
     json_resp = client.get("/api/ui/events/export", params={"format": "json"})
     assert json_resp.status_code == 200
@@ -68,7 +76,9 @@ def test_portfolio_export_formats(client, monkeypatch) -> None:
     assert json_resp.status_code == 200
     payload = json_resp.json()
     assert payload["positions"][0]["qty"] == snapshot.positions[0].qty
-    assert payload["balances"][0]["locked"] == snapshot.balances[0].total - snapshot.balances[0].free
+    assert (
+        payload["balances"][0]["locked"] == snapshot.balances[0].total - snapshot.balances[0].free
+    )
 
     csv_resp = client.get("/api/ui/portfolio/export", params={"format": "csv"})
     assert csv_resp.status_code == 200

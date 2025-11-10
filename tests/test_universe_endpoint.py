@@ -5,7 +5,9 @@ from fastapi.testclient import TestClient
 
 
 @pytest.mark.usefixtures("reset_auth_env")
-def test_universe_endpoint_requires_token(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+def test_universe_endpoint_requires_token(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("API_TOKEN", "pytest-token")
 

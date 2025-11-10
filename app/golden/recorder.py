@@ -96,7 +96,9 @@ class GoldenDecisionRecorder:
             try:
                 line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             except (TypeError, ValueError):
-                LOGGER.debug("golden record skipped unserialisable payload", extra={"payload": payload})
+                LOGGER.debug(
+                    "golden record skipped unserialisable payload", extra={"payload": payload}
+                )
                 continue
             lines.append(line)
         if not lines:
@@ -109,7 +111,9 @@ class GoldenDecisionRecorder:
                         handle.write(line)
                         handle.write("\n")
         except OSError as exc:  # pragma: no cover - defensive logging
-            LOGGER.warning("golden record write failed", extra={"error": str(exc), "path": str(self._path)})
+            LOGGER.warning(
+                "golden record write failed", extra={"error": str(exc), "path": str(self._path)}
+            )
 
 
 _GLOBAL_RECORDER: GoldenDecisionRecorder | None = None
@@ -128,7 +132,9 @@ def _normalise_runtime_state(runtime_state: Mapping[str, Any] | None) -> str:
     try:
         return json.dumps(runtime_state, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError):
-        LOGGER.debug("golden record runtime state serialisation failed", extra={"state": runtime_state})
+        LOGGER.debug(
+            "golden record runtime state serialisation failed", extra={"state": runtime_state}
+        )
         return "{}"
 
 
@@ -146,12 +152,14 @@ def _extract_orders(orders: Sequence[Mapping[str, Any]] | None) -> list[dict[str
             size = float(qty_raw)
         except (TypeError, ValueError):
             size = 0.0
-        extracted.append({
-            "venue": venue,
-            "symbol": str(order.get("symbol") or ""),
-            "side": side,
-            "size": size,
-        })
+        extracted.append(
+            {
+                "venue": venue,
+                "symbol": str(order.get("symbol") or ""),
+                "side": side,
+                "size": size,
+            }
+        )
     return extracted
 
 

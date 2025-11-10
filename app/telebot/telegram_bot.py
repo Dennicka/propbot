@@ -256,7 +256,9 @@ class TelegramBot:
             self.logger.warning("Telegram client not initialized; message skipped")
             return
         try:
-            response = await self._client.post("sendMessage", json={"chat_id": self.config.chat_id, "text": text})
+            response = await self._client.post(
+                "sendMessage", json={"chat_id": self.config.chat_id, "text": text}
+            )
             response.raise_for_status()
         except Exception as exc:  # pragma: no cover - network failures are logged
             self.logger.warning("Failed to send Telegram message", extra={"error": str(exc)})
@@ -289,7 +291,11 @@ class TelegramBot:
             try:
                 payload = await self._client.get(
                     "getUpdates",
-                    params={"offset": self._update_offset, "timeout": 30, "allowed_updates": ["message"]},
+                    params={
+                        "offset": self._update_offset,
+                        "timeout": 30,
+                        "allowed_updates": ["message"],
+                    },
                 )
                 payload.raise_for_status()
                 data = payload.json()
@@ -320,7 +326,9 @@ class TelegramBot:
             data = response.json()
             updates = data.get("result", []) if isinstance(data, dict) else []
             if updates:
-                last_id = max(update.get("update_id", 0) for update in updates if isinstance(update, dict))
+                last_id = max(
+                    update.get("update_id", 0) for update in updates if isinstance(update, dict)
+                )
                 if isinstance(last_id, int) and last_id:
                     self._update_offset = last_id + 1
         except Exception:  # pragma: no cover - best effort priming
@@ -335,7 +343,9 @@ class TelegramBot:
         if isinstance(chat, dict):
             chat_id = chat.get("id")
         if not self.is_authorized_chat(chat_id):
-            self.logger.warning("Ignoring Telegram message from unauthorized chat", extra={"chat_id": chat_id})
+            self.logger.warning(
+                "Ignoring Telegram message from unauthorized chat", extra={"chat_id": chat_id}
+            )
             return
         text = message.get("text")
         if not isinstance(text, str):
@@ -439,13 +449,15 @@ class TelegramBot:
         window = int(float(report.get("window_hours") or 24))
         realized = float(report.get("pnl_realized_total") or 0.0)
         unrealized = float(
-            report.get("pnl_unrealized_avg")
-            or report.get("pnl_unrealized_latest")
-            or 0.0
+            report.get("pnl_unrealized_avg") or report.get("pnl_unrealized_latest") or 0.0
         )
         exposure = float(report.get("exposure_avg") or 0.0)
         slippage = report.get("slippage_avg_bps")
-        breakdown = report.get("hold_breakdown") if isinstance(report.get("hold_breakdown"), Mapping) else {}
+        breakdown = (
+            report.get("hold_breakdown")
+            if isinstance(report.get("hold_breakdown"), Mapping)
+            else {}
+        )
         auto_holds = int(float(breakdown.get("safety_hold") or 0))
         throttles = int(float(breakdown.get("risk_throttle") or 0))
         total_holds = int(float(report.get("hold_events") or auto_holds + throttles))
@@ -560,7 +572,9 @@ class TelegramBot:
         except ValueError:
             return "Value must be numeric."
         try:
-            record = request_risk_limit_change(limit, scope, value, reason=reason, requested_by=actor)
+            record = request_risk_limit_change(
+                limit, scope, value, reason=reason, requested_by=actor
+            )
         except ValueError as exc:
             return f"Risk limit request failed: {exc}"
         parameters = record.get("parameters", {}) if isinstance(record, Mapping) else {}
@@ -576,9 +590,7 @@ class TelegramBot:
                 "request_id": record.get("id"),
             },
         )
-        return (
-            f"Risk limit request recorded (id={record.get('id')}). Awaiting approval."
-        )
+        return f"Risk limit request recorded (id={record.get('id')}). Awaiting approval."
 
     async def _handle_exit_dry_run(self, actor: str, args: list[str]) -> str:
         if not args:
@@ -617,7 +629,11 @@ class TelegramBot:
             if action == CRITICAL_ACTION_RESUME:
                 result = approve_resume(request_id=request_id, actor=actor)
                 hold_cleared = result.get("hold_cleared", False)
-                parameters = request_snapshot.get("parameters", {}) if isinstance(request_snapshot, Mapping) else {}
+                parameters = (
+                    request_snapshot.get("parameters", {})
+                    if isinstance(request_snapshot, Mapping)
+                    else {}
+                )
                 ledger.record_event(
                     level="INFO",
                     code="resume_confirmed",
@@ -628,7 +644,11 @@ class TelegramBot:
                         "request_id": request_id,
                     },
                 )
-                return "Resume approved. HOLD cleared." if hold_cleared else "Resume approval recorded. HOLD remains active."
+                return (
+                    "Resume approved. HOLD cleared."
+                    if hold_cleared
+                    else "Resume approval recorded. HOLD remains active."
+                )
             if action == CRITICAL_ACTION_RAISE_LIMIT:
                 result = approve_risk_limit_change(request_id, actor=actor)
                 record = result.get("request", request_snapshot)
@@ -670,7 +690,9 @@ class TelegramBot:
         if environment != "testnet":
             return "Cancel-all only available on testnet profile."
         result = await cancel_all_orders()
-        ledger.record_event(level="INFO", code="cancel_all", payload={"source": "telegram", **result})
+        ledger.record_event(
+            level="INFO", code="cancel_all", payload={"source": "telegram", **result}
+        )
         return "Cancel-all requested."
 
 

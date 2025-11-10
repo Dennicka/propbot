@@ -116,7 +116,9 @@ def observe_api_latency(route: str, method: str, status: int, duration_seconds: 
         duration = 0.0
     if duration < 0:
         duration = 0.0
-    API_LATENCY.labels(route=route_label, method=method_label, status=status_label).observe(duration)
+    API_LATENCY.labels(route=route_label, method=method_label, status=status_label).observe(
+        duration
+    )
 
 
 def set_market_data_staleness(venue: str, symbol: str, age_seconds: float) -> None:

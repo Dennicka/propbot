@@ -20,7 +20,9 @@ def _setup_common_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MAX_LEVERAGE", "3")
 
 
-def test_validate_startup_passes_with_safe_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_startup_passes_with_safe_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _setup_common_env(monkeypatch, tmp_path)
     monkeypatch.setenv("APPROVE_TOKEN", "approve-token")
     monkeypatch.setenv("AUTH_ENABLED", "true")
@@ -33,7 +35,9 @@ def test_validate_startup_passes_with_safe_config(monkeypatch: pytest.MonkeyPatc
     startup_validation.validate_startup()
 
 
-def test_validate_startup_requires_approve_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_startup_requires_approve_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _setup_common_env(monkeypatch, tmp_path)
     monkeypatch.delenv("APPROVE_TOKEN", raising=False)
     monkeypatch.setenv("AUTH_ENABLED", "false")
@@ -48,7 +52,9 @@ def test_validate_startup_requires_approve_token(monkeypatch: pytest.MonkeyPatch
     assert "секрет" in message
 
 
-def test_validate_startup_rejects_live_boot_without_hold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_startup_rejects_live_boot_without_hold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _setup_common_env(monkeypatch, tmp_path)
     monkeypatch.setenv("APPROVE_TOKEN", "approve-token")
     monkeypatch.setenv("AUTH_ENABLED", "false")
@@ -63,7 +69,9 @@ def test_validate_startup_rejects_live_boot_without_hold(monkeypatch: pytest.Mon
     assert "/resume-confirm" in message
 
 
-def test_validate_startup_rejects_unwritable_runtime_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_startup_rejects_unwritable_runtime_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _setup_common_env(monkeypatch, tmp_path)
     monkeypatch.setenv("APPROVE_TOKEN", "approve-token")
     monkeypatch.setenv("AUTH_ENABLED", "false")
@@ -81,7 +89,9 @@ def test_validate_startup_rejects_unwritable_runtime_store(monkeypatch: pytest.M
     assert "/proc" in message
 
 
-def test_validate_startup_detects_placeholder_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_startup_detects_placeholder_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _setup_common_env(monkeypatch, tmp_path)
     monkeypatch.setenv("APPROVE_TOKEN", "approve-token")
     monkeypatch.setenv("AUTH_ENABLED", "false")
@@ -97,7 +107,9 @@ def test_validate_startup_detects_placeholder_values(monkeypatch: pytest.MonkeyP
     assert "плейсхолдер" in message
 
 
-def test_validate_startup_requires_persistent_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_validate_startup_requires_persistent_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _setup_common_env(monkeypatch, tmp_path)
     monkeypatch.setenv("APPROVE_TOKEN", "approve-token")
     monkeypatch.setenv("AUTH_ENABLED", "false")

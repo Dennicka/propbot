@@ -129,9 +129,7 @@ class ExchangeWatchdogRunner:
         return report
 
     async def _run(self) -> None:
-        LOGGER.info(
-            "exchange watchdog loop starting with interval=%ss", self._interval
-        )
+        LOGGER.info("exchange watchdog loop starting with interval=%ss", self._interval)
         while not self._stop.is_set():
             await self.check_once()
             try:
@@ -152,9 +150,7 @@ class ExchangeWatchdogRunner:
         guard = self._resolve_health_guard()
         if guard is None or not guard.enabled:
             return
-        LOGGER.info(
-            "account health guard loop starting with interval=%ss", self._health_interval
-        )
+        LOGGER.info("account health guard loop starting with interval=%ss", self._health_interval)
         while not self._stop.is_set():
             try:
                 guard.tick()
@@ -184,9 +180,7 @@ class ExchangeWatchdogRunner:
         reason = transition.reason or "n/a"
         auto_hold = bool(transition.auto_hold)
         display_previous = "DEGRADED" if previous == "AUTO_HOLD" and current == "OK" else previous
-        timestamp_iso = datetime.fromtimestamp(
-            transition.timestamp, tz=timezone.utc
-        ).isoformat()
+        timestamp_iso = datetime.fromtimestamp(transition.timestamp, tz=timezone.utc).isoformat()
         headline = (
             f"[WATCHDOG] {exchange}: {display_previous} -> {current}. "
             f"reason={reason} (auto_hold={str(auto_hold).lower()})"

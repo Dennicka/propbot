@@ -98,4 +98,3 @@ def test_orchestrator_emits_alerts_once(monkeypatch) -> None:
     orchestrator.emit_alerts_if_needed(fake_notifier)
     assert len(fake_notifier.calls) == 4
     assert fake_notifier.calls[-2]["text"].endswith("autopilot=ON")
-

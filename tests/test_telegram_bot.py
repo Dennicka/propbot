@@ -54,7 +54,9 @@ def test_status_formatter_contains_expected_fields() -> None:
     )
     risk_state = SimpleNamespace(breaches=["risk-1"])
     safety = {"hold_active": True, "hold_reason": "unit_test"}
-    auto_state = SimpleNamespace(enabled=True, last_execution_ts="2024-01-01T00:00:00Z", consecutive_failures=2)
+    auto_state = SimpleNamespace(
+        enabled=True, last_execution_ts="2024-01-01T00:00:00Z", consecutive_failures=2
+    )
     pending = [{"action": "resume", "id": "abc12345"}]
 
     message = format_status_message(snapshot, state, risk_state, safety, auto_state, pending)
@@ -166,9 +168,10 @@ async def test_reconcile_command_reports_desync(monkeypatch: pytest.MonkeyPatch)
     config = TelegramBotConfig(token="token", chat_id="1", enabled=True, push_minutes=5)
     bot = TelegramBot(config)
 
-    monkeypatch.setattr("app.telebot.telegram_bot.reconciler.reconcile", lambda: [
-        {"kind": "position_missing_on_exchange"}
-    ])
+    monkeypatch.setattr(
+        "app.telebot.telegram_bot.reconciler.reconcile",
+        lambda: [{"kind": "position_missing_on_exchange"}],
+    )
     monkeypatch.setattr(
         "app.telebot.telegram_bot.get_reconciliation_status",
         lambda: {

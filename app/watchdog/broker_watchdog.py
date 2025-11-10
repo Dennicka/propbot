@@ -17,6 +17,7 @@ from ..metrics.broker_watchdog import (
     set_state as metrics_set_state,
     update_metrics as metrics_update_metrics,
 )
+
 STATE_OK = "OK"
 STATE_DEGRADED = "DEGRADED"
 STATE_DOWN = "DOWN"
@@ -386,12 +387,14 @@ class BrokerWatchdog:
         self._last_reason = f"{venue}:{state}:{reason}".strip(":")
         if self._event_queue is not None:
             try:
-                self._event_queue.put_nowait({
-                    "venue": venue,
-                    "state": state,
-                    "reason": reason,
-                    "ts": ts,
-                })
+                self._event_queue.put_nowait(
+                    {
+                        "venue": venue,
+                        "state": state,
+                        "reason": reason,
+                        "ts": ts,
+                    }
+                )
             except Exception:  # pragma: no cover - defensive
                 pass
 

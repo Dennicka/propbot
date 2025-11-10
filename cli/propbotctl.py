@@ -185,8 +185,12 @@ COMMAND_HANDLERS = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PropBot operator CLI helper")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help=f"API base URL (default: {DEFAULT_BASE_URL})")
-    parser.add_argument("--token", default=None, help="Bearer token for mutating commands (env: API_TOKEN)")
+    parser.add_argument(
+        "--base-url", default=DEFAULT_BASE_URL, help=f"API base URL (default: {DEFAULT_BASE_URL})"
+    )
+    parser.add_argument(
+        "--token", default=None, help="Bearer token for mutating commands (env: API_TOKEN)"
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -200,7 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
     rotate_parser.add_argument("--value", required=True, help="New secret value")
 
     export_parser = subparsers.add_parser("export-log", help="Export recent events to a JSON file")
-    export_parser.add_argument("--out", default="./events_export.json", help="Path to save the exported events")
+    export_parser.add_argument(
+        "--out", default="./events_export.json", help="Path to save the exported events"
+    )
 
     return parser
 

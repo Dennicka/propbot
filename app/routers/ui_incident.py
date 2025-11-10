@@ -58,7 +58,9 @@ def snapshot_endpoint(request: Request, payload: SnapshotRequest) -> SnapshotRes
         path = save_snapshot(note=payload.note, token=token)
     except RuntimeError as exc:
         detail = str(exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail
+        ) from exc
     identity = resolve_operator_identity(token or "") if token else None
     operator, role = identity if identity else ("unknown", "operator")
     log_operator_action(operator, role, "INCIDENT_SNAPSHOT_REQUEST", details={"path": str(path)})
@@ -66,7 +68,9 @@ def snapshot_endpoint(request: Request, payload: SnapshotRequest) -> SnapshotRes
 
 
 @router.post("/rollback", response_model=RollbackAppliedResponse | RollbackPendingResponse)
-def rollback_endpoint(request: Request, payload: RollbackRequest) -> RollbackAppliedResponse | RollbackPendingResponse:
+def rollback_endpoint(
+    request: Request, payload: RollbackRequest
+) -> RollbackAppliedResponse | RollbackPendingResponse:
     _ensure_enabled()
     token = require_token(request)
     identity = resolve_operator_identity(token or "") if token else None
@@ -94,7 +98,9 @@ def rollback_endpoint(request: Request, payload: RollbackRequest) -> RollbackApp
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="approval_not_found")
     if record.get("action") != CRITICAL_ACTION_INCIDENT_ROLLBACK:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="approval_action_mismatch")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="approval_action_mismatch"
+        )
     if str(record.get("status")) != "approved":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="approval_not_complete")
     parameters = record.get("parameters") if isinstance(record, dict) else {}
@@ -106,7 +112,9 @@ def rollback_endpoint(request: Request, payload: RollbackRequest) -> RollbackApp
         approved_resolved = Path(approved_path)
         requested_resolved = Path(path)
     if approved_resolved != requested_resolved:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="approval_path_mismatch")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="approval_path_mismatch"
+        )
     try:
         snapshot = load_snapshot(path)
     except RuntimeError as exc:

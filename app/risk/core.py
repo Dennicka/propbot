@@ -1,4 +1,5 @@
 """Risk core scaffold with caps, validation utilities and helpers."""
+
 from __future__ import annotations
 
 import logging
@@ -35,8 +36,16 @@ class RiskCaps:
     max_notional_per_exchange: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "max_open_positions", self._validate_positive_int("max_open_positions", self.max_open_positions))
-        object.__setattr__(self, "max_total_notional_usdt", self._validate_positive_number("max_total_notional_usdt", self.max_total_notional_usdt))
+        object.__setattr__(
+            self,
+            "max_open_positions",
+            self._validate_positive_int("max_open_positions", self.max_open_positions),
+        )
+        object.__setattr__(
+            self,
+            "max_total_notional_usdt",
+            self._validate_positive_number("max_total_notional_usdt", self.max_total_notional_usdt),
+        )
         validated_exchange_caps: Dict[str, float] = {}
         for exchange, cap in self.max_notional_per_exchange.items():
             validated_exchange_caps[exchange] = self._validate_positive_number(
@@ -98,7 +107,9 @@ class RiskGovernor:
                 f"total_notional {total_notional} exceeds cap {self._caps.max_total_notional_usdt}"
             )
 
-    def ensure_exchange_notional_within_limit(self, exchange: str, exchange_notional: float) -> None:
+    def ensure_exchange_notional_within_limit(
+        self, exchange: str, exchange_notional: float
+    ) -> None:
         self._ensure_non_negative_number(f"exchange_notional[{exchange}]", exchange_notional)
         if exchange not in self._caps.max_notional_per_exchange:
             return
@@ -290,7 +301,12 @@ def _intent_notional(order_intent: Mapping[str, object] | None) -> float:
 def _intent_positions(order_intent: Mapping[str, object] | None) -> int:
     if not isinstance(order_intent, ABCMapping):
         return 0
-    for key in ("intent_open_positions", "requested_positions", "positions", "open_positions_delta"):
+    for key in (
+        "intent_open_positions",
+        "requested_positions",
+        "positions",
+        "open_positions_delta",
+    ):
         if key in order_intent:
             value = _extract_int(order_intent.get(key))
             if value:
@@ -305,7 +321,9 @@ def _current_risk_metrics() -> _RiskMetrics:
     safety = getattr(state, "safety", None)
 
     runtime_payload = load_runtime_payload()
-    positions_payload = runtime_payload.get("positions") if isinstance(runtime_payload, Mapping) else None
+    positions_payload = (
+        runtime_payload.get("positions") if isinstance(runtime_payload, Mapping) else None
+    )
 
     open_positions = 0
     total_notional = 0.0
@@ -395,7 +413,9 @@ def get_risk_governor() -> RiskGovernor:
             try:
                 _GOVERNOR_SINGLETON = _build_risk_governor_from_env()
             except RiskValidationError as exc:  # pragma: no cover - defensive
-                LOGGER.warning("risk governor disabled due to invalid caps", extra={"error": str(exc)})
+                LOGGER.warning(
+                    "risk governor disabled due to invalid caps", extra={"error": str(exc)}
+                )
                 caps = RiskCaps(max_open_positions=1, max_total_notional_usdt=1.0)
                 _GOVERNOR_SINGLETON = RiskGovernor(
                     caps,
@@ -445,11 +465,7 @@ def risk_gate(order_intent: Mapping[str, object] | None) -> Dict[str, object | N
     if isinstance(order_intent, Mapping):
         strategy_name = order_intent.get("strategy")
 
-    if (
-        FeatureFlags.risk_checks_enabled()
-        and FeatureFlags.enforce_daily_loss_cap()
-        and not dry_run
-    ):
+    if FeatureFlags.risk_checks_enabled() and FeatureFlags.enforce_daily_loss_cap() and not dry_run:
         from .accounting import get_daily_loss_cap_state
         from .daily_loss import get_daily_loss_cap
 

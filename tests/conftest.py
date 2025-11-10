@@ -78,7 +78,9 @@ def reset_idem_and_rate_limiters():
     limiter = getattr(app.state, "rate_limiter", None)
     if limiter is not None:
         limiter.set_clock(time.monotonic)
-        default_limits = getattr(app.state, "default_rate_limits", (limiter.rate_per_min, limiter.burst))
+        default_limits = getattr(
+            app.state, "default_rate_limits", (limiter.rate_per_min, limiter.burst)
+        )
         limiter.set_limits(*default_limits)
 
 

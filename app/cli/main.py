@@ -12,11 +12,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PropBot execution CLI")
     sub = parser.add_subparsers(dest="command", required=True)
     exec_parser = sub.add_parser("exec", help="run arbitrage plans")
-    exec_parser.add_argument("--profile", default="paper", choices=["paper", "testnet", "live"], help="runtime profile")
-    exec_parser.add_argument("--loop", action="store_true", help="run continuously until interrupted")
+    exec_parser.add_argument(
+        "--profile", default="paper", choices=["paper", "testnet", "live"], help="runtime profile"
+    )
+    exec_parser.add_argument(
+        "--loop", action="store_true", help="run continuously until interrupted"
+    )
     exec_parser.add_argument("--artifact", help="path for storing last plan JSON artifact")
     loop_parser = sub.add_parser("loop", help="run automated preview/execute cycles")
-    loop_parser.add_argument("--env", default="paper", choices=["paper", "testnet"], help="runtime profile to use")
+    loop_parser.add_argument(
+        "--env", default="paper", choices=["paper", "testnet"], help="runtime profile to use"
+    )
     loop_parser.add_argument("--pair", required=True, help="symbol to trade (e.g. BTCUSDT)")
     loop_parser.add_argument(
         "--venues",
@@ -38,7 +44,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_parser = sub.add_parser("run-profile", help="launch PropBot services for a profile")
     run_parser.add_argument("profile", choices=["paper", "testnet", "live"], help="runtime profile")
-    run_parser.add_argument("--host", default=os.getenv("PROP_APP_HOST", "127.0.0.1"), help="bind host")
+    run_parser.add_argument(
+        "--host", default=os.getenv("PROP_APP_HOST", "127.0.0.1"), help="bind host"
+    )
     run_parser.add_argument(
         "--port",
         type=int,
@@ -62,7 +70,9 @@ def _configure_environment(profile: str) -> None:
 
 def _run_exec(args: argparse.Namespace) -> int:
     _configure_environment(args.profile)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
     from ..services.dryrun import DryRunScheduler
 
     artifact = Path(args.artifact) if args.artifact else None
@@ -81,7 +91,9 @@ def _run_exec(args: argparse.Namespace) -> int:
 
 def _run_loop(args: argparse.Namespace) -> int:
     _configure_environment(args.env)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
     from .. import ledger
     from ..services.loop import loop_forever
     from ..services.runtime import get_state, set_loop_config, set_mode
@@ -153,9 +165,7 @@ def _run_profile_command(args: argparse.Namespace) -> int:
         return 1
 
     applied = apply_profile_environment(profile, profile_cfg)
-    logger.info(
-        "Активируем профиль=%s host=%s port=%s", profile.value, args.host, args.port
-    )
+    logger.info("Активируем профиль=%s host=%s port=%s", profile.value, args.host, args.port)
     logger.info(
         "Параметры окружения: %s",
         ", ".join(f"{key}={value}" for key, value in sorted(applied.items())),

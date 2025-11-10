@@ -79,9 +79,7 @@ async def evaluate(
     if core_p95_values:
         worst_core_p95 = max(core_p95_values)
         if worst_core_p95 > latency_target_ms:
-            breaches.append(
-                f"Core p95={worst_core_p95:.1f}ms > target {latency_target_ms:.1f}ms"
-            )
+            breaches.append(f"Core p95={worst_core_p95:.1f}ms > target {latency_target_ms:.1f}ms")
 
     overall = snapshot.get("overall", {}) if isinstance(snapshot, dict) else {}
     error_rate = overall.get("error_rate") if isinstance(overall, dict) else None
@@ -114,12 +112,8 @@ class SLOMonitor:
         error_rate_target: float | None = None,
     ) -> None:
         self._interval = interval or _interval_seconds()
-        self._latency_target = latency_target_ms or _env_float(
-            "SLO_LATENCY_P95_TARGET_MS", 250.0
-        )
-        self._error_rate_target = error_rate_target or _env_float(
-            "SLO_ERROR_RATE_TARGET", 0.02
-        )
+        self._latency_target = latency_target_ms or _env_float("SLO_LATENCY_P95_TARGET_MS", 250.0)
+        self._error_rate_target = error_rate_target or _env_float("SLO_ERROR_RATE_TARGET", 0.02)
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._last_ok = True

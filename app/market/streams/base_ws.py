@@ -50,9 +50,7 @@ class BackoffPolicy:
         low = max(self.base, capped)
         high = max(self.base, capped * 1.5)
         delay = max(self.base, float(self.jitter(low, high)))
-        logger.debug(
-            "backoff.next_delay", extra={"attempt": self._attempt, "computed": delay}
-        )
+        logger.debug("backoff.next_delay", extra={"attempt": self._attempt, "computed": delay})
         return delay
 
     def record_failure(self) -> None:

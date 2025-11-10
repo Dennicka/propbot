@@ -20,7 +20,10 @@ def test_orchestrator_plan_blocks_on_hold(monkeypatch, client) -> None:
 
     assert "strategies" in payload
     assert isinstance(payload["strategies"], list)
-    assert any(entry.get("decision") == "skip" and entry.get("reason") == "hold_active" for entry in payload["strategies"])
+    assert any(
+        entry.get("decision") == "skip" and entry.get("reason") == "hold_active"
+        for entry in payload["strategies"]
+    )
     risk_summary = payload.get("risk_gates", {})
     assert risk_summary.get("hold_active") is True
     assert risk_summary.get("risk_caps_ok") is False

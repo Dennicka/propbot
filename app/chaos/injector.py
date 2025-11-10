@@ -156,7 +156,9 @@ def inject(kind: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]
         venue_key = _watchdog_key(venue)
         description = str(payload.get("reason") or "order rejected").strip() or "order rejected"
         hold_reason = f"chaos:{venue_key}:order_reject"
-        engaged = runtime.engage_safety_hold(f"{hold_reason} {description}".strip(), source="chaos_injector")
+        engaged = runtime.engage_safety_hold(
+            f"{hold_reason} {description}".strip(), source="chaos_injector"
+        )
         details = {"hold_engaged": bool(engaged), "reason": description}
         watchdog_snapshot = _snapshot_watchdog_entry(venue_key)
     elif kind_normalised == "latency_spike_ms":

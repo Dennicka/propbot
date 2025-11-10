@@ -47,4 +47,3 @@ def intent_lock(intent_id: str):
 
 
 __all__ = ["order_lock", "symbol_lock", "intent_lock"]
-

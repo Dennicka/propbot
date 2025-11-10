@@ -12,7 +12,11 @@ def test_build_daily_report_aggregates_metrics() -> None:
     positions = [
         {"status": "closed", "closed_ts": (now - timedelta(hours=2)).isoformat(), "pnl_usdt": 50.0},
         {"status": "closed", "closed_ts": (now - timedelta(hours=3)).isoformat(), "pnl_usdt": -5.0},
-        {"status": "closed", "closed_ts": (now - timedelta(hours=27)).isoformat(), "pnl_usdt": 42.0},
+        {
+            "status": "closed",
+            "closed_ts": (now - timedelta(hours=27)).isoformat(),
+            "pnl_usdt": 42.0,
+        },
     ]
     snapshots = [
         {

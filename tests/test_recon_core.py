@@ -49,12 +49,18 @@ def test_detect_position_drifts_includes_side_and_sign() -> None:
     cfg = _cfg(position_warn="0.1", position_critical="0.5")
     local = [
         {
-            "venue": "okx", "symbol": "ETHUSDT", "qty": Decimal("0.4"), "entry_price": Decimal("1800"),
+            "venue": "okx",
+            "symbol": "ETHUSDT",
+            "qty": Decimal("0.4"),
+            "entry_price": Decimal("1800"),
         }
     ]
     remote_flip = [
         {
-            "venue": "okx", "symbol": "ETHUSDT", "qty": Decimal("-0.4"), "entry_price": Decimal("1795"),
+            "venue": "okx",
+            "symbol": "ETHUSDT",
+            "qty": Decimal("-0.4"),
+            "entry_price": Decimal("1795"),
         }
     ]
     drifts = detect_position_drifts(local, remote_flip, cfg)
@@ -67,7 +73,9 @@ def test_detect_position_drifts_includes_side_and_sign() -> None:
 
     remote_small = [
         {
-            "venue": "okx", "symbol": "ETHUSDT", "qty": Decimal("0.25"),
+            "venue": "okx",
+            "symbol": "ETHUSDT",
+            "qty": Decimal("0.25"),
         }
     ]
     warn = detect_position_drifts(local, remote_small, cfg)
@@ -79,21 +87,36 @@ def test_detect_order_drifts_flags_orphans_and_stale() -> None:
     cfg = _cfg(order_critical_missing=True)
     local = [
         {
-            "venue": "binance", "symbol": "BTCUSDT", "id": "a-1", "qty": Decimal("1.0"), "status": "NEW",
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "id": "a-1",
+            "qty": Decimal("1.0"),
+            "status": "NEW",
         }
     ]
     remote = [
         {
-            "venue": "binance", "symbol": "BTCUSDT", "id": "b-2", "qty": Decimal("0.5"), "status": "NEW",
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "id": "b-2",
+            "qty": Decimal("0.5"),
+            "status": "NEW",
         },
         {
-            "venue": "binance", "symbol": "BTCUSDT", "id": "a-1", "qty": Decimal("1.0"), "status": "FILLED",
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "id": "a-1",
+            "qty": Decimal("1.0"),
+            "status": "FILLED",
         },
     ]
 
     drifts = detect_order_drifts(local, remote, cfg)
-    kinds = {(drift.delta.get("missing"), drift.severity) for drift in drifts if isinstance(drift.delta, dict)}
+    kinds = {
+        (drift.delta.get("missing"), drift.severity)
+        for drift in drifts
+        if isinstance(drift.delta, dict)
+    }
     assert ("local", "CRITICAL") in kinds  # orphan remote order
     stale = [drift for drift in drifts if drift.delta.get("note")]
     assert stale and stale[0].severity in {"WARN", "CRITICAL"}
-

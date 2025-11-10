@@ -397,7 +397,9 @@ def _normalise_cancel_all_result(
         # Partial result without explicit IDs — defer to per-order cancellation.
         cleared = 0
     details = {key: value for key, value in result.items()}
-    return CancelAllResult(ok=ok, cleared=cleared, failed=failed, order_ids=order_ids, details=details)
+    return CancelAllResult(
+        ok=ok, cleared=cleared, failed=failed, order_ids=order_ids, details=details
+    )
 
 
 async def _call_cancel_all_orders_idempotent(
@@ -432,7 +434,11 @@ async def cancel_all_orders(
         if existing:
             payload = existing.get("payload") if isinstance(existing, dict) else None
             result_payload = payload.get("result") if isinstance(payload, dict) else None
-            duplicate_result = result_payload if isinstance(result_payload, dict) else {"cancelled": 0, "failed": 0}
+            duplicate_result = (
+                result_payload
+                if isinstance(result_payload, dict)
+                else {"cancelled": 0, "failed": 0}
+            )
             order_journal.append(
                 {
                     "type": "cancel_all.duplicate",
@@ -451,7 +457,9 @@ async def cancel_all_orders(
     venue_normalised = venue.lower() if venue else None
     orders = await asyncio.to_thread(ledger.fetch_open_orders)
     if venue_normalised:
-        orders = [order for order in orders if str(order.get("venue", "")).lower() == venue_normalised]
+        orders = [
+            order for order in orders if str(order.get("venue", "")).lower() == venue_normalised
+        ]
     set_open_orders(orders)
     if not orders:
         return {"cancelled": 0, "failed": 0}
@@ -544,16 +552,18 @@ async def cancel_all_orders(
                     )
                 )
                 pending_orders = [
-                    order
-                    for order in pending_orders
-                    if int(order.get("id", 0)) not in cleared_ids
+                    order for order in pending_orders if int(order.get("id", 0)) not in cleared_ids
                 ]
             cleared_count = max(0, int(idempotent_result.cleared))
             failed += max(0, int(idempotent_result.failed))
             cancelled += cleared_count
             if guard_enabled and guard.feature_enabled():
                 ids_for_guard = cleared_ids
-                if not ids_for_guard and idempotent_result.ok and cleared_count >= len(venue_orders):
+                if (
+                    not ids_for_guard
+                    and idempotent_result.ok
+                    and cleared_count >= len(venue_orders)
+                ):
                     ids_for_guard = {
                         int(order.get("id", 0)) for order in venue_orders if int(order.get("id", 0))
                     }
@@ -570,7 +580,9 @@ async def cancel_all_orders(
             venue_value = str(order.get("venue") or "")
             order_id = int(order.get("id", 0))
             try:
-                register_cancel_attempt(reason="runaway_cancels_per_min", source=f"cancel_all:{venue_value}")
+                register_cancel_attempt(
+                    reason="runaway_cancels_per_min", source=f"cancel_all:{venue_value}"
+                )
                 await broker.cancel(venue=venue_value, order_id=order_id)
                 cancelled += 1
                 if guard_enabled and guard.feature_enabled():
@@ -661,4 +673,3 @@ async def loop_forever(
 
 def loop_snapshot() -> Dict[str, Any]:
     return get_loop_state().as_dict()
-

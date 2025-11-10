@@ -37,13 +37,10 @@ class StrategyRiskManager:
     ) -> None:
         # Using plain dict copies keeps the object mutable but decoupled from callers.
         self.limits: Dict[str, Dict[str, float | int]] = {
-            name: dict(spec)
-            for name, spec in (limits or DEFAULT_LIMITS).items()
+            name: dict(spec) for name, spec in (limits or DEFAULT_LIMITS).items()
         }
         # State is held in-memory with persistence handled via runtime_state_store snapshots.
-        self.state: Dict[str, StrategyState] = {
-            name: StrategyState() for name in self.limits
-        }
+        self.state: Dict[str, StrategyState] = {name: StrategyState() for name in self.limits}
         self._load_persistent_state()
         self._pnl_store = pnl_store or strategy_pnl
 
@@ -63,10 +60,7 @@ class StrategyRiskManager:
         payload = load_runtime_payload()
         controls = payload.get("strategy_controls") if isinstance(payload, Mapping) else {}
         controls_dict = dict(controls) if isinstance(controls, Mapping) else {}
-        controls_dict["enabled"] = {
-            name: bool(state.enabled)
-            for name, state in self.state.items()
-        }
+        controls_dict["enabled"] = {name: bool(state.enabled) for name, state in self.state.items()}
         payload_dict = dict(payload) if isinstance(payload, Mapping) else {}
         payload_dict["strategy_controls"] = controls_dict
         write_runtime_payload(payload_dict)

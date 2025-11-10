@@ -214,6 +214,7 @@ def create_app() -> FastAPI:
         if path.startswith("/api/ui"):
             observe_ui_latency(path, duration_s * 1000.0, status_code=response.status_code)
         return response
+
     app.include_router(health.router)
     app.include_router(live.router)
     app.include_router(risk.router)
@@ -265,9 +266,7 @@ def create_app() -> FastAPI:
         state = runtime_service.get_state()
         control = getattr(state, "control", None)
         environment = str(
-            getattr(control, "environment", None)
-            or getattr(control, "deployment_mode", "")
-            or ""
+            getattr(control, "environment", None) or getattr(control, "deployment_mode", "") or ""
         ).lower()
         default_wait = environment in {"live", "testnet"}
         if not _env_flag("WAIT_FOR_LIVE_READINESS_ON_START", default_wait):

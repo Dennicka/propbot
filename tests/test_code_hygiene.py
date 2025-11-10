@@ -88,9 +88,12 @@ def _block_has_logging(body: list[ast.stmt]) -> bool:
                 func = node.func
                 if isinstance(func, ast.Attribute):
                     attr = func.attr.lower()
-                    if attr.startswith(
-                        ("log", "warn", "error", "debug", "critical", "exception", "info")
-                    ) or "log" in func.attr.lower():
+                    if (
+                        attr.startswith(
+                            ("log", "warn", "error", "debug", "critical", "exception", "info")
+                        )
+                        or "log" in func.attr.lower()
+                    ):
                         return True
                 if isinstance(func, ast.Name):
                     name = func.id.lower()
@@ -221,13 +224,19 @@ def test_no_pickle_or_unsafe_yaml_loads() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 value = node.func.value
-                if isinstance(value, ast.Name) and value.id == "pickle" and node.func.attr == "load":
+                if (
+                    isinstance(value, ast.Name)
+                    and value.id == "pickle"
+                    and node.func.attr == "load"
+                ):
                     offences.append(
                         Offence(rel_path, node.lineno, "pickle.load без audit запрещён"),
                     )
                 if isinstance(value, ast.Name) and value.id == "yaml" and node.func.attr == "load":
                     offences.append(
-                        Offence(rel_path, node.lineno, "используйте yaml.safe_load вместо yaml.load"),
+                        Offence(
+                            rel_path, node.lineno, "используйте yaml.safe_load вместо yaml.load"
+                        ),
                     )
     assert not offences, "Запрещённые pickle/yaml.load вызовы: " + ", ".join(
         f"{item.path}:{item.lineno}" for item in offences
@@ -244,9 +253,7 @@ def test_except_exception_handlers_have_logging() -> None:
             if not isinstance(node, ast.ExceptHandler):
                 continue
             if node.type is None:
-                offences.append(
-                    Offence(rel_path, node.lineno, "bare except запрещён")
-                )
+                offences.append(Offence(rel_path, node.lineno, "bare except запрещён"))
                 continue
             if isinstance(node.type, ast.Name) and node.type.id == "Exception":
                 if rel_path in ALLOW_EXCEPTION_HANDLER_PATHS:

@@ -56,15 +56,13 @@ def snapshot_baseline(
     return baseline_path
 
 
-def _render_diff(baseline: Sequence[dict[str, object]], current: Sequence[dict[str, object]]) -> str:
+def _render_diff(
+    baseline: Sequence[dict[str, object]], current: Sequence[dict[str, object]]
+) -> str:
     import difflib
 
-    baseline_lines = [
-        json.dumps(entry, ensure_ascii=False, sort_keys=True) for entry in baseline
-    ]
-    current_lines = [
-        json.dumps(entry, ensure_ascii=False, sort_keys=True) for entry in current
-    ]
+    baseline_lines = [json.dumps(entry, ensure_ascii=False, sort_keys=True) for entry in baseline]
+    current_lines = [json.dumps(entry, ensure_ascii=False, sort_keys=True) for entry in current]
     diff_lines = list(
         difflib.unified_diff(
             baseline_lines,

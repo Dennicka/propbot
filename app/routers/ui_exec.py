@@ -66,7 +66,9 @@ async def submit_order(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail) from exc
     except PretradeValidationError as exc:
         detail = {"code": "PRETRADE_INVALID", "reason": exc.reason, "details": exc.details}
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail
+        ) from exc
     return SubmitOrderResponse(
         intent_id=ref.intent_id,
         request_id=ref.request_id,

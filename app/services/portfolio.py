@@ -62,16 +62,13 @@ def _load_funding_events(limit: int = 200) -> List[dict[str, Any]]:
                 payload = {}
         else:
             payload = {}
-        amount = float(
-            payload.get("amount")
-            or payload.get("pnl")
-            or event.get("amount")
-            or 0.0
-        )
+        amount = float(payload.get("amount") or payload.get("pnl") or event.get("amount") or 0.0)
         if amount == 0.0:
             continue
         strategy = str(payload.get("strategy") or payload.get("strategy_name") or "unknown")
-        venue = str(payload.get("venue") or payload.get("exchange") or event.get("venue") or "unknown")
+        venue = str(
+            payload.get("venue") or payload.get("exchange") or event.get("venue") or "unknown"
+        )
         simulated = bool(payload.get("simulated") or payload.get("dry_run"))
         symbol_value = (
             payload.get("symbol")
@@ -315,7 +312,9 @@ def _paper_balances() -> List[Dict[str, object]]:
     return ledger.fetch_balances()
 
 
-async def _collect_testnet_snapshot(state, since: datetime | None) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+async def _collect_testnet_snapshot(
+    state, since: datetime | None
+) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
     runtime = state.derivatives
     if not runtime or not runtime.venues:
         exposures = await asyncio.to_thread(_paper_exposures)
@@ -333,22 +332,32 @@ async def _collect_testnet_snapshot(state, since: datetime | None) -> Tuple[List
     fills_tasks = [asyncio.create_task(broker.get_fills(since=since)) for _, broker in brokers]
     exposures: List[Dict[str, object]] = []
     fills: List[Dict[str, object]] = []
-    for venue_info, result in zip(brokers, await asyncio.gather(*position_tasks, return_exceptions=True)):
+    for venue_info, result in zip(
+        brokers, await asyncio.gather(*position_tasks, return_exceptions=True)
+    ):
         venue, _ = venue_info
         if isinstance(result, Exception):  # pragma: no cover - defensive logging
-            LOGGER.warning("failed to aggregate positions", extra={"venue": venue, "error": str(result)})
+            LOGGER.warning(
+                "failed to aggregate positions", extra={"venue": venue, "error": str(result)}
+            )
             continue
         exposures.extend(result)
-    for venue_info, result in zip(brokers, await asyncio.gather(*fills_tasks, return_exceptions=True)):
+    for venue_info, result in zip(
+        brokers, await asyncio.gather(*fills_tasks, return_exceptions=True)
+    ):
         venue, _ = venue_info
         if isinstance(result, Exception):  # pragma: no cover - defensive logging
-            LOGGER.warning("failed to aggregate fills", extra={"venue": venue, "error": str(result)})
+            LOGGER.warning(
+                "failed to aggregate fills", extra={"venue": venue, "error": str(result)}
+            )
             continue
         fills.extend(result)
     if not exposures:
         exposures = await asyncio.to_thread(_paper_exposures)
     else:
-        exposures.sort(key=lambda entry: (str(entry.get("venue", "")), str(entry.get("symbol", ""))))
+        exposures.sort(
+            key=lambda entry: (str(entry.get("venue", "")), str(entry.get("symbol", "")))
+        )
     if not fills:
         fills = await asyncio.to_thread(ledger.fetch_fills_since, since)
     return exposures, fills
@@ -368,10 +377,14 @@ async def _collect_testnet_balances(state) -> List[Dict[str, object]]:
         brokers.append((venue, broker))
     balance_tasks = [asyncio.create_task(broker.balances(venue=venue)) for venue, broker in brokers]
     balances: List[Dict[str, object]] = []
-    for venue_info, result in zip(brokers, await asyncio.gather(*balance_tasks, return_exceptions=True)):
+    for venue_info, result in zip(
+        brokers, await asyncio.gather(*balance_tasks, return_exceptions=True)
+    ):
         venue, _ = venue_info
         if isinstance(result, Exception):  # pragma: no cover - defensive logging
-            LOGGER.warning("failed to aggregate balances", extra={"venue": venue, "error": str(result)})
+            LOGGER.warning(
+                "failed to aggregate balances", extra={"venue": venue, "error": str(result)}
+            )
             continue
         payload = result.get("balances") if isinstance(result, Mapping) else None
         if isinstance(payload, list):
@@ -456,7 +469,9 @@ def _normalise_balances(rows: Iterable[Mapping[str, object]]) -> List[PortfolioB
             free = float(free_raw if free_raw is not None else 0.0)
         except (TypeError, ValueError):
             free = 0.0
-        source_total = total_raw if total_raw is not None else (free_raw if free_raw is not None else 0.0)
+        source_total = (
+            total_raw if total_raw is not None else (free_raw if free_raw is not None else 0.0)
+        )
         try:
             total = float(source_total)
         except (TypeError, ValueError):

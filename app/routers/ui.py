@@ -121,6 +121,7 @@ def _emit_ops_alert(kind: str, text: str, extra: dict | None = None) -> None:
     except Exception as exc:
         logger.warning("ops notifier emit failed kind=%s error=%s", kind, exc)
 
+
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
 
@@ -135,12 +136,7 @@ def _chaos_api_enabled() -> bool:
     flag = os.getenv("CHAOS_ENABLED")
     if flag is None or flag.strip().lower() not in {"1", "true", "yes", "on"}:
         return False
-    environment = (
-        os.getenv("ENVIRONMENT")
-        or os.getenv("ENV")
-        or os.getenv("MODE")
-        or ""
-    )
+    environment = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("MODE") or ""
     return environment.strip().lower() in _CHAOS_ALLOWED_ENVS
 
 
@@ -170,7 +166,9 @@ def symbol_rules(
     try:
         return validator.describe_symbol(symbol, venue=venue)
     except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "SYMBOL_UNKNOWN"})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail={"code": "SYMBOL_UNKNOWN"}
+        )
 
 
 @router.get("/capital")
@@ -228,12 +226,16 @@ def tca_preview_endpoint(
             book_liquidity_usdt=book_liq,
         )
     except RuntimeError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="tca router disabled")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="tca router disabled"
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("failed to compute tca preview", extra={"pair": pair})
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error") from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal error"
+        ) from exc
     return payload
 
 
@@ -276,7 +278,9 @@ def smart_router_preview(
     router = SmartRouter()
     venues = list(router.available_venues())
     if not venues:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="no venues available")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="no venues available"
+        )
 
     book_map = {venue: float(book_liq) for venue in venues} if book_liq is not None else None
     rest_map = {venue: float(lat_rest) for venue in venues} if lat_rest is not None else None
@@ -328,9 +332,7 @@ def chaos_profile(request: Request) -> dict[str, object]:
 
 
 @router.post("/chaos")
-def apply_chaos_injection(
-    request: Request, payload: ChaosInjectionRequest
-) -> dict[str, object]:
+def apply_chaos_injection(request: Request, payload: ChaosInjectionRequest) -> dict[str, object]:
     """Trigger a manual chaos fault when enabled for the environment."""
 
     require_token(request)
@@ -685,9 +687,15 @@ class SecretUpdate(BaseModel):
 class ControlPatchPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    min_spread_bps: confloat(ge=0.0) | None = Field(default=None, description="Minimum spread in bps")
-    max_slippage_bps: conint(ge=0, le=1_000) | None = Field(default=None, description="Maximum allowed slippage in bps")
-    order_notional_usdt: confloat(gt=0.0) | None = Field(default=None, description="Order notional in USDT")
+    min_spread_bps: confloat(ge=0.0) | None = Field(
+        default=None, description="Minimum spread in bps"
+    )
+    max_slippage_bps: conint(ge=0, le=1_000) | None = Field(
+        default=None, description="Maximum allowed slippage in bps"
+    )
+    order_notional_usdt: confloat(gt=0.0) | None = Field(
+        default=None, description="Order notional in USDT"
+    )
     safe_mode: bool | None = None
     dry_run_only: bool | None = Field(default=None, description="Restrict execution to dry-run")
     two_man_rule: bool | None = Field(default=None, description="Require two-man approval")
@@ -780,7 +788,9 @@ def _event_page(*, offset: int = 0, limit: int = DEFAULT_EVENT_LIMIT, order: str
     try:
         page = ledger.fetch_events_page(offset=offset, limit=limit, order=order)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     return page
 
 
@@ -798,7 +808,11 @@ async def runtime_state() -> dict:
     risk_blocked = bool(risk_state.breaches)
     risk_reasons = [breach.detail or breach.limit for breach in risk_state.breaches]
     accounting_snapshot = get_risk_accounting_snapshot()
-    bot_loss_cap = accounting_snapshot.get("bot_loss_cap") if isinstance(accounting_snapshot, Mapping) else None
+    bot_loss_cap = (
+        accounting_snapshot.get("bot_loss_cap")
+        if isinstance(accounting_snapshot, Mapping)
+        else None
+    )
     dryrun = state.dryrun
     control_snapshot = control_as_dict()
     response = {
@@ -946,15 +960,17 @@ async def open_trades_csv(request: Request) -> Response:
     trades = await _load_open_trades()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "trade_id",
-        "pair",
-        "side",
-        "size",
-        "entry_price",
-        "unrealized_pnl",
-        "opened_ts",
-    ])
+    writer.writerow(
+        [
+            "trade_id",
+            "pair",
+            "side",
+            "size",
+            "entry_price",
+            "unrealized_pnl",
+            "opened_ts",
+        ]
+    )
     for trade in trades:
         writer.writerow(
             [
@@ -1123,7 +1139,9 @@ async def patch_control(payload: ControlPatchPayload) -> dict:
     try:
         control, changes = apply_control_patch(payload_dict)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     if changes:
         ledger.record_event(level="INFO", code="control_patch", payload={"changes": changes})
         _emit_ops_alert(
@@ -1166,7 +1184,9 @@ async def events(
             search=_clean_str(search),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     return page
 
 
@@ -1203,7 +1223,9 @@ async def events_export(
 ) -> Response:
     fmt = (format or "csv").strip().lower()
     if fmt not in {"csv", "json"}:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json"
+        )
     try:
         page = ledger.fetch_events_page(
             offset=offset,
@@ -1217,7 +1239,9 @@ async def events_export(
             search=_clean_str(search),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     items = page["items"]
     if fmt == "json":
         return JSONResponse(content=items)
@@ -1241,7 +1265,9 @@ def _format_decimal(value: Any) -> str:
 async def portfolio_export(format: str = Query("csv")) -> Response:
     fmt = (format or "csv").strip().lower()
     if fmt not in {"csv", "json"}:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="format must be csv or json"
+        )
     snapshot = await portfolio.snapshot()
     positions_payload = [
         {
@@ -1352,7 +1378,7 @@ async def orders_snapshot() -> dict:
 @router.post("/hold")
 async def hold(request: Request, payload: HoldPayload | None = None) -> dict:
     identity = _authorize_operator_action(request, "HOLD")
-    reason = (payload.reason.strip() if payload and payload.reason else "manual_hold")
+    reason = payload.reason.strip() if payload and payload.reason else "manual_hold"
     requested_by = payload.requested_by if payload else None
     await hold_loop()
     engage_safety_hold(reason, source="ui")
@@ -1369,7 +1395,12 @@ async def hold(request: Request, payload: HoldPayload | None = None) -> dict:
     )
     state = get_state()
     safety = get_safety_status()
-    response = {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "safety": safety, "ts": _ts()}
+    response = {
+        "mode": state.control.mode,
+        "hold_active": safety.get("hold_active", False),
+        "safety": safety,
+        "ts": _ts(),
+    }
     _log_operator_success(
         identity,
         "HOLD",
@@ -1388,9 +1419,7 @@ async def dashboard_hold_action(
     operator = form_data.get("operator", "")
     payload = HoldPayload(reason=reason or None, requested_by=operator or "dashboard_ui")
     result = await hold(request, payload)
-    hold_reason = result.get("safety", {}).get("hold_reason") or (
-        payload.reason or "manual_hold"
-    )
+    hold_reason = result.get("safety", {}).get("hold_reason") or (payload.reason or "manual_hold")
     message = f"HOLD engaged — reason: {hold_reason}"
     return await render_dashboard_response(request, token, message=message)
 
@@ -1499,10 +1528,16 @@ async def resume_confirm(request: Request, payload: ResumeConfirmPayload) -> dic
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="resume_request_missing")
     expected_token = os.getenv("APPROVE_TOKEN")
     if not expected_token:
-        _log_operator_event(identity, "RESUME_APPROVE", status="denied", extra={"reason": "approve_token_missing"})
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
+        _log_operator_event(
+            identity, "RESUME_APPROVE", status="denied", extra={"reason": "approve_token_missing"}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing"
+        )
     if not secrets.compare_digest(payload.token, expected_token):
-        _log_operator_event(identity, "RESUME_APPROVE", status="denied", extra={"reason": "invalid_token"})
+        _log_operator_event(
+            identity, "RESUME_APPROVE", status="denied", extra={"reason": "invalid_token"}
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
     request_id = resume_info.get("id") or resume_info.get("request_id")
     result = approve_resume(request_id=request_id, actor=payload.actor)
@@ -1526,7 +1561,11 @@ async def resume_confirm(request: Request, payload: ResumeConfirmPayload) -> dic
     _log_operator_success(
         identity,
         "RESUME_APPROVE",
-        extra={"request_id": request_id, "reason": resume_info.get("reason"), "hold_cleared": result.get("hold_cleared", False)},
+        extra={
+            "request_id": request_id,
+            "reason": resume_info.get("reason"),
+            "hold_cleared": result.get("hold_cleared", False),
+        },
     )
     return response
 
@@ -1545,7 +1584,11 @@ async def resume(request: Request) -> dict:
     _emit_ops_alert("mode_change", "Mode switched to RUN", {"source": "ui"})
     state = get_state()
     safety = get_safety_status()
-    response = {"mode": state.control.mode, "hold_active": safety.get("hold_active", False), "ts": _ts()}
+    response = {
+        "mode": state.control.mode,
+        "hold_active": safety.get("hold_active", False),
+        "ts": _ts(),
+    }
     _log_operator_success(identity, "RESUME_EXECUTE", extra={"source": "manual_resume"})
     return response
 
@@ -1553,7 +1596,9 @@ async def resume(request: Request) -> dict:
 @router.post("/stop")
 async def stop() -> dict:
     loop_state = await stop_loop()
-    ledger.record_event(level="INFO", code="loop_stop_requested", payload={"status": loop_state.status})
+    ledger.record_event(
+        level="INFO", code="loop_stop_requested", payload={"status": loop_state.status}
+    )
     _emit_ops_alert("loop_stop_requested", "Loop stop requested", {"status": loop_state.status})
     return {"loop": loop_state.as_dict(), "ts": _ts()}
 
@@ -1611,7 +1656,9 @@ async def cancel_all(request: Request, payload: CancelAllPayload | None = None) 
     return result
 
 
-async def _execute_kill(*, reason: str | None = None, request_id: str | None = None) -> dict[str, Any]:
+async def _execute_kill(
+    *, reason: str | None = None, request_id: str | None = None
+) -> dict[str, Any]:
     state = get_state()
     state.control.safe_mode = True
     set_mode("HOLD")
@@ -1654,7 +1701,9 @@ async def _execute_kill(*, reason: str | None = None, request_id: str | None = N
 
 
 @router.post("/kill-request")
-async def kill_request(request: Request, payload: KillRequestPayload | None = None) -> dict[str, Any]:
+async def kill_request(
+    request: Request, payload: KillRequestPayload | None = None
+) -> dict[str, Any]:
     identity = _authorize_operator_action(request, "KILL_REQUEST")
     reason = ""
     requested_by = None
@@ -1671,7 +1720,11 @@ async def kill_request(request: Request, payload: KillRequestPayload | None = No
         identity,
         "KILL_REQUEST",
         status="requested",
-        extra={"reason": reason, "request_id": record.get("id"), "requested_by": requested_by or operator_name},
+        extra={
+            "reason": reason,
+            "request_id": record.get("id"),
+            "requested_by": requested_by or operator_name,
+        },
     )
     response_payload = {
         "status": "pending",
@@ -1688,19 +1741,39 @@ async def kill_switch(request: Request, payload: KillConfirmPayload) -> dict:
     identity = _authorize_operator_action(request, "KILL_APPROVE")
     expected_token = os.getenv("APPROVE_TOKEN")
     if not expected_token:
-        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "approve_token_missing"})
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
+        _log_operator_event(
+            identity, "KILL_APPROVE", status="denied", extra={"reason": "approve_token_missing"}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing"
+        )
     if not secrets.compare_digest(payload.token, expected_token):
-        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "invalid_token"})
+        _log_operator_event(
+            identity, "KILL_APPROVE", status="denied", extra={"reason": "invalid_token"}
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
     try:
         record = approvals_store.approve_request(payload.request_id, actor=payload.actor)
     except KeyError as exc:
-        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "request_not_found", "request_id": payload.request_id})
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request_not_found") from exc
+        _log_operator_event(
+            identity,
+            "KILL_APPROVE",
+            status="denied",
+            extra={"reason": "request_not_found", "request_id": payload.request_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="request_not_found"
+        ) from exc
     except ValueError as exc:
-        _log_operator_event(identity, "KILL_APPROVE", status="denied", extra={"reason": "request_not_pending", "request_id": payload.request_id})
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="request_not_pending") from exc
+        _log_operator_event(
+            identity,
+            "KILL_APPROVE",
+            status="denied",
+            extra={"reason": "request_not_pending", "request_id": payload.request_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="request_not_pending"
+        ) from exc
     parameters = record.get("parameters") if isinstance(record, Mapping) else {}
     reason = None
     if isinstance(parameters, Mapping):
@@ -1729,10 +1802,12 @@ async def close_exposure(payload: CloseExposurePayload | None = None) -> dict:
     result = runtime.flatten_all()
     event_payload = dict(result)
     if payload and (payload.venue or payload.symbol):
-        event_payload.update({
-            "venue": payload.venue,
-            "symbol": payload.symbol,
-        })
+        event_payload.update(
+            {
+                "venue": payload.venue,
+                "symbol": payload.symbol,
+            }
+        )
     if hold_detail:
         event_payload["hold_state"] = hold_detail
     ledger.record_event(level="INFO", code="flatten_requested", payload=event_payload)
@@ -1767,14 +1842,28 @@ def unfreeze_strategy_request(payload: UnfreezeStrategyPayload, request: Request
 
 
 @router.post("/unfreeze-strategy/confirm")
-def unfreeze_strategy_confirm(payload: UnfreezeStrategyConfirmPayload, request: Request) -> dict[str, object]:
+def unfreeze_strategy_confirm(
+    payload: UnfreezeStrategyConfirmPayload, request: Request
+) -> dict[str, object]:
     identity = _authorize_operator_action(request, "UNFREEZE_STRATEGY_APPROVE")
     expected_token = os.getenv("APPROVE_TOKEN")
     if not expected_token:
-        _log_operator_event(identity, "UNFREEZE_STRATEGY_APPROVE", status="denied", extra={"reason": "approve_token_missing"})
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing")
+        _log_operator_event(
+            identity,
+            "UNFREEZE_STRATEGY_APPROVE",
+            status="denied",
+            extra={"reason": "approve_token_missing"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="approve_token_missing"
+        )
     if not secrets.compare_digest(payload.token, expected_token):
-        _log_operator_event(identity, "UNFREEZE_STRATEGY_APPROVE", status="denied", extra={"reason": "invalid_token"})
+        _log_operator_event(
+            identity,
+            "UNFREEZE_STRATEGY_APPROVE",
+            status="denied",
+            extra={"reason": "invalid_token"},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
     try:
         record = approvals_store.approve_request(payload.request_id, actor=payload.actor)
@@ -1785,7 +1874,9 @@ def unfreeze_strategy_confirm(payload: UnfreezeStrategyConfirmPayload, request: 
             status="denied",
             extra={"reason": "request_not_found", "request_id": payload.request_id},
         )
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="request_not_found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="request_not_found"
+        ) from exc
     except ValueError as exc:
         _log_operator_event(
             identity,
@@ -1793,14 +1884,20 @@ def unfreeze_strategy_confirm(payload: UnfreezeStrategyConfirmPayload, request: 
             status="denied",
             extra={"reason": "request_not_pending", "request_id": payload.request_id},
         )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="request_not_pending") from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="request_not_pending"
+        ) from exc
     parameters = record.get("parameters") if isinstance(record, Mapping) else {}
     if not isinstance(parameters, Mapping):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="missing_parameters")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="missing_parameters"
+        )
     strategy = parameters.get("strategy")
     reason = parameters.get("reason") or ""
     if not isinstance(strategy, str) or not strategy:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_strategy")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid_strategy"
+        )
     manager = get_strategy_risk_manager()
     operator_name, role = identity or ("unknown", "unknown")
     manager.unfreeze_strategy(
@@ -1946,6 +2043,8 @@ async def last_plan() -> dict:
     if plan is None:
         return {"last_plan": None}
     return {"last_plan": plan}
+
+
 @router.get("/hedge/log")
 async def hedge_log(request: Request, limit: int = Query(100, ge=1, le=1_000)) -> dict:
     require_token(request)
@@ -1982,4 +2081,3 @@ async def audit_export(
     except Exception:
         events = []
     return JSONResponse({"events": events})
-

@@ -123,15 +123,11 @@ def evaluate_health(snapshot: AccountHealthSnapshot, cfg: object) -> AccountHeal
 
     if ratio >= float(health_cfg.margin_ratio_critical):
         return "CRITICAL"
-    if snapshot.free_collateral_usdt <= float(
-        health_cfg.free_collateral_critical_usd
-    ):
+    if snapshot.free_collateral_usdt <= float(health_cfg.free_collateral_critical_usd):
         return "CRITICAL"
     if ratio >= float(health_cfg.margin_ratio_warn):
         return "WARN"
-    if snapshot.free_collateral_usdt <= float(
-        health_cfg.free_collateral_warn_usd
-    ):
+    if snapshot.free_collateral_usdt <= float(health_cfg.free_collateral_warn_usd):
         return "WARN"
     return "OK"
 
@@ -290,7 +286,9 @@ def _iter_nested_candidates(value: object) -> Iterable[Mapping[str, object]]:
             queue.extend(current)
 
 
-def _extract_metric(payload: Mapping[str, object] | Sequence[object] | None, keys: Iterable[str]) -> float | None:
+def _extract_metric(
+    payload: Mapping[str, object] | Sequence[object] | None, keys: Iterable[str]
+) -> float | None:
     if payload is None:
         return None
     for candidate in _iter_nested_candidates(payload):
@@ -401,7 +399,9 @@ def _resolve_config_scope(ctx: object) -> object:
     return ctx
 
 
-def _build_snapshot(exchange: str, payload: Mapping[str, object] | Sequence[object], ts: float) -> AccountHealthSnapshot:
+def _build_snapshot(
+    exchange: str, payload: Mapping[str, object] | Sequence[object], ts: float
+) -> AccountHealthSnapshot:
     equity = _extract_metric(payload, _EQUITY_KEYS) or 0.0
     free_collateral = _extract_metric(payload, _FREE_COLLATERAL_KEYS)
     if free_collateral is None:

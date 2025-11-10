@@ -44,10 +44,7 @@ def get_risk_skip_counts() -> Dict[str, Dict[str, int]]:
     """Return an in-memory snapshot of risk skip counters."""
 
     with _lock:
-        return {
-            strategy: dict(reason_counts)
-            for strategy, reason_counts in _skip_counts.items()
-        }
+        return {strategy: dict(reason_counts) for strategy, reason_counts in _skip_counts.items()}
 
 
 def reset_risk_skip_metrics_for_tests() -> None:  # pragma: no cover - test helper
@@ -67,4 +64,3 @@ __all__ = [
     "get_risk_skip_counts",
     "reset_risk_skip_metrics_for_tests",
 ]
-

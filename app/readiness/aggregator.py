@@ -124,8 +124,7 @@ def _normalise_context(ctx: Mapping[str, Any] | Any) -> dict[str, Any]:
 class LiveReadinessAggregator:
     def __init__(self) -> None:
         self._status_gauges: MutableMapping[ReadinessStatus, Gauge] = {
-            status: READINESS_STATUS_GAUGE.labels(status=status.value)
-            for status in ReadinessStatus
+            status: READINESS_STATUS_GAUGE.labels(status=status.value) for status in ReadinessStatus
         }
         for gauge in self._status_gauges.values():
             gauge.set(0.0)

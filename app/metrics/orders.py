@@ -52,4 +52,3 @@ __all__ = [
     "observe_replace_chain",
     "record_open_intents",
 ]
-

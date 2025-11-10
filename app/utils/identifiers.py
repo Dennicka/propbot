@@ -17,4 +17,3 @@ def generate_request_id() -> str:
 
 
 __all__ = ["generate_request_id"]
-

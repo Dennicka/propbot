@@ -41,22 +41,10 @@ def test_evaluate_health_thresholds() -> None:
     cfg = SimpleNamespace(health=HealthConfig())
 
     assert evaluate_health(_snapshot(), cfg) == "OK"
-    assert (
-        evaluate_health(_snapshot(margin_ratio=0.80), cfg)
-        == "WARN"
-    )
-    assert (
-        evaluate_health(_snapshot(margin_ratio=0.90), cfg)
-        == "CRITICAL"
-    )
-    assert (
-        evaluate_health(_snapshot(free_collateral_usdt=80.0), cfg)
-        == "WARN"
-    )
-    assert (
-        evaluate_health(_snapshot(free_collateral_usdt=5.0), cfg)
-        == "CRITICAL"
-    )
+    assert evaluate_health(_snapshot(margin_ratio=0.80), cfg) == "WARN"
+    assert evaluate_health(_snapshot(margin_ratio=0.90), cfg) == "CRITICAL"
+    assert evaluate_health(_snapshot(free_collateral_usdt=80.0), cfg) == "WARN"
+    assert evaluate_health(_snapshot(free_collateral_usdt=5.0), cfg) == "CRITICAL"
 
 
 def test_metrics_update_shapes() -> None:
@@ -93,12 +81,21 @@ def test_metrics_update_shapes() -> None:
         "propbot_account_health_free_collateral_usd", {"exchange": "okx"}
     ) == pytest.approx(40.0)
 
-    assert registry.get_sample_value(
-        "propbot_account_health_state", {"exchange": "binance", "state": "OK"}
-    ) == 1.0
-    assert registry.get_sample_value(
-        "propbot_account_health_state", {"exchange": "okx", "state": "WARN"}
-    ) == 1.0
-    assert registry.get_sample_value(
-        "propbot_account_health_state", {"exchange": "bybit", "state": "CRITICAL"}
-    ) == 1.0
+    assert (
+        registry.get_sample_value(
+            "propbot_account_health_state", {"exchange": "binance", "state": "OK"}
+        )
+        == 1.0
+    )
+    assert (
+        registry.get_sample_value(
+            "propbot_account_health_state", {"exchange": "okx", "state": "WARN"}
+        )
+        == 1.0
+    )
+    assert (
+        registry.get_sample_value(
+            "propbot_account_health_state", {"exchange": "bybit", "state": "CRITICAL"}
+        )
+        == 1.0
+    )

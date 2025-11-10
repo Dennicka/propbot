@@ -173,7 +173,9 @@ def _parse_initial_state(payload: Mapping[str, Any]) -> ScenarioInitialState:
         notional_cap=_to_decimal(limits_payload.get("notional_cap", "0")),
     )
 
-    return ScenarioInitialState(balances=balances, positions=positions, control=control, limits=limits)
+    return ScenarioInitialState(
+        balances=balances, positions=positions, control=control, limits=limits
+    )
 
 
 def _normalise_events(events: Iterable[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
@@ -209,7 +211,9 @@ def load_scenario(path: Path) -> GoldenScenario:
         raise ValueError("scenario events must be a list")
     events = _normalise_events(event for event in events_payload if isinstance(event, Mapping))
     expectations = _normalise_expectations(payload.get("expectations"))
-    return GoldenScenario(name=name, initial_state=initial_state, events=events, expectations=expectations)
+    return GoldenScenario(
+        name=name, initial_state=initial_state, events=events, expectations=expectations
+    )
 
 
 def _ensure_position(ctx: _RuntimeContext, symbol: str) -> _RuntimePosition:
@@ -245,7 +249,9 @@ def _handle_trade(ctx: _RuntimeContext, event: Mapping[str, Any]) -> None:
 
     notional = qty * price
     if ctx.notional_cap and notional > ctx.notional_cap:
-        _record_violation(ctx, kind="notional_cap_exceeded", details={**trade_context, "notional": notional})
+        _record_violation(
+            ctx, kind="notional_cap_exceeded", details={**trade_context, "notional": notional}
+        )
         return
 
     position = _ensure_position(ctx, symbol)

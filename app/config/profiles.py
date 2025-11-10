@@ -230,10 +230,7 @@ def ensure_live_prerequisites(
     try:
         store = SecretsStore()
     except Exception as exc:  # pragma: no cover - defensive
-        errors.append(
-            "SECRETS_STORE_PATH не задан или secrets store недоступен: "
-            f"{exc}"
-        )
+        errors.append("SECRETS_STORE_PATH не задан или secrets store недоступен: " f"{exc}")
     else:
         try:
             ensure_required_secrets(profile_cfg, store.get_exchange_credentials)
@@ -258,9 +255,7 @@ def ensure_live_prerequisites(
 
     if errors:
         details = "\n".join(f"- {entry}" for entry in errors)
-        raise ProfileSafetyError(
-            "Запуск профиля live заблокирован:\n" f"{details}", reasons=errors
-        )
+        raise ProfileSafetyError("Запуск профиля live заблокирован:\n" f"{details}", reasons=errors)
 
 
 def ensure_live_acknowledged(
@@ -288,9 +283,7 @@ def ensure_live_acknowledged(
         try:
             numeric = float(str(raw))
         except ValueError:
-            errors.append(
-                f"{description}: переменная {name} должна быть числом (получено {raw!r})"
-            )
+            errors.append(f"{description}: переменная {name} должна быть числом (получено {raw!r})")
             continue
         if require_positive and numeric <= 0:
             errors.append(f"{description}: значение {name} должно быть > 0 (получено {numeric})")
@@ -326,4 +319,3 @@ __all__ = [
     "load_profile",
     "resolve_guard_status",
 ]
-

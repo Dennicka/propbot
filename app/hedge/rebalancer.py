@@ -107,8 +107,12 @@ class PartialHedgeRebalancer:
     ) -> None:
         self._interval = max(interval or _env_float("REBALANCER_INTERVAL_SEC", 5.0), 0.5)
         self._retry_delay = retry_delay or _env_float("REBALANCER_RETRY_DELAY_SEC", 30.0)
-        self._batch_notional = batch_notional or _env_float("REBALANCER_BATCH_NOTIONAL_USD", 1_000.0)
-        self._max_retry = max_retry if max_retry is not None else _env_int("REBALANCER_MAX_RETRY", 5)
+        self._batch_notional = batch_notional or _env_float(
+            "REBALANCER_BATCH_NOTIONAL_USD", 1_000.0
+        )
+        self._max_retry = (
+            max_retry if max_retry is not None else _env_int("REBALANCER_MAX_RETRY", 5)
+        )
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._client_factory = client_factory or _client_for
@@ -268,10 +272,18 @@ class PartialHedgeRebalancer:
             remaining_base = target_base - (long_base if side == "long" else short_base)
             if remaining_base <= EPSILON:
                 continue
-            venue = str(position.get(f"{side}_venue") or (long_leg if side == "long" else short_leg or {}).get("venue") or "")
+            venue = str(
+                position.get(f"{side}_venue")
+                or (long_leg if side == "long" else short_leg or {}).get("venue")
+                or ""
+            )
             if not venue:
                 continue
-            symbol = str((long_leg if side == "long" else short_leg or {}).get("symbol") or position.get("symbol") or "")
+            symbol = str(
+                (long_leg if side == "long" else short_leg or {}).get("symbol")
+                or position.get("symbol")
+                or ""
+            )
             try:
                 client = self._client_factory(venue)
             except Exception as exc:
@@ -288,14 +300,21 @@ class PartialHedgeRebalancer:
                 mark = client.get_mark_price(symbol)
                 mark_price = float(mark.get("mark_price") or mark.get("price") or 0.0)
             except Exception:
-                mark_price = float((long_leg if side == "long" else short_leg or {}).get("entry_price") or entry_long or entry_short or 0.0)
+                mark_price = float(
+                    (long_leg if side == "long" else short_leg or {}).get("entry_price")
+                    or entry_long
+                    or entry_short
+                    or 0.0
+                )
             if mark_price <= 0:
                 mark_price = 1.0
             batch_notional = float(min(self._batch_notional, remaining_base * mark_price))
             if batch_notional <= 0:
                 batch_notional = remaining_base * mark_price
             try:
-                register_order_attempt(reason="runaway_orders_per_min", source=f"partial_rebalance_{side}")
+                register_order_attempt(
+                    reason="runaway_orders_per_min", source=f"partial_rebalance_{side}"
+                )
                 order = client.place_order(symbol, side, batch_notional, leverage)
             except HoldActiveError as exc:
                 _update_meta(status="hold", last_error=str(exc.reason or "hold_active"))
@@ -398,4 +417,3 @@ class PartialHedgeRebalancer:
 
 
 __all__ = ["PartialHedgeRebalancer"]
-

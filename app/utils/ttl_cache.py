@@ -285,9 +285,7 @@ def cache_response(
                 media_type=response.media_type,
             )
             _set_entry(cache_key, entry)
-            if _matches_if_none_match(request, entry) or _matches_if_modified_since(
-                request, entry
-            ):
+            if _matches_if_none_match(request, entry) or _matches_if_modified_since(request, entry):
                 return Response(status_code=304, headers=_conditional_headers(entry))
             return Response(
                 status_code=response.status_code,

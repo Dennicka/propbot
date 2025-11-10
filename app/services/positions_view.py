@@ -5,9 +5,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 
-async def build_positions_snapshot(
-    state, positions: Iterable[Mapping[str, Any]]
-) -> Dict[str, Any]:
+async def build_positions_snapshot(state, positions: Iterable[Mapping[str, Any]]) -> Dict[str, Any]:
     marks = await _resolve_position_marks(state, positions)
     exposure_totals: Dict[str, Dict[str, float]] = defaultdict(
         lambda: {"long_notional": 0.0, "short_notional": 0.0, "net_usdt": 0.0}
@@ -234,4 +232,3 @@ def _symbol_candidates(symbol: str) -> List[str]:
 
 
 __all__ = ["build_positions_snapshot"]
-

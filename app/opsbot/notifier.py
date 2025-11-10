@@ -164,12 +164,12 @@ def alert_ops(
     return emit_alert(kind=kind, text=text, extra=extra or None)
 
 
-
-
 def alert_slo_breach(text: str, *, extra: Mapping[str, object] | None = None) -> Dict[str, object]:
     """Emit a dedicated SLO breach alert."""
 
     return emit_alert("slo_breach", text, extra=extra or None)
+
+
 def _enqueue_telegram(record: Mapping[str, object]) -> None:
     config = TelegramConfig.from_env()
     if not config.is_ready:
@@ -254,7 +254,9 @@ def _send_telegram(config: TelegramConfig, record: Mapping[str, object]) -> None
             timeout=config.timeout,
         )
         if response.status_code >= 400:
-            LOGGER.warning("telegram notification failed: %s %s", response.status_code, response.text)
+            LOGGER.warning(
+                "telegram notification failed: %s %s", response.status_code, response.text
+            )
     except Exception as exc:  # pragma: no cover - defensive logging
         LOGGER.warning("telegram notification error: %s", exc)
 

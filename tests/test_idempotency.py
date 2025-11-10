@@ -13,7 +13,7 @@ def test_idempotency_cache_replay() -> None:
     fingerprint = cache.build_fingerprint(
         "POST",
         "/api/ui/hold",
-        b"{\"foo\": 1}",
+        b'{"foo": 1}',
         "application/json",
     )
     cache.store(
@@ -21,16 +21,18 @@ def test_idempotency_cache_replay() -> None:
         fingerprint,
         status_code=202,
         headers=[("content-type", "application/json"), ("x-custom", "value")],
-        body=b"{\"detail\": \"ok\"}",
+        body=b'{"detail": "ok"}',
     )
     cached = cache.get("cache-key", fingerprint)
     assert cached is not None
     assert cached.status_code == 202
-    assert cached.body == b"{\"detail\": \"ok\"}"
+    assert cached.body == b'{"detail": "ok"}'
     assert all(name.lower() != "idempotent-replay" for name, _ in cached.headers)
 
 
-def test_duplicate_post_returns_cached_response(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+def test_duplicate_post_returns_cached_response(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
     monkeypatch.setenv("AUTH_ENABLED", "false")
     hold_mock = AsyncMock(return_value=None)
     monkeypatch.setattr("app.routers.ui.hold_loop", hold_mock)

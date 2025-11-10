@@ -65,6 +65,7 @@ def _recompute_overall(snapshot: dict[str, Any], hold_active: bool) -> None:
         best = fallback
     snapshot["overall"] = best
 
+
 @router.get("/overview")
 @cache_response(ttl_s=_OVERVIEW_TTL, allow_in_tests=True, refresh_on_hit=True)
 async def overview(_request: Request) -> JSONResponse:
@@ -154,6 +155,7 @@ async def overview(_request: Request) -> JSONResponse:
     response.headers.setdefault("Cache-Control", "no-cache, must-revalidate")
     return response
 
+
 @router.get("/components")
 @cache_response(ttl_s=1.0, allow_in_tests=True)
 async def components(_request: Request) -> JSONResponse:
@@ -166,6 +168,7 @@ async def components(_request: Request) -> JSONResponse:
     response = JSONResponse(content=payload)
     response.headers.setdefault("Cache-Control", "no-cache, must-revalidate")
     return response
+
 
 @router.get("/slo")
 @cache_response(ttl_s=1.0, allow_in_tests=True)

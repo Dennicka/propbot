@@ -6,6 +6,7 @@ import json
 
 router = APIRouter()
 
+
 @router.websocket("/stream")
 async def stream(ws: WebSocket):
     await ws.accept()

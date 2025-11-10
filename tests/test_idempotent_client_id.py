@@ -50,4 +50,3 @@ def test_different_context_changes_identifier() -> None:
         timestamp=ts,
     )
     assert first != other
-

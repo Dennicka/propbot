@@ -50,7 +50,9 @@ async def close_all(request: Request) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:  # pragma: no cover - defensive guard
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="close_all_failed") from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="close_all_failed"
+        ) from exc
     operator_name, role = identity or ("unknown", "unknown")
     closed_items = result.get("closed") if isinstance(result, Mapping) else []
     remaining_items = result.get("positions") if isinstance(result, Mapping) else []

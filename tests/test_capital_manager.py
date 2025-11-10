@@ -55,7 +55,7 @@ def test_capital_snapshot_endpoint(client: TestClient, monkeypatch) -> None:
                 "current_usage": {
                     "cross_exchange_arb": {"open_notional": 20_000},
                 },
-            }
+            },
         )
     )
 

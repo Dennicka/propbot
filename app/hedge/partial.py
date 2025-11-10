@@ -52,7 +52,9 @@ class _VenueQuote:
     funding_apr_sum: float = 0.0
     entries: int = 0
 
-    def add(self, *, notional: float, taker_fee_bps: float, maker_fee_bps: float, funding_apr: float) -> None:
+    def add(
+        self, *, notional: float, taker_fee_bps: float, maker_fee_bps: float, funding_apr: float
+    ) -> None:
         self.total_notional += max(notional, 0.0)
         self.taker_fee_sum += taker_fee_bps * max(notional, 0.0)
         self.maker_fee_sum += maker_fee_bps * max(notional, 0.0)
@@ -269,9 +271,7 @@ class PartialHedgePlanner:
             best_venue: str | None = None
             best_cost = float("inf")
             for venue, quote in venues_map.items():
-                cost = quote.expected_cost_bps(
-                    funding_horizon_hours=self._funding_horizon_hours
-                )
+                cost = quote.expected_cost_bps(funding_horizon_hours=self._funding_horizon_hours)
                 if cost < best_cost:
                     best_cost = cost
                     best_venue = venue

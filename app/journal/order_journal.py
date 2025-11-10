@@ -1,4 +1,5 @@
 """Exactly-once journal backed by the shared ledger SQLite database."""
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,12 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def _fetch_row(cursor: sqlite3.Cursor | sqlite3.Connection, *, uuid: str | None = None, row_id: int | None = None) -> Dict[str, Any] | None:
+def _fetch_row(
+    cursor: sqlite3.Cursor | sqlite3.Connection,
+    *,
+    uuid: str | None = None,
+    row_id: int | None = None,
+) -> Dict[str, Any] | None:
     if uuid is not None:
         row = cursor.execute(
             "SELECT id, uuid, ts, type, payload FROM order_journal WHERE uuid = ?",
@@ -135,7 +141,9 @@ def get(uuid_value: str) -> Dict[str, Any] | None:
         return record
 
 
-def get_since(*, ts: str | None = None, uuid_value: str | None = None, limit: int = 500) -> List[Dict[str, Any]]:
+def get_since(
+    *, ts: str | None = None, uuid_value: str | None = None, limit: int = 500
+) -> List[Dict[str, Any]]:
     """Return journal entries strictly after ``ts`` or ``uuid_value``.
 
     When ``uuid_value`` is provided the timestamp of that entry is resolved first.

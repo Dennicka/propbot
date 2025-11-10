@@ -25,7 +25,9 @@ class StubClient:
     def get_position(self, symbol: str) -> Dict[str, Any]:  # pragma: no cover - unused
         return {"symbol": symbol, "size": 0.0, "side": "flat"}
 
-    def place_order(self, symbol: str, side: str, notional_usdt: float, leverage: float) -> Dict[str, Any]:
+    def place_order(
+        self, symbol: str, side: str, notional_usdt: float, leverage: float
+    ) -> Dict[str, Any]:
         price = float(self._ask if side == "long" else self._bid)
         qty = float(notional_usdt) / price if price else 0.0
         order = {

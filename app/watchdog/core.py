@@ -76,11 +76,15 @@ def get_broker_state() -> BrokerStateSnapshot:
             continue
         state = _normalise_state(str(payload.get("state")))
         reason = payload.get("last_reason") or payload.get("reason")
-        entry = BrokerVenueState(venue=str(venue), state=state, reason=str(reason) if reason else None)
+        entry = BrokerVenueState(
+            venue=str(venue), state=state, reason=str(reason) if reason else None
+        )
         per_venue[str(venue).lower()] = entry
         overall = _worst_state(overall, entry)
     last_reason = snapshot.get("last_reason") if isinstance(snapshot, Mapping) else None
-    return BrokerStateSnapshot(per_venue=per_venue, overall=overall, last_reason=str(last_reason) if last_reason else None)
+    return BrokerStateSnapshot(
+        per_venue=per_venue, overall=overall, last_reason=str(last_reason) if last_reason else None
+    )
 
 
 __all__ = [

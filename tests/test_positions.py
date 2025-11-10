@@ -44,9 +44,7 @@ def test_close_position_marks_record_closed() -> None:
         entry_long_price=20_000.0,
         entry_short_price=20_010.0,
     )
-    closed = close_position(
-        position["id"], exit_long_price=20_100.0, exit_short_price=20_120.0
-    )
+    closed = close_position(position["id"], exit_long_price=20_100.0, exit_short_price=20_120.0)
     assert closed["status"] == "closed"
     expected_qty = position["legs"][0]["base_size"]
     assert math.isclose(

@@ -34,7 +34,9 @@ def _current_universe(manager: UniverseManager | None = None) -> Set[str]:
     return {entry.upper() for entry in pairs}
 
 
-def check_pair_allowed(pair_id: str | None, *, manager: UniverseManager | None = None) -> Tuple[bool, str]:
+def check_pair_allowed(
+    pair_id: str | None, *, manager: UniverseManager | None = None
+) -> Tuple[bool, str]:
     """Return whether ``pair_id`` is allowed for trading.
 
     The function returns a ``(ok, reason)`` tuple; ``reason`` is ``"universe"``

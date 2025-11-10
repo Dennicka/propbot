@@ -104,7 +104,11 @@ class RateLimiter:
             if bucket.tokens >= 1.0:
                 bucket.tokens -= 1.0
                 remaining = bucket.tokens
-                reset = 0.0 if bucket.tokens >= self._burst else (self._burst - bucket.tokens) / self._refill_rate
+                reset = (
+                    0.0
+                    if bucket.tokens >= self._burst
+                    else (self._burst - bucket.tokens) / self._refill_rate
+                )
                 return RateLimitOutcome(True, remaining, reset)
             reset = (1.0 - bucket.tokens) / self._refill_rate if self._refill_rate else float("inf")
             return RateLimitOutcome(False, bucket.tokens, reset)

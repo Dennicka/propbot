@@ -177,9 +177,7 @@ def compare_balances(
             symbol=asset,
             severity=severity,
             code="BALANCE_MISMATCH",
-            details=(
-                f"local_total={local_value:f} remote_total={remote_value:f} delta={delta:f}"
-            ),
+            details=(f"local_total={local_value:f} remote_total={remote_value:f} delta={delta:f}"),
         )
         issues.append(issue)
     return issues
@@ -413,9 +411,7 @@ def _normalise_balances(
         if not isinstance(row, Mapping):
             continue
         venue_name = _normalise_venue(row.get("venue") or row.get("exchange"))
-        asset_name = _normalise_symbol(
-            row.get("asset") or row.get("currency") or row.get("symbol")
-        )
+        asset_name = _normalise_symbol(row.get("asset") or row.get("currency") or row.get("symbol"))
         if not venue_name or not asset_name:
             continue
         amount = (
@@ -428,7 +424,9 @@ def _normalise_balances(
             or row.get("free")
             or row.get("availableBalance")
         )
-        entries[(venue_name, asset_name)] = entries.get((venue_name, asset_name), Decimal("0")) + _to_decimal(
+        entries[(venue_name, asset_name)] = entries.get(
+            (venue_name, asset_name), Decimal("0")
+        ) + _to_decimal(
             amount,
             default=Decimal("0"),
         )
@@ -465,16 +463,11 @@ def _normalise_orders(
         if not venue or not key:
             continue
         qty = _to_decimal(
-            row.get("qty")
-            or row.get("quantity")
-            or row.get("origQty")
-            or row.get("size"),
+            row.get("qty") or row.get("quantity") or row.get("origQty") or row.get("size"),
             default=Decimal("0"),
         )
         price = _to_decimal(
-            row.get("price")
-            or row.get("limit_price")
-            or row.get("avgPrice"),
+            row.get("price") or row.get("limit_price") or row.get("avgPrice"),
             default=None,
         )
         notional_val = row.get("notional") or row.get("notional_usd")
@@ -523,7 +516,9 @@ def _load_local_positions(ctx: object | None) -> Sequence[Mapping[str, object]]:
         return []
 
 
-def _load_remote_positions(ctx: object | None) -> Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]]:
+def _load_remote_positions(
+    ctx: object | None,
+) -> Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]]:
     provider = _resolve_provider(ctx, "remote_positions")
     if provider is not None:
         return provider
@@ -598,9 +593,15 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
     if recon_cfg is None:
         return config
 
-    epsilon_position = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_position"), config.epsilon_position)
-    epsilon_balance = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_balance"), config.epsilon_balance)
-    epsilon_notional = _coerce_decimal(_cfg_get(recon_cfg, "epsilon_notional"), config.epsilon_notional)
+    epsilon_position = _coerce_decimal(
+        _cfg_get(recon_cfg, "epsilon_position"), config.epsilon_position
+    )
+    epsilon_balance = _coerce_decimal(
+        _cfg_get(recon_cfg, "epsilon_balance"), config.epsilon_balance
+    )
+    epsilon_notional = _coerce_decimal(
+        _cfg_get(recon_cfg, "epsilon_notional"), config.epsilon_notional
+    )
     balance_warn = _coerce_decimal(_cfg_get(recon_cfg, "balance_warn_usd"), config.balance_warn_usd)
     balance_critical = _coerce_decimal(
         _cfg_get(recon_cfg, "balance_critical_usd"),
@@ -619,9 +620,7 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
     auto_hold_bool = bool(auto_hold) if auto_hold is not None else config.auto_hold_on_critical
     order_missing_raw = _cfg_get(recon_cfg, "order_critical_missing")
     order_missing_bool = (
-        bool(order_missing_raw)
-        if order_missing_raw is not None
-        else config.order_critical_missing
+        bool(order_missing_raw) if order_missing_raw is not None else config.order_critical_missing
     )
 
     return _ReconConfig(
@@ -725,10 +724,14 @@ def detect_position_drifts(
             and remote_qty != 0
             and (local_qty > 0 > remote_qty or local_qty < 0 < remote_qty)
         )
-        severity = "CRITICAL" if sign_mismatch else _threshold_classification(
-            delta,
-            warn=config.position_size_warn,
-            critical=config.position_size_critical,
+        severity = (
+            "CRITICAL"
+            if sign_mismatch
+            else _threshold_classification(
+                delta,
+                warn=config.position_size_warn,
+                critical=config.position_size_critical,
+            )
         )
         if severity == "INFO":
             continue
@@ -754,8 +757,12 @@ def detect_position_drifts(
 
 
 def detect_order_drifts(
-    local_orders: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
-    remote_orders: Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None,
+    local_orders: (
+        Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None
+    ),
+    remote_orders: (
+        Sequence[Mapping[str, object]] | Mapping[tuple[str, str], Mapping[str, object]] | None
+    ),
     cfg: object | None,
 ) -> list[ReconDrift]:
     """Detect mismatches between local open orders and exchange view."""

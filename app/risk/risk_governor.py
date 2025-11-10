@@ -154,7 +154,9 @@ class RiskCaps:
         key = _normalise_strategy(strategy)
         if key is None:
             return self.per_strategy_positions.get("__default__")
-        return self.per_strategy_positions.get(key) or self.per_strategy_positions.get("__default__")
+        return self.per_strategy_positions.get(key) or self.per_strategy_positions.get(
+            "__default__"
+        )
 
 
 class VelocityWindow:
@@ -183,7 +185,9 @@ class VelocityWindow:
         return orders, cancels, notional
 
     # ------------------------------------------------------------------
-    def record(self, *, orders: int = 0, cancels: int = 0, notional: float = 0.0) -> tuple[int, int, float]:
+    def record(
+        self, *, orders: int = 0, cancels: int = 0, notional: float = 0.0
+    ) -> tuple[int, int, float]:
         now = self._clock()
         entry = (
             now,
@@ -375,11 +379,15 @@ class RiskGovernor:
                     if key is None:
                         continue
                     try:
-                        strategy_notional[key] = max(float(payload.get("open_notional", 0.0) or 0.0), 0.0)
+                        strategy_notional[key] = max(
+                            float(payload.get("open_notional", 0.0) or 0.0), 0.0
+                        )
                     except (TypeError, ValueError):
                         continue
                     try:
-                        strategy_positions[key] = max(int(float(payload.get("open_positions", 0) or 0)), 0)
+                        strategy_positions[key] = max(
+                            int(float(payload.get("open_positions", 0) or 0)), 0
+                        )
                     except (TypeError, ValueError):
                         strategy_positions[key] = 0
                 if strategy_notional:
@@ -446,7 +454,10 @@ class RiskGovernor:
             )
             limit_strategy_notional = self._caps.strategy_notional_limit(strategy)
             projected_strategy_notional = current_strategy_notional + notional
-            if limit_strategy_notional is not None and projected_strategy_notional > limit_strategy_notional:
+            if (
+                limit_strategy_notional is not None
+                and projected_strategy_notional > limit_strategy_notional
+            ):
                 return "CAP::STRATEGY_NOTIONAL", {
                     "strategy": strategy,
                     "current": current_strategy_notional,
@@ -458,7 +469,10 @@ class RiskGovernor:
             current_positions = max(int(float(per_strategy_positions.get(strategy, 0) or 0)), 0)
             limit_strategy_positions = self._caps.strategy_position_limit(strategy)
             projected_strategy_positions = current_positions + positions_delta
-            if limit_strategy_positions is not None and projected_strategy_positions > limit_strategy_positions:
+            if (
+                limit_strategy_positions is not None
+                and projected_strategy_positions > limit_strategy_positions
+            ):
                 return "CAP::STRATEGY_POSITIONS", {
                     "strategy": strategy,
                     "current": current_positions,
@@ -484,7 +498,9 @@ class RiskGovernor:
 
         return None, {}
 
-    def _check_velocity(self, operation: str, notional: float) -> tuple[str | None, Dict[str, object]]:
+    def _check_velocity(
+        self, operation: str, notional: float
+    ) -> tuple[str | None, Dict[str, object]]:
         delta_orders = 0
         delta_cancels = 0
         delta_notional = 0.0
@@ -810,7 +826,9 @@ class SlidingRiskGovernor:
         self._error_breakdown: Counter[str] = Counter()
         self._current_window_start: float | None = None
         self._current_window_throttled: bool = False
-        self._window_history: Deque[_WindowHistoryEntry] = deque(maxlen=max(self._config.hold_after_windows + 1, 4))
+        self._window_history: Deque[_WindowHistoryEntry] = deque(
+            maxlen=max(self._config.hold_after_windows + 1, 4)
+        )
         self._last_snapshot: Dict[str, object] = {}
         self._last_throttle_reason: str | None = None
         self._last_auto_hold_window: float | None = None
@@ -921,16 +939,22 @@ class SlidingRiskGovernor:
         elif window_start != self._current_window_start:
             increment_risk_window(self._current_window_throttled)
             self._window_history.append(
-                _WindowHistoryEntry(start=self._current_window_start, throttled=self._current_window_throttled)
+                _WindowHistoryEntry(
+                    start=self._current_window_start, throttled=self._current_window_throttled
+                )
             )
             self._current_window_start = window_start
             self._current_window_throttled = throttled
         else:
             self._current_window_throttled = self._current_window_throttled or throttled
 
-        history: Deque[_WindowHistoryEntry] = deque(self._window_history, maxlen=self._window_history.maxlen)
+        history: Deque[_WindowHistoryEntry] = deque(
+            self._window_history, maxlen=self._window_history.maxlen
+        )
         history.append(
-            _WindowHistoryEntry(start=self._current_window_start, throttled=self._current_window_throttled)
+            _WindowHistoryEntry(
+                start=self._current_window_start, throttled=self._current_window_throttled
+            )
         )
         if self._config.hold_after_windows > 0 and len(history) >= self._config.hold_after_windows:
             tail = list(history)[-self._config.hold_after_windows :]
@@ -980,7 +1004,9 @@ def _normalise_category(category: str) -> str:
     return text or _ORDER_ERROR
 
 
-def _resolve_broker_state(snapshot: BrokerStateSnapshot, venue: str | None) -> tuple[str, str | None]:
+def _resolve_broker_state(
+    snapshot: BrokerStateSnapshot, venue: str | None
+) -> tuple[str, str | None]:
     venue_key = (venue or "").strip().lower() or None
     if venue_key is not None:
         state = snapshot.state_for(venue_key)
@@ -996,7 +1022,9 @@ _GOVERNOR_SINGLETON: SlidingRiskGovernor | None = None
 _GOVERNOR_LOCK = threading.RLock()
 
 
-def configure_risk_governor(*, clock: Callable[[], float] | None = None, config: Mapping[str, object] | None = None) -> None:
+def configure_risk_governor(
+    *, clock: Callable[[], float] | None = None, config: Mapping[str, object] | None = None
+) -> None:
     """Initialise the risk governor singleton with the provided configuration."""
 
     settings = RiskGovernorConfig.from_mapping(config)
@@ -1023,6 +1051,7 @@ def reset_risk_governor_for_tests() -> None:
 # ----------------------------------------------------------------------
 # Convenience recorders used by order flows/tests
 # ----------------------------------------------------------------------
+
 
 def record_order_success(*, venue: str | None = None, category: str = _ORDER_OK) -> None:
     governor = get_risk_governor()

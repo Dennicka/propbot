@@ -67,7 +67,9 @@ def _current_limits(overrides: Mapping[str, object] | None = None) -> dict[str, 
     if overrides:
         for key, value in overrides.items():
             if key.upper() == "MAX_TOTAL_NOTIONAL_USDT":
-                payload["MAX_TOTAL_NOTIONAL_USDT"] = _as_float(value, payload["MAX_TOTAL_NOTIONAL_USDT"])
+                payload["MAX_TOTAL_NOTIONAL_USDT"] = _as_float(
+                    value, payload["MAX_TOTAL_NOTIONAL_USDT"]
+                )
             elif key.upper() == "MAX_OPEN_POSITIONS":
                 payload["MAX_OPEN_POSITIONS"] = _as_int(value, payload["MAX_OPEN_POSITIONS"])
     return dict(payload)
@@ -112,7 +114,9 @@ def generate_risk_advice(
 ) -> dict[str, object]:
     cfg = config or RiskAdvisorConfig()
     if cfg.window <= 0:
-        windowed: list[Mapping[str, object]] = [row for row in snapshots if isinstance(row, Mapping)]
+        windowed: list[Mapping[str, object]] = [
+            row for row in snapshots if isinstance(row, Mapping)
+        ]
     else:
         windowed = [row for row in snapshots[: cfg.window] if isinstance(row, Mapping)]
     limits = _current_limits(current_limits)
@@ -127,7 +131,11 @@ def generate_risk_advice(
         "recommend_dry_run_mode": bool(dry_run_mode),
         "analysis_window": len(windowed),
         "recommendation": "maintain",
-        "reason": "Insufficient data to adjust limits." if not windowed else "Signals mixed; keep limits unchanged for now.",
+        "reason": (
+            "Insufficient data to adjust limits."
+            if not windowed
+            else "Signals mixed; keep limits unchanged for now."
+        ),
     }
 
     if not windowed:
@@ -186,7 +194,9 @@ def generate_risk_advice(
             loosened_notional = round(max_notional * (1.0 + cfg.loosen_pct), 2)
         loosened_positions = max_positions
         if max_positions > 0:
-            loosened_positions = max(max_positions + 1, math.ceil(max_positions * (1.0 + cfg.loosen_pct)))
+            loosened_positions = max(
+                max_positions + 1, math.ceil(max_positions * (1.0 + cfg.loosen_pct))
+            )
         base_response.update(
             {
                 "suggested_max_notional": loosened_notional,

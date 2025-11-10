@@ -8,13 +8,18 @@ import time
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import httpx
+
 try:  # pragma: no cover - shim used when requests is unavailable
     import requests
+
     RequestError = requests.RequestException
 except ImportError:  # pragma: no cover
+
     class _RequestsShim:
         @staticmethod
-        def get(url: str, params: Dict[str, str] | None = None, timeout: float | None = None) -> httpx.Response:
+        def get(
+            url: str, params: Dict[str, str] | None = None, timeout: float | None = None
+        ) -> httpx.Response:
             return httpx.get(url, params=params, timeout=timeout)
 
     requests = _RequestsShim()
@@ -64,9 +69,7 @@ class BinanceUMClient:
         self._client: Optional[httpx.Client] = None
         store_key, store_secret = _store_credentials()
         env_key = os.getenv("BINANCE_UM_API_KEY_TESTNET") if store_key is None else None
-        env_secret = (
-            os.getenv("BINANCE_UM_API_SECRET_TESTNET") if store_secret is None else None
-        )
+        env_secret = os.getenv("BINANCE_UM_API_SECRET_TESTNET") if store_secret is None else None
         self._api_key = store_key or env_key
         self._api_secret = store_secret or env_secret
         self._watchdog = get_broker_watchdog()
@@ -129,7 +132,9 @@ class BinanceUMClient:
             self._watchdog.record_rest_ok(self.config.id)
             return response.json()
 
-    def _public_get(self, path: str, params: Dict[str, Any] | None = None) -> Dict[str, Any] | list[Any]:
+    def _public_get(
+        self, path: str, params: Dict[str, Any] | None = None
+    ) -> Dict[str, Any] | list[Any]:
         client = self._ensure_http()
         try:
             maybe_raise_rest_timeout(context="binance_um.public_get")
@@ -312,7 +317,9 @@ class BinanceUMClient:
         data = self._signed_request("GET", "/fapi/v1/openOrders", params)
         return data  # type: ignore[return-value]
 
-    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> list[Dict[str, Any]]:
+    def recent_fills(
+        self, symbol: str | None = None, since: float | None = None
+    ) -> list[Dict[str, Any]]:
         if self.safe_mode:
             return self._fallback.recent_fills(symbol, since)
         params: Dict[str, Any] = {}

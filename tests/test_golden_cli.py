@@ -26,9 +26,7 @@ def test_snapshot_creates_baseline(tmp_path):
 
     assert baseline_path.exists()
     baseline_records = [
-        json.loads(line)
-        for line in baseline_path.read_text().splitlines()
-        if line.strip()
+        json.loads(line) for line in baseline_path.read_text().splitlines() if line.strip()
     ]
     assert all("ts" not in entry.get("payload", {}) for entry in baseline_records)
     assert {entry["event"] for entry in baseline_records} == {"route_decision", "order_submit"}

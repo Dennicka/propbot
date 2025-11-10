@@ -62,4 +62,3 @@ def load_latest_summary() -> BacktestReport | None:
 
 
 __all__ = ["BacktestReport", "load_latest_summary"]
-

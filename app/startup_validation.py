@@ -111,9 +111,7 @@ def _collect_errors() -> list[str]:
                     f"{description}: каталог {parent} отсутствует и не создаётся. "
                     "Примонтируй volume с записью или укажи другой путь."
                 )
-                LOGGER.error(
-                    "startup_validation mkdir failed path=%s error=%s", parent, exc
-                )
+                LOGGER.error("startup_validation mkdir failed path=%s error=%s", parent, exc)
                 return
         if not os.access(parent, os.W_OK | os.X_OK):
             fatal(
@@ -131,9 +129,7 @@ def _collect_errors() -> list[str]:
                 f"{description}: {target} недоступен для записи. "
                 "Выстави права на запись или укажи другой путь."
             )
-            LOGGER.error(
-                "startup_validation write probe failed path=%s error=%s", target, exc
-            )
+            LOGGER.error("startup_validation write probe failed path=%s error=%s", target, exc)
             return
         finally:
             if not existed_before:
@@ -153,9 +149,7 @@ def _collect_errors() -> list[str]:
         if profile_cfg.requires_secrets:
             secrets_path = os.getenv("SECRETS_STORE_PATH")
             if not secrets_path:
-                fatal(
-                    "PROFILE=live требует SECRETS_STORE_PATH с путём до JSON-хранилища ключей."
-                )
+                fatal("PROFILE=live требует SECRETS_STORE_PATH с путём до JSON-хранилища ключей.")
             else:
                 try:
                     store = SecretsStore(secrets_path)
@@ -276,9 +270,7 @@ def _collect_errors() -> list[str]:
     )
     require_path_defined(
         "POSITIONS_STORE_PATH",
-        hint=(
-            "POSITIONS_STORE_PATH пуст. Пропиши файл для positions_store с сохранением на диск."
-        ),
+        hint=("POSITIONS_STORE_PATH пуст. Пропиши файл для positions_store с сохранением на диск."),
     )
     require_path_defined(
         "PNL_HISTORY_PATH",
@@ -294,9 +286,7 @@ def _collect_errors() -> list[str]:
     )
     require_path_defined(
         "OPS_ALERTS_FILE",
-        hint=(
-            "OPS_ALERTS_FILE пуст. Укажи путь для журнала ops_alerts на persistent storage."
-        ),
+        hint=("OPS_ALERTS_FILE пуст. Укажи путь для журнала ops_alerts на persistent storage."),
     )
     ensure_path_writable(
         "RUNTIME_STATE_PATH",

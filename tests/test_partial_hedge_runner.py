@@ -40,7 +40,9 @@ async def test_runner_dry_run_only_records_plan(monkeypatch):
         captured_orders.append(list(orders))
         return []
 
-    dummy_state = SimpleNamespace(control=SimpleNamespace(safe_mode=False, two_man_rule=False, approvals={}))
+    dummy_state = SimpleNamespace(
+        control=SimpleNamespace(safe_mode=False, two_man_rule=False, approvals={})
+    )
     monkeypatch.setattr(partial_hedge_runner, "get_state", lambda: dummy_state)
     monkeypatch.setattr(partial_hedge_runner, "is_hold_active", lambda: False)
     monkeypatch.setattr(partial_hedge_runner, "register_order_attempt", lambda **_: None)
@@ -120,7 +122,11 @@ async def test_runner_triggers_auto_hold_after_repeated_failures(monkeypatch):
     monkeypatch.setattr(partial_hedge_runner, "is_hold_active", lambda: False)
     monkeypatch.setattr(partial_hedge_runner, "register_order_attempt", lambda **_: None)
     engaged = []
-    monkeypatch.setattr(partial_hedge_runner, "engage_safety_hold", lambda reason, source=None: engaged.append((reason, source)))
+    monkeypatch.setattr(
+        partial_hedge_runner,
+        "engage_safety_hold",
+        lambda reason, source=None: engaged.append((reason, source)),
+    )
 
     async def failing_executor(orders):
         raise RuntimeError("insufficient balance")

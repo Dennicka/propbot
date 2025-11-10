@@ -261,12 +261,16 @@ def _trend_summary(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     current_pnl = _coerce_float(latest.get("unrealized_pnl_total"))
     current_exposure = _coerce_float(latest.get("total_exposure_usd_total"))
     previous_pnl = _coerce_float(previous.get("unrealized_pnl_total")) if previous else None
-    previous_exposure = _coerce_float(previous.get("total_exposure_usd_total")) if previous else None
+    previous_exposure = (
+        _coerce_float(previous.get("total_exposure_usd_total")) if previous else None
+    )
 
     pnl_delta = None if previous is None else current_pnl - (previous_pnl or 0.0)
     exposure_delta = None if previous is None else current_exposure - (previous_exposure or 0.0)
 
-    simulated_payload = latest.get("simulated") if isinstance(latest.get("simulated"), Mapping) else {}
+    simulated_payload = (
+        latest.get("simulated") if isinstance(latest.get("simulated"), Mapping) else {}
+    )
 
     return {
         "history": [dict(entry) for entry in history if isinstance(entry, Mapping)],
@@ -409,9 +413,7 @@ def _scanner_health(app) -> Dict[str, Any]:
 def _risk_limits_snapshot() -> Dict[str, float]:
     return {
         "MAX_OPEN_POSITIONS": float(_env_int("MAX_OPEN_POSITIONS", 3)),
-        "MAX_NOTIONAL_PER_POSITION_USDT": _env_float(
-            "MAX_NOTIONAL_PER_POSITION_USDT", 50_000.0
-        ),
+        "MAX_NOTIONAL_PER_POSITION_USDT": _env_float("MAX_NOTIONAL_PER_POSITION_USDT", 50_000.0),
         "MAX_TOTAL_NOTIONAL_USDT": _env_float("MAX_TOTAL_NOTIONAL_USDT", 150_000.0),
         "MAX_TOTAL_NOTIONAL_USD": _env_float("MAX_TOTAL_NOTIONAL_USD", 0.0),
         "MAX_LEVERAGE": _env_float("MAX_LEVERAGE", 5.0),
@@ -460,7 +462,14 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             "generated_at": _fmt(datetime.now(timezone.utc)),
             "by_strategy": {},
             "by_venue": {},
-            "totals": {"realized": 0.0, "unrealized": 0.0, "fees": 0.0, "rebates": 0.0, "funding": 0.0, "net": 0.0},
+            "totals": {
+                "realized": 0.0,
+                "unrealized": 0.0,
+                "fees": 0.0,
+                "rebates": 0.0,
+                "funding": 0.0,
+                "net": 0.0,
+            },
             "meta": {"error": "unavailable"},
         }
     risk_snapshot = await build_risk_snapshot()
@@ -476,9 +485,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     tracker_simulated_excluded = tracker.exclude_simulated_entries()
     strategy_status_snapshot = build_strategy_status()
     safety_payload = _safety_snapshot(state)
-    persisted_safety = (
-        persisted.get("safety") if isinstance(persisted, Mapping) else None
-    )
+    persisted_safety = persisted.get("safety") if isinstance(persisted, Mapping) else None
     if isinstance(persisted_safety, Mapping):
         for key, value in persisted_safety.items():
             safety_payload.setdefault(key, value)
@@ -530,9 +537,13 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         if kind not in {"watchdog_alert", "watchdog_status"}:
             continue
         extra_payload = entry.get("extra") if isinstance(entry.get("extra"), Mapping) else {}
-        exchange_value = extra_payload.get("exchange") if isinstance(extra_payload, Mapping) else None
+        exchange_value = (
+            extra_payload.get("exchange") if isinstance(extra_payload, Mapping) else None
+        )
         reason_value = extra_payload.get("reason") if isinstance(extra_payload, Mapping) else None
-        timestamp_value = extra_payload.get("timestamp") if isinstance(extra_payload, Mapping) else None
+        timestamp_value = (
+            extra_payload.get("timestamp") if isinstance(extra_payload, Mapping) else None
+        )
         last_watchdog_alert = {
             "exchange": str(exchange_value or entry.get("exchange") or ""),
             "reason": str(reason_value or entry.get("text") or ""),
@@ -554,7 +565,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     safety_payload["risk_throttle_reason"] = throttle_reason
     safety_payload["risk_throttled"] = risk_throttled
     safety_payload["hold_reason_display"] = hold_reason_display
-    risk_section = safety_payload.get("risk") if isinstance(safety_payload.get("risk"), Mapping) else {}
+    risk_section = (
+        safety_payload.get("risk") if isinstance(safety_payload.get("risk"), Mapping) else {}
+    )
     governor_snapshot = risk_section.get("governor") if isinstance(risk_section, Mapping) else None
     success_rate_1h: float | None = None
     if isinstance(governor_snapshot, Mapping):
@@ -635,9 +648,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         display_detail = detail or hold_reason_display or hold_reason
         exchange_watchdog_hold_reason = display_detail
         if display_detail:
-            summary_highlights.append(
-                f"Auto-HOLD by exchange watchdog: {display_detail}"
-            )
+            summary_highlights.append(f"Auto-HOLD by exchange watchdog: {display_detail}")
     elif not watchdog_status.get("overall_ok", True):
         summary_highlights.append("Exchange watchdog reports degraded venues")
     partial_summary = get_partial_rebalance_summary()
@@ -740,7 +751,9 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
                 "realized": realized_value,
                 "cap": cap_value,
             }
-            if not lowered_reason.startswith("exchange_watchdog:") and watchdog_status.get("overall_ok", True):
+            if not lowered_reason.startswith("exchange_watchdog:") and watchdog_status.get(
+                "overall_ok", True
+            ):
                 summary_highlights.append(
                     f"Auto-HOLD by Daily Loss Cap — {auto_hold_daily_loss['message']}"
                 )
@@ -877,9 +890,11 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             "reason": guard_reason,
             "context": asdict(guard_context),
         },
-        "last_pretrade_block": dict(state.safety.last_pretrade_block)
-        if isinstance(state.safety.last_pretrade_block, Mapping)
-        else None,
+        "last_pretrade_block": (
+            dict(state.safety.last_pretrade_block)
+            if isinstance(state.safety.last_pretrade_block, Mapping)
+            else None
+        ),
         "pnl_history": pnl_history,
         "pnl_trend": pnl_trend,
         "pnl_snapshot": pnl_snapshot,
@@ -999,7 +1014,7 @@ def _extra_block(extra: object) -> str:
         text = json.dumps(payload, sort_keys=True)
     except (TypeError, ValueError):
         text = str(payload)
-    return f"<div style=\"font-size:0.8rem;color:#4b5563;margin-top:0.25rem;\">{escape(text)}</div>"
+    return f'<div style="font-size:0.8rem;color:#4b5563;margin-top:0.25rem;">{escape(text)}</div>'
 
 
 def _operator_action_details(details: object) -> str:
@@ -1087,9 +1102,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         last_backtest_summary = {}
     last_backtest_generated = (
-        last_backtest_payload.get("generated_at")
-        or last_backtest_summary.get("generated_at")
-        or ""
+        last_backtest_payload.get("generated_at") or last_backtest_summary.get("generated_at") or ""
     )
     last_backtest_json = last_backtest_payload.get("json_path")
     last_backtest_csv = last_backtest_payload.get("csv_path")
@@ -1124,7 +1137,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     freeze_payload = context.get("freeze") or {}
     if not isinstance(freeze_payload, Mapping):
         freeze_payload = {}
-    freeze_rules = freeze_payload.get("rules") if isinstance(freeze_payload.get("rules"), Sequence) else []
+    freeze_rules = (
+        freeze_payload.get("rules") if isinstance(freeze_payload.get("rules"), Sequence) else []
+    )
     liquidity_blocked = bool(liquidity.get("liquidity_blocked"))
     liquidity_reason = liquidity.get("reason") or ""
     liquidity_snapshot = liquidity.get("per_venue") or {}
@@ -1158,9 +1173,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             ratio_pct = nearest_ratio * 100.0
         except Exception:  # pragma: no cover - defensive
             ratio_pct = 0.0
-        exposure_caps_summary = (
-            f"{nearest_symbol}: {_fmt(nearest_current)} / {_fmt(nearest_cap)} ({ratio_pct:.1f}% of cap)"
-        )
+        exposure_caps_summary = f"{nearest_symbol}: {_fmt(nearest_current)} / {_fmt(nearest_cap)} ({ratio_pct:.1f}% of cap)"
     last_pretrade_block = safety.get("last_pretrade_block") if isinstance(safety, Mapping) else None
     exposure_blocked = False
     if isinstance(last_pretrade_block, Mapping):
@@ -1315,16 +1328,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         else []
     )
     partial_hedge_totals = (
-        partial_hedge.get("totals")
-        if isinstance(partial_hedge.get("totals"), Mapping)
-        else {}
+        partial_hedge.get("totals") if isinstance(partial_hedge.get("totals"), Mapping) else {}
     )
     partial_hedge_notional = partial_hedge_totals.get("notional_usdt") or 0.0
     partial_hedge_order_count = partial_hedge_totals.get("orders") or 0
     partial_hedge_generated = (
-        partial_hedge_plan.get("generated_ts")
-        or partial_hedge.get("last_snapshot_ts")
-        or ""
+        partial_hedge_plan.get("generated_ts") or partial_hedge.get("last_snapshot_ts") or ""
     )
     partial_hedge_execution = (
         partial_hedge.get("last_execution")
@@ -1404,16 +1413,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if not isinstance(risk_skip_counts, Mapping):
         risk_skip_counts = {}
     accounting_totals_raw = risk_accounting_snapshot.get("totals")
-    accounting_totals = (
-        accounting_totals_raw
-        if isinstance(accounting_totals_raw, Mapping)
-        else {}
-    )
+    accounting_totals = accounting_totals_raw if isinstance(accounting_totals_raw, Mapping) else {}
     accounting_per_strategy_raw = risk_accounting_snapshot.get("per_strategy")
     accounting_per_strategy = (
-        accounting_per_strategy_raw
-        if isinstance(accounting_per_strategy_raw, Mapping)
-        else {}
+        accounting_per_strategy_raw if isinstance(accounting_per_strategy_raw, Mapping) else {}
     )
     accounting_simulated = accounting_totals.get("simulated")
     if not isinstance(accounting_simulated, Mapping):
@@ -1426,9 +1429,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         strategy_risk_snapshot = {}
     strategy_risk_strategies_raw = strategy_risk_snapshot.get("strategies") or {}
     strategy_risk_strategies = (
-        strategy_risk_strategies_raw
-        if isinstance(strategy_risk_strategies_raw, Mapping)
-        else {}
+        strategy_risk_strategies_raw if isinstance(strategy_risk_strategies_raw, Mapping) else {}
     )
     strategy_risk_ts_raw = strategy_risk_snapshot.get("timestamp")
     if isinstance(strategy_risk_ts_raw, (int, float)):
@@ -1454,9 +1455,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     readiness_label = "YES" if live_ready else "NO"
     readiness_class = "status-ok" if live_ready else "status-bad"
     readiness_reasons = [
-        str(reason).strip()
-        for reason in live_readiness.get("reasons", [])
-        if str(reason).strip()
+        str(reason).strip() for reason in live_readiness.get("reasons", []) if str(reason).strip()
     ]
     raw_fencing = live_readiness.get("fencing_id")
     fencing_label = str(raw_fencing).strip() if isinstance(raw_fencing, str) else None
@@ -1481,11 +1480,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     auto_hold_daily_loss = context.get("auto_hold_daily_loss") or {}
     if not isinstance(auto_hold_daily_loss, Mapping):
         auto_hold_daily_loss = {}
-    hold_reason_raw = str(
-        safety.get("hold_reason_raw")
-        or safety.get("hold_reason")
-        or ""
-    ).strip()
+    hold_reason_raw = str(safety.get("hold_reason_raw") or safety.get("hold_reason") or "").strip()
     hold_reason_display = safety.get("hold_reason_display") or _format_hold_reason(hold_reason_raw)
     hold_active_flag = bool(safety.get("hold_active"))
     hold_reason_upper = hold_reason_raw.upper()
@@ -1504,9 +1499,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     parts: list[str] = []
     parts.append(
-        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />'
         "<title>Operator Dashboard</title>"
-        f"<link rel=\"stylesheet\" href=\"/static/dashboard.css?v={asset_version}\" />"
+        f'<link rel="stylesheet" href="/static/dashboard.css?v={asset_version}" />'
         "<style>body{font-family:Arial,sans-serif;margin:2rem;background:#f8f9fb;color:#222;}"
         "h1,h2{color:#14365d;}table{border-collapse:collapse;width:100%;margin-bottom:2rem;background:#fff;}"
         "th,td{border:1px solid #d0d5dd;padding:0.5rem 0.75rem;text-align:left;vertical-align:top;}"
@@ -1651,7 +1646,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         ".auto-hold-banner .reason{font-weight:600;font-size:0.95rem;}"
         "button:disabled{background:#9ca3af;cursor:not-allowed;}"
         "input:disabled{background:#e5e7eb;color:#6b7280;cursor:not-allowed;}"
-        f"</style></head><body data-dashboard-build=\"{asset_version_attr}\">"
+        f'</style></head><body data-dashboard-build="{asset_version_attr}">'
     )
     parts.append(
         f"<h1>Operator Dashboard</h1><p>Build Version: <strong>{_fmt(context.get('build_version'))}</strong></p>"
@@ -1665,21 +1660,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         f"order_delay_ms={_fmt(chaos_info.get('order_delay_ms'))}"
     )
     parts.append(
-        "<p class=\"chaos-profile\">"
+        '<p class="chaos-profile">'
         f"Chaos profile: <strong>{_fmt(chaos_profile)}</strong> "
-        f"<span class=\"{chaos_status_class}\">{_fmt(chaos_status_text)}</span> "
-        f"<span class=\"chaos-params\">({chaos_params_text})</span>"
+        f'<span class="{chaos_status_class}">{_fmt(chaos_status_text)}</span> '
+        f'<span class="chaos-params">({chaos_params_text})</span>'
         "</p>"
     )
 
     status_pills_markup = [
-        f"<span class=\"status-pill {leader_class}\"><span class=\"label\">LEADER:</span> {_fmt(leader_label)}</span>",
-        f"<span class=\"status-pill status-info\"><span class=\"label\">FENCING_ID:</span> {_fmt(fencing_label)}</span>",
-        f"<span class=\"status-pill status-info\"><span class=\"label\">HB age:</span> {_fmt(hb_age_label)}</span>",
-        f"<span class=\"status-pill {readiness_class}\"{readiness_title_attr}><span class=\"label\">LIVE READY:</span> {_fmt(readiness_label)}</span>",
+        f'<span class="status-pill {leader_class}"><span class="label">LEADER:</span> {_fmt(leader_label)}</span>',
+        f'<span class="status-pill status-info"><span class="label">FENCING_ID:</span> {_fmt(fencing_label)}</span>',
+        f'<span class="status-pill status-info"><span class="label">HB age:</span> {_fmt(hb_age_label)}</span>',
+        f'<span class="status-pill {readiness_class}"{readiness_title_attr}><span class="label">LIVE READY:</span> {_fmt(readiness_label)}</span>',
     ]
     status_pills_markup.append(
-        "<span class=\"status-pill {cls}\"{attr}><span class=\"label\">ACCOUNT HEALTH:</span> {state}</span>".format(
+        '<span class="status-pill {cls}"{attr}><span class="label">ACCOUNT HEALTH:</span> {state}</span>'.format(
             cls=account_health_css,
             attr=health_tooltip_attr,
             state=_fmt(account_health_worst),
@@ -1695,7 +1690,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     }.get(recon_state_label, "status-pill status-info")
     recon_label = f"{_fmt(recon_state_label)} ({_fmt(recon_widget_mismatches)})"
     status_pills_markup.append(
-        f"<span class=\"{recon_css}\"><span class=\"label\">RECON:</span> {recon_label}</span>"
+        f'<span class="{recon_css}"><span class="label">RECON:</span> {recon_label}</span>'
     )
     if hold_active_flag and (
         hold_reason_upper.startswith("SLO_CRITICAL::")
@@ -1703,35 +1698,31 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     ):
         badge_text = hold_reason_display or hold_reason_raw or "AUTO-HOLD active"
         status_pills_markup.append(
-            f"<span class=\"status-pill status-bad\"><span class=\"label\">AUTO-HOLD:</span> {_fmt(badge_text)}</span>"
+            f'<span class="status-pill status-bad"><span class="label">AUTO-HOLD:</span> {_fmt(badge_text)}</span>'
         )
 
     parts.append(
-        "<div class=\"operator-meta\">"
-        f"<div><span class=\"label\">Operator:</span> <strong>{_fmt(operator_name)}</strong></div>"
-        f"<div><span class=\"label\">Role:</span> <span class=\"role-badge role-{operator_role}\">{_fmt(operator_role_label)}</span></div>"
+        '<div class="operator-meta">'
+        f'<div><span class="label">Operator:</span> <strong>{_fmt(operator_name)}</strong></div>'
+        f'<div><span class="label">Role:</span> <span class="role-badge role-{operator_role}">{_fmt(operator_role_label)}</span></div>'
         f"<div class=\"status-pills\">{''.join(status_pills_markup)}</div>"
         "</div>"
     )
 
     if account_health_banner_text:
-        parts.append(
-            f"<div class=\"account-health-banner\">{_fmt(account_health_banner_text)}</div>"
-        )
+        parts.append(f'<div class="account-health-banner">{_fmt(account_health_banner_text)}</div>')
 
     if not is_operator:
         if is_auditor:
             banner_text = "AUDITOR ROLE — READ ONLY: trading controls are hidden."
         else:
             banner_text = "READ ONLY: you cannot change HOLD/RESUME/KILL."
-        parts.append(
-            f"<div class=\"read-only-banner\">{_fmt(banner_text)}</div>"
-        )
+        parts.append(f'<div class="read-only-banner">{_fmt(banner_text)}</div>')
 
     if show_recon_widget:
         status_display = _fmt(str(recon_widget_status or "DEGRADED"))
         parts.append("<!-- Reconciliation widget -->")
-        parts.append("<section id=\"reconciliation\">")
+        parts.append('<section id="reconciliation">')
         parts.append("<h3>Reconciliation status:</h3>")
         if recon_widget_summary:
             parts.append(f"<p>{_fmt(recon_widget_summary)}</p>")
@@ -1745,21 +1736,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append("</section>")
 
     for message in flash_messages:
-        parts.append(f"<div class=\"flash\">{_fmt(message)}</div>")
+        parts.append(f'<div class="flash">{_fmt(message)}</div>')
     for highlight in summary_highlights:
         parts.append(
-            "<div class=\"flash\" style=\"background:#fee2e2;border-color:#f87171;color:#7f1d1d;\">"
+            '<div class="flash" style="background:#fee2e2;border-color:#f87171;color:#7f1d1d;">'
             f"{_fmt(highlight)}"
             "</div>"
         )
 
     if freeze_payload.get("active"):
-        parts.append("<section class=\"risk-freeze\">")
+        parts.append('<section class="risk-freeze">')
         parts.append("<h3>Risk Freeze</h3>")
         if not freeze_rules:
             parts.append("<p>No active freeze rules.</p>")
         else:
-            parts.append("<ul class=\"risk-freeze-list\">")
+            parts.append('<ul class="risk-freeze-list">')
             for entry in freeze_rules:
                 if not isinstance(entry, Mapping):
                     continue
@@ -1769,11 +1760,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 timestamp_html = ""
                 if isinstance(ts_value, (int, float)):
                     ts_iso = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).isoformat()
-                    timestamp_html = f" <span class=\"freeze-ts\">{_fmt(ts_iso)}</span>"
+                    timestamp_html = f' <span class="freeze-ts">{_fmt(ts_iso)}</span>'
                 elif ts_value:
-                    timestamp_html = f" <span class=\"freeze-ts\">{_fmt(ts_value)}</span>"
+                    timestamp_html = f' <span class="freeze-ts">{_fmt(ts_value)}</span>'
                 parts.append(
-                    "<li><span class=\"freeze-scope\">{scope}</span>: "
+                    '<li><span class="freeze-scope">{scope}</span>: '
                     "<code>{reason}</code>{ts}</li>".format(
                         scope=scope_text or "unknown",
                         reason=reason_text or "unknown",
@@ -1785,15 +1776,15 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     if exchange_watchdog_reason:
         parts.append(
-            "<div class=\"watchdog-reason\"><strong>Exchange watchdog reason:</strong> "
+            '<div class="watchdog-reason"><strong>Exchange watchdog reason:</strong> '
             f"{_fmt(exchange_watchdog_reason)}</div>"
         )
 
     market_status_rows = context.get("market_status") or []
     if market_status_rows:
-        parts.append("<section class=\"market-status\">")
+        parts.append('<section class="market-status">')
         parts.append("<h3>Market data status</h3>")
-        parts.append("<ul class=\"market-status-list\">")
+        parts.append('<ul class="market-status-list">')
         for row in market_status_rows:
             venue = _fmt(row.get("venue"))
             symbol = _fmt(row.get("symbol"))
@@ -1844,9 +1835,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             css_class = status_classes.get(status_key, "")
             label = badge_labels.get(key, key.replace("_", " ").title())
             badge_nodes.append(
-                "<div class=\"runtime-badge {cls}\">"
-                "<span class=\"runtime-badge-label\">{label}</span>"
-                "<span class=\"runtime-badge-value\">{value}</span>"
+                '<div class="runtime-badge {cls}">'
+                '<span class="runtime-badge-label">{label}</span>'
+                '<span class="runtime-badge-value">{value}</span>'
                 "</div>".format(
                     cls=css_class,
                     label=_fmt(label),
@@ -1855,21 +1846,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         if badge_nodes:
             parts.append(
-                "<div class=\"runtime-badges\">"
-                "<div class=\"runtime-badges-header\"><h2>Runtime badges</h2></div>"
-                "<div class=\"runtime-badges-list\">"
-                + "".join(badge_nodes)
-                + "</div>"
+                '<div class="runtime-badges">'
+                '<div class="runtime-badges-header"><h2>Runtime badges</h2></div>'
+                '<div class="runtime-badges-list">' + "".join(badge_nodes) + "</div>"
                 "</div>"
             )
 
     if auto_hold_daily_loss:
         label = _fmt(auto_hold_daily_loss.get("label") or "AUTO-HOLD: DAILY LOSS CAP")
-        reason_text = auto_hold_daily_loss.get("message") or auto_hold_daily_loss.get("reason") or ""
+        reason_text = (
+            auto_hold_daily_loss.get("message") or auto_hold_daily_loss.get("reason") or ""
+        )
         parts.append(
-            "<div class=\"auto-hold-banner\">"
-            f"<span class=\"label\">{label}</span>"
-            f"<span class=\"reason\">{_fmt(reason_text)}</span>"
+            '<div class="auto-hold-banner">'
+            f'<span class="label">{label}</span>'
+            f'<span class="reason">{_fmt(reason_text)}</span>'
             "</div>"
         )
 
@@ -1885,40 +1876,38 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if autopilot_decision_ts:
         autopilot_details.append(f"decision_ts: {_fmt(autopilot_decision_ts)}")
     autopilot_html = [
-        "<div style=\"background:#fff;padding:1rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;\">",
+        '<div style="background:#fff;padding:1rem;border:1px solid #d0d5dd;margin-bottom:1.5rem;">',
         "<strong>Autopilot mode</strong>",
         f"<div style=\"margin-top:0.5rem;font-size:0.9rem;color:#1f2937;\">{' · '.join(autopilot_details)}</div>",
     ]
     if autopilot_enabled and autopilot_decision == "blocked_by_risk":
-        reason_text = _fmt(autopilot_decision_reason or autopilot_reason or 'risk block')
+        reason_text = _fmt(autopilot_decision_reason or autopilot_reason or "risk block")
         autopilot_html.append(
-            "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
-            "background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;\">"
+            '<div style="margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;'
+            'background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;">'
             f"AUTOPILOT blocked by risk — {reason_text}"
             "</div>"
         )
     elif autopilot_enabled and autopilot_armed:
         autopilot_html.append(
-            "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
-            "background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-weight:700;\">"
+            '<div style="margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;'
+            'background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-weight:700;">'
             "AUTOPILOT ARMED — trading WITHOUT human two-man approval"
             "</div>"
         )
     elif autopilot_enabled and autopilot_action == "refused":
         autopilot_html.append(
-            "<div style=\"margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;"
-            "background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;\">"
+            '<div style="margin-top:0.75rem;padding:0.75rem 1rem;border-radius:4px;'
+            'background:#fee2e2;border:1px solid #fca5a5;color:#b91c1c;font-weight:600;">'
             f"AUTOPILOT refused to arm — {_fmt(autopilot_reason or 'reason unknown')}"
             "</div>"
         )
     parts.append("".join(autopilot_html) + "</div>")
 
-    backtest_block = ["<div class=\"backtest-summary\"><h2>Last Backtest Summary</h2>"]
+    backtest_block = ['<div class="backtest-summary"><h2>Last Backtest Summary</h2>']
     if last_backtest_summary:
         if last_backtest_generated:
-            backtest_block.append(
-                f"<p class=\"meta\">Generated: {_fmt(last_backtest_generated)}</p>"
-            )
+            backtest_block.append(f'<p class="meta">Generated: {_fmt(last_backtest_generated)}</p>')
         metrics = [
             ("Attempts", "attempts"),
             ("Fills", "fills"),
@@ -1933,9 +1922,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         for label, key in metrics:
             value = last_backtest_summary.get(key)
             backtest_block.append(
-                "<tr><th>{}</th><td>{}</td></tr>".format(
-                    _fmt(label), _fmt(value)
-                )
+                "<tr><th>{}</th><td>{}</td></tr>".format(_fmt(label), _fmt(value))
             )
         backtest_block.append("</tbody></table>")
         link_pieces = []
@@ -1944,23 +1931,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         if last_backtest_csv:
             link_pieces.append(f"CSV: {_fmt(last_backtest_csv)}")
         if link_pieces:
-            backtest_block.append("<p class=\"meta\">" + " | ".join(link_pieces) + "</p>")
+            backtest_block.append('<p class="meta">' + " | ".join(link_pieces) + "</p>")
     else:
-        backtest_block.append(
-            "<p class=\"meta\">No backtest report has been generated yet.</p>"
-        )
+        backtest_block.append('<p class="meta">No backtest report has been generated yet.</p>')
     backtest_block.append("</div>")
     parts.append("".join(backtest_block))
 
     if tca_preview_error or tca_preview_payload:
-        preview_blocks: list[str] = ["<div class=\"tca-preview\"><h2>TCA Preview</h2>"]
+        preview_blocks: list[str] = ['<div class="tca-preview"><h2>TCA Preview</h2>']
         if tca_preview_error:
-            preview_blocks.append(f"<p class=\"note\">{_fmt(tca_preview_error)}</p>")
+            preview_blocks.append(f'<p class="note">{_fmt(tca_preview_error)}</p>')
         elif isinstance(tca_preview_payload, Mapping):
             qty_value = tca_preview_payload.get("qty")
             horizon_value = tca_preview_payload.get("horizon_min")
             preview_blocks.append(
-                "<p class=\"note\">Qty {qty} · Horizon {horizon} min</p>".format(
+                '<p class="note">Qty {qty} · Horizon {horizon} min</p>'.format(
                     qty=_fmt(qty_value), horizon=_fmt(horizon_value)
                 )
             )
@@ -1970,8 +1955,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 best_direction = best_route.get("direction")
 
                 def _leg_cell(payload: Mapping[str, object]) -> str:
-                    cost_payload = payload.get("cost") if isinstance(payload.get("cost"), Mapping) else {}
-                    breakdown = cost_payload.get("breakdown") if isinstance(cost_payload, Mapping) else {}
+                    cost_payload = (
+                        payload.get("cost") if isinstance(payload.get("cost"), Mapping) else {}
+                    )
+                    breakdown = (
+                        cost_payload.get("breakdown") if isinstance(cost_payload, Mapping) else {}
+                    )
                     execution = breakdown.get("execution") if isinstance(breakdown, Mapping) else {}
                     funding = breakdown.get("funding") if isinstance(breakdown, Mapping) else {}
                     mode = execution.get("mode")
@@ -2003,7 +1992,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                             venue=_fmt(payload.get("venue")),
                             mode=_fmt(mode).upper() or "N/A",
                         )
-                        + "<div class=\"note\">" + " | ".join(details) + "</div>"
+                        + '<div class="note">'
+                        + " | ".join(details)
+                        + "</div>"
                     )
 
                 preview_blocks.append(
@@ -2011,7 +2002,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 )
                 for route in routes:
                     direction = route.get("direction")
-                    row_class = " class=\"best\"" if direction == best_direction else ""
+                    row_class = ' class="best"' if direction == best_direction else ""
                     preview_blocks.append(
                         "<tr{cls}><td>{direction}</td><td>{bps}</td><td>{usdt}</td><td>{long}</td><td>{short}</td><td>{notional}</td></tr>".format(
                             cls=row_class,
@@ -2026,22 +2017,22 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 preview_blocks.append("</tbody></table>")
                 if best_direction:
                     preview_blocks.append(
-                        f"<p class=\"note\">Best route highlighted: {_fmt(best_direction)}</p>"
+                        f'<p class="note">Best route highlighted: {_fmt(best_direction)}</p>'
                     )
             else:
-                preview_blocks.append("<p class=\"note\">No venue routes evaluated.</p>")
+                preview_blocks.append('<p class="note">No venue routes evaluated.</p>')
         preview_blocks.append("</div>")
         parts.append("".join(preview_blocks))
 
     if smart_router_error or smart_router_preview:
-        router_blocks: list[str] = ["<div class=\"router-preview\"><h2>Router preview</h2>"]
+        router_blocks: list[str] = ['<div class="router-preview"><h2>Router preview</h2>']
         if smart_router_error:
-            router_blocks.append(f"<p class=\"note\">{_fmt(smart_router_error)}</p>")
+            router_blocks.append(f'<p class="note">{_fmt(smart_router_error)}</p>')
         elif isinstance(smart_router_preview, Mapping):
             qty_value = smart_router_preview.get("qty")
             side_value = smart_router_preview.get("side")
             router_blocks.append(
-                "<p class=\"note\">Side {side} · Qty {qty}</p>".format(
+                '<p class="note">Side {side} · Qty {qty}</p>'.format(
                     side=_fmt(side_value).upper() or "N/A",
                     qty=_fmt(qty_value),
                 )
@@ -2056,7 +2047,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
             for venue in venues:
                 payload = scores_payload.get(venue)
-                highlight = " class=\"best\"" if venue == best_venue else ""
+                highlight = ' class="best"' if venue == best_venue else ""
                 if isinstance(payload, Mapping):
                     score_value = _fmt(payload.get("score"))
                     base_cost = _fmt(payload.get("base_cost_usdt"))
@@ -2066,7 +2057,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                     ws_ms = _fmt(payload.get("ws_latency_ms"))
                     liquidity_value = _fmt(payload.get("book_liquidity_usdt"))
                 else:
-                    score_value = base_cost = impact_penalty = latency_penalty = rest_ms = ws_ms = liquidity_value = "n/a"
+                    score_value = base_cost = impact_penalty = latency_penalty = rest_ms = ws_ms = (
+                        liquidity_value
+                    ) = "n/a"
                 router_blocks.append(
                     (
                         "<tr{highlight}><th>{venue}</th><td>{score}</td><td>{base}</td><td>{impact}</td><td>{latency}</td><td>{rest}</td><td>{ws}</td><td>{liq}</td></tr>"
@@ -2086,7 +2079,6 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         router_blocks.append("</div>")
         parts.append("".join(router_blocks))
 
-
     strategy_pnl_tracker_snapshot = context.get("strategy_pnl_tracker_snapshot", {}) or {}
     if not isinstance(strategy_pnl_tracker_snapshot, Mapping):
         strategy_pnl_tracker_snapshot = {}
@@ -2105,20 +2097,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
     strategy_pnl_rows.sort(key=lambda row: row["realized_today"])
 
-    strategy_pnl_html = ["<div class=\"strategy-pnl\"><h2>Strategy PnL</h2>"]
+    strategy_pnl_html = ['<div class="strategy-pnl"><h2>Strategy PnL</h2>']
     if not strategy_pnl_rows:
-        strategy_pnl_html.append("<p class=\"note\">No realised fills recorded.</p>")
+        strategy_pnl_html.append('<p class="note">No realised fills recorded.</p>')
     else:
-        simulated_excluded = bool(
-            context.get("strategy_pnl_tracker_simulated_excluded", True)
-        )
+        simulated_excluded = bool(context.get("strategy_pnl_tracker_simulated_excluded", True))
         if simulated_excluded:
-            strategy_pnl_html.append(
-                "<p class=\"note\">Simulated (DRY_RUN) fills excluded.</p>"
-            )
+            strategy_pnl_html.append('<p class="note">Simulated (DRY_RUN) fills excluded.</p>')
         else:
             strategy_pnl_html.append(
-                "<p class=\"note\">Simulated (DRY_RUN) fills included in totals.</p>"
+                '<p class="note">Simulated (DRY_RUN) fills included in totals.</p>'
             )
         strategy_pnl_html.append(
             "<table><thead><tr><th>Strategy</th><th>Today</th><th>7d</th><th>MaxDD (7d)</th>"
@@ -2142,9 +2130,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         pnl_attribution = {}
 
     def _render_attribution_table(title: str, payload: Mapping[str, Any]) -> str:
-        table_parts = [f"<div class=\"pnl-attrib-table\"><h3>{_fmt(title)}</h3>"]
+        table_parts = [f'<div class="pnl-attrib-table"><h3>{_fmt(title)}</h3>']
         if not isinstance(payload, Mapping) or not payload:
-            table_parts.append("<p class=\"note\">No data available.</p>")
+            table_parts.append('<p class="note">No data available.</p>')
         else:
             table_parts.append(
                 "<table><thead><tr><th>Name</th><th>Realised</th><th>Unrealised</th>"
@@ -2172,7 +2160,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         table_parts.append("</div>")
         return "".join(table_parts)
 
-    attribution_html = ["<div class=\"pnl-attribution\"><h2>PnL Attribution</h2>"]
+    attribution_html = ['<div class="pnl-attribution"><h2>PnL Attribution</h2>']
     generated_at = pnl_attribution.get("generated_at")
     meta = pnl_attribution.get("meta") if isinstance(pnl_attribution.get("meta"), Mapping) else {}
     if generated_at:
@@ -2188,15 +2176,15 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 counts.append(f"{int(value)} {label}")
         counts_text = f" ({', '.join(counts)})" if counts else ""
         attribution_html.append(
-            f"<p class=\"note\">Snapshot at {_fmt(generated_at)}{counts_text}</p>"
+            f'<p class="note">Snapshot at {_fmt(generated_at)}{counts_text}</p>'
         )
     exclude_simulated = pnl_attribution.get("simulated_excluded")
     if exclude_simulated is None:
         exclude_simulated = meta.get("exclude_simulated")
     if exclude_simulated is False:
-        attribution_html.append("<p class=\"note\">Includes simulated (DRY_RUN) entries.</p>")
+        attribution_html.append('<p class="note">Includes simulated (DRY_RUN) entries.</p>')
     elif exclude_simulated:
-        attribution_html.append("<p class=\"note\">Simulated (DRY_RUN) entries excluded.</p>")
+        attribution_html.append('<p class="note">Simulated (DRY_RUN) entries excluded.</p>')
 
     attribution_html.append(
         _render_attribution_table("By strategy", pnl_attribution.get("by_strategy", {}))
@@ -2204,10 +2192,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     attribution_html.append(
         _render_attribution_table("By venue", pnl_attribution.get("by_venue", {}))
     )
-    totals = pnl_attribution.get("totals") if isinstance(pnl_attribution.get("totals"), Mapping) else {}
+    totals = (
+        pnl_attribution.get("totals") if isinstance(pnl_attribution.get("totals"), Mapping) else {}
+    )
     if totals:
         attribution_html.append(
-            "<div class=\"pnl-attrib-totals\"><table><thead><tr><th>Total realised</th><th>Total unrealised</th>"
+            '<div class="pnl-attrib-totals"><table><thead><tr><th>Total realised</th><th>Total unrealised</th>'
             "<th>Total fees</th><th>Total rebates</th><th>Total funding</th><th>Net</th></tr></thead><tbody>"
             "<tr><td>{realized}</td><td>{unrealized}</td><td>{fees}</td><td>{rebates}</td><td>{funding}</td><td>{net}</td></tr>"
             "</tbody></table></div>".format(
@@ -2237,18 +2227,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 "frozen": bool(entry.get("frozen")),
                 "freeze_reason": str(entry.get("freeze_reason") or ""),
                 "budget_blocked": bool(entry.get("budget_blocked")),
-                "consecutive_failures": _coerce_int(
-                    entry.get("consecutive_failures"), default=0
-                ),
+                "consecutive_failures": _coerce_int(entry.get("consecutive_failures"), default=0),
             }
         )
 
     strategy_performance_html = [
-        "<div class=\"strategy-performance\"><h2>Strategy Performance / Risk</h2>"
+        '<div class="strategy-performance"><h2>Strategy Performance / Risk</h2>'
     ]
     if not strategy_performance_rows:
         strategy_performance_html.append(
-            "<p class=\"note\">No strategy performance data available.</p>"
+            '<p class="note">No strategy performance data available.</p>'
         )
     else:
         strategy_performance_html.append(
@@ -2257,16 +2245,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<th>Freeze reason</th><th>Budget blocked?</th><th>Consecutive failures</th></tr></thead><tbody>"
         )
         for row in strategy_performance_rows:
-            row_class = " class=\"alert\"" if row["frozen"] or row["budget_blocked"] else ""
+            row_class = ' class="alert"' if row["frozen"] or row["budget_blocked"] else ""
             frozen_flag = (
-                "<span class=\"flag-true\">Yes</span>"
+                '<span class="flag-true">Yes</span>'
                 if row["frozen"]
-                else "<span class=\"flag-false\">No</span>"
+                else '<span class="flag-false">No</span>'
             )
             budget_flag = (
-                "<span class=\"flag-true\">Yes</span>"
+                '<span class="flag-true">Yes</span>'
                 if row["budget_blocked"]
-                else "<span class=\"flag-false\">No</span>"
+                else '<span class="flag-false">No</span>'
             )
             strategy_performance_html.append(
                 "<tr{row_class}><td>{name}</td><td>{today}</td><td>{total}</td>"
@@ -2287,13 +2275,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     parts.append("".join(strategy_performance_html))
 
-    strategy_risk_html = ["<div class=\"strategy-risk\"><h2>Strategy Risk / Breach status</h2>"]
+    strategy_risk_html = ['<div class="strategy-risk"><h2>Strategy Risk / Breach status</h2>']
     if strategy_risk_ts:
-        strategy_risk_html.append(
-            f"<p class=\"note\">Snapshot at {_fmt(strategy_risk_ts)}</p>"
-        )
+        strategy_risk_html.append(f'<p class="note">Snapshot at {_fmt(strategy_risk_ts)}</p>')
     if not strategy_risk_strategies:
-        strategy_risk_html.append("<p class=\"note\">No strategy risk data available.</p>")
+        strategy_risk_html.append('<p class="note">No strategy risk data available.</p>')
     else:
         strategy_risk_html.append(
             "<table><thead><tr><th>Strategy</th><th>Risk state</th><th>Daily loss (current / limit)</th>"
@@ -2342,18 +2328,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 status_label_parts.append('<span class="breach-alert">BREACH DETECTED</span>')
                 reasons = entry.get("breach_reasons") or []
                 status_label_parts.extend(
-                    f"<div class=\"risk-note\">{_fmt(reason)}</div>" for reason in reasons if reason
+                    f'<div class="risk-note">{_fmt(reason)}</div>' for reason in reasons if reason
                 )
             else:
                 status_label_parts.append('<span class="breach-ok">OK</span>')
             if freeze_reason:
                 if frozen:
                     status_label_parts.append(
-                        f"<div class=\"freeze-alert\">FROZEN by risk: {_fmt(freeze_reason)}</div>"
+                        f'<div class="freeze-alert">FROZEN by risk: {_fmt(freeze_reason)}</div>'
                     )
                 else:
                     status_label_parts.append(
-                        f"<div class=\"risk-note risk-note-alert\">blocked reason: {_fmt(freeze_reason)}</div>"
+                        f'<div class="risk-note risk-note-alert">blocked reason: {_fmt(freeze_reason)}</div>'
                     )
             failure_class = "failure-count"
             failure_display = "n/a"
@@ -2382,29 +2368,27 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         strategy_risk_html.append("</tbody></table>")
         if is_operator:
             strategy_risk_html.append(
-                "<div class=\"note\"><strong>Manual override:</strong> use <code>POST /api/ui/unfreeze-strategy</code> to clear risk freezes. To pause or resume trading manually, submit the toggle form below (records audit trail).</div>"
+                '<div class="note"><strong>Manual override:</strong> use <code>POST /api/ui/unfreeze-strategy</code> to clear risk freezes. To pause or resume trading manually, submit the toggle form below (records audit trail).</div>'
             )
             strategy_risk_html.append(
-                "<form method=\"post\" action=\"/api/ui/set-strategy-enabled\" class=\"strategy-toggle-form\">"
-                "<label for=\"strategy-toggle-name\">Strategy identifier</label>"
-                "<input id=\"strategy-toggle-name\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required />"
-                "<input type=\"hidden\" name=\"enabled\" value=\"false\" />"
-                "<label class=\"toggle-checkbox\"><input type=\"checkbox\" name=\"enabled\" value=\"true\" checked /> <span>Enabled</span></label>"
-                "<label for=\"strategy-toggle-reason\">Reason</label>"
-                "<input id=\"strategy-toggle-reason\" name=\"reason\" type=\"text\" placeholder=\"reason for toggle\" required />"
-                "<button type=\"submit\">Update strategy toggle</button>"
+                '<form method="post" action="/api/ui/set-strategy-enabled" class="strategy-toggle-form">'
+                '<label for="strategy-toggle-name">Strategy identifier</label>'
+                '<input id="strategy-toggle-name" name="strategy" type="text" placeholder="strategy identifier" required />'
+                '<input type="hidden" name="enabled" value="false" />'
+                '<label class="toggle-checkbox"><input type="checkbox" name="enabled" value="true" checked /> <span>Enabled</span></label>'
+                '<label for="strategy-toggle-reason">Reason</label>'
+                '<input id="strategy-toggle-reason" name="reason" type="text" placeholder="reason for toggle" required />'
+                '<button type="submit">Update strategy toggle</button>'
                 "</form>"
             )
         else:
             strategy_risk_html.append(
-                "<div class=\"note\">Strategy enable/disable controls require operator role. Status is still visible above.</div>"
+                '<div class="note">Strategy enable/disable controls require operator role. Status is still visible above.</div>'
             )
     parts.append("".join(strategy_risk_html) + "</div>")
 
-    daily_budget_parts = [
-        "<div class=\"daily-strategy-budgets\"><h2>Daily Strategy Budgets</h2>"
-    ]
-    daily_budget_parts.append("<p class=\"note\">Автосброс в 00:00 UTC.</p>")
+    daily_budget_parts = ['<div class="daily-strategy-budgets"><h2>Daily Strategy Budgets</h2>']
+    daily_budget_parts.append('<p class="note">Автосброс в 00:00 UTC.</p>')
     if daily_strategy_budgets:
         daily_budget_parts.append(
             "<table><thead><tr><th>Strategy</th><th>Limit (USDT)</th><th>Used today (USDT)</th><th>Remaining (USDT)</th><th>Last reset (UTC)</th><th>Status</th></tr></thead><tbody>"
@@ -2414,9 +2398,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             limit = _fmt(entry.get("limit_usdt")) if entry.get("limit_usdt") is not None else "∞"
             used = _fmt(entry.get("used_today_usdt"))
             remaining_value = entry.get("remaining_usdt")
-            remaining = (
-                "∞" if entry.get("limit_usdt") is None else _fmt(remaining_value)
-            )
+            remaining = "∞" if entry.get("limit_usdt") is None else _fmt(remaining_value)
             last_reset = _fmt(entry.get("last_reset_ts_utc"))
             blocked = bool(entry.get("blocked"))
             status_html = (
@@ -2424,7 +2406,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 if blocked
                 else '<span class="status-ok">OK</span>'
             )
-            row_class = " class=\"blocked\"" if blocked else ""
+            row_class = ' class="blocked"' if blocked else ""
             daily_budget_parts.append(
                 "<tr{row_class}><td>{strategy}</td><td>{limit}</td><td>{used}</td><td>{remaining}</td><td>{reset}</td><td>{status}</td></tr>".format(
                     row_class=row_class,
@@ -2438,26 +2420,24 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         daily_budget_parts.append("</tbody></table>")
     else:
-        daily_budget_parts.append(
-            "<p class=\"note\">Daily budget telemetry unavailable.</p>"
-        )
+        daily_budget_parts.append('<p class="note">Daily budget telemetry unavailable.</p>')
     if is_operator:
         daily_budget_parts.append(
-            "<form method=\"post\" action=\"/api/ui/budget/reset\" class=\"budget-reset-form\">"
-            "<label for=\"budget-reset-strategy\">Strategy</label>"
-            "<input id=\"budget-reset-strategy\" name=\"strategy\" type=\"text\" required placeholder=\"strategy name\" />"
-            "<label for=\"budget-reset-reason\" class=\"full-width\">Reason</label>"
-            "<input id=\"budget-reset-reason\" name=\"reason\" type=\"text\" required placeholder=\"reason for reset\" class=\"full-width\" />"
-            "<button type=\"submit\">Reset daily budget</button>"
+            '<form method="post" action="/api/ui/budget/reset" class="budget-reset-form">'
+            '<label for="budget-reset-strategy">Strategy</label>'
+            '<input id="budget-reset-strategy" name="strategy" type="text" required placeholder="strategy name" />'
+            '<label for="budget-reset-reason" class="full-width">Reason</label>'
+            '<input id="budget-reset-reason" name="reason" type="text" required placeholder="reason for reset" class="full-width" />'
+            '<button type="submit">Reset daily budget</button>'
             "</form>"
         )
     else:
         daily_budget_parts.append(
-            "<div class=\"note\">Budget reset controls require operator role.</div>"
+            '<div class="note">Budget reset controls require operator role.</div>'
         )
     parts.append("".join(daily_budget_parts) + "</div>")
 
-    budget_parts = ["<div class=\"strategy-budgets\"><h2>Strategy Budgets</h2>"]
+    budget_parts = ['<div class="strategy-budgets"><h2>Strategy Budgets</h2>']
     if strategy_budgets:
         budget_parts.append(
             "<table><thead><tr><th>Strategy</th><th>Notional (current / max)</th><th>Open positions</th><th>Status</th></tr></thead><tbody>"
@@ -2469,9 +2449,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             max_notional = (
                 "&infin;" if max_notional_value in (None, 0) else _fmt(max_notional_value)
             )
-            notional_tag = _near_limit_tag(
-                entry.get("current_notional_usdt"), max_notional_value
-            )
+            notional_tag = _near_limit_tag(entry.get("current_notional_usdt"), max_notional_value)
             current_positions = _fmt(entry.get("current_open_positions"))
             max_positions_value = entry.get("max_open_positions")
             max_positions = (
@@ -2483,7 +2461,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 if blocked
                 else '<span class="status-ok">OK</span>'
             )
-            row_class = " class=\"blocked\"" if blocked else ""
+            row_class = ' class="blocked"' if blocked else ""
             budget_parts.append(
                 "<tr{row_class}><td>{strategy}</td><td>{notional}{tag}</td><td>{positions}</td><td>{status}</td></tr>".format(
                     row_class=row_class,
@@ -2496,22 +2474,18 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         budget_parts.append("</tbody></table>")
     else:
-        budget_parts.append(
-            "<p class=\"note\">Strategy budget data unavailable.</p>"
-        )
+        budget_parts.append('<p class="note">Strategy budget data unavailable.</p>')
     parts.append("".join(budget_parts) + "</div>")
 
-
-
-    pnl_parts = ["<div class=\"pnl-risk\"><h2>PnL / Risk</h2>"]
+    pnl_parts = ['<div class="pnl-risk"><h2>PnL / Risk</h2>']
     pnl_parts.append(
-        f"<p class=\"metric\"><strong>Unrealised PnL:</strong> {_fmt(unrealized_pnl_value)}</p>"
+        f'<p class="metric"><strong>Unrealised PnL:</strong> {_fmt(unrealized_pnl_value)}</p>'
     )
     pnl_parts.append(
-        f"<p class=\"metric\"><strong>Realised PnL (today):</strong> {_fmt(realised_pnl_value)}</p>"
+        f'<p class="metric"><strong>Realised PnL (today):</strong> {_fmt(realised_pnl_value)}</p>'
     )
     pnl_parts.append(
-        f"<p class=\"metric\"><strong>Total exposure (USDT):</strong> {_fmt(total_exposure_value)}</p>"
+        f'<p class="metric"><strong>Total exposure (USDT):</strong> {_fmt(total_exposure_value)}</p>'
     )
     if exposure_caps_enabled:
         badge_html = _tag("EXPOSURE THROTTLED", color="#b00020") if exposure_blocked else ""
@@ -2519,12 +2493,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         if badge_html:
             summary_text = f"{summary_text} {badge_html}"
         pnl_parts.append(
-            "<p class=\"metric\"><strong>Exposure caps:</strong> {summary}</p>".format(
+            '<p class="metric"><strong>Exposure caps:</strong> {summary}</p>'.format(
                 summary=summary_text
             )
         )
     else:
-        pnl_parts.append("<p class=\"note\">Exposure caps disabled.</p>")
+        pnl_parts.append('<p class="note">Exposure caps disabled.</p>')
     if headroom_map:
         pnl_parts.append(
             "<table><thead><tr><th>Strategy</th><th>Headroom (USDT)</th><th>Limit</th><th>Open notional</th></tr></thead><tbody>"
@@ -2546,18 +2520,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         pnl_parts.append("</tbody></table>")
     else:
-        pnl_parts.append(
-            "<p class=\"note\">Capital headroom data unavailable.</p>"
-        )
+        pnl_parts.append('<p class="note">Capital headroom data unavailable.</p>')
     parts.append("".join(pnl_parts) + "</div>")
 
-    skip_parts = ["<div class=\"risk-skips\"><h2>Risk skips (last run)</h2>"]
+    skip_parts = ['<div class="risk-skips"><h2>Risk skips (last run)</h2>']
     last_denial = risk_accounting_snapshot.get("last_denial")
     if isinstance(last_denial, Mapping) and last_denial:
         denial_strategy = _fmt(last_denial.get("strategy"))
         denial_reason = _fmt(last_denial.get("reason"))
         skip_parts.append(
-            "<p class=\"meta\">Last denial: <strong>{strategy}</strong> — {reason}</p>".format(
+            '<p class="meta">Last denial: <strong>{strategy}</strong> — {reason}</p>'.format(
                 strategy=denial_strategy or "unknown",
                 reason=denial_reason or "other_risk",
             )
@@ -2588,7 +2560,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         for strategy_name in sorted(summarised):
             counts = summarised[strategy_name]
             skip_parts.append(
-                "<p class=\"metric\"><strong>{strategy}</strong>: caps {caps} | budget {budget} | frozen {frozen} | other {other}</p>".format(
+                '<p class="metric"><strong>{strategy}</strong>: caps {caps} | budget {budget} | frozen {frozen} | other {other}</p>'.format(
                     strategy=_fmt(strategy_name),
                     caps=_fmt(counts.get("caps_exceeded", 0)),
                     budget=_fmt(counts.get("budget_exceeded", 0)),
@@ -2597,40 +2569,36 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 )
             )
     else:
-        skip_parts.append(
-            "<p class=\"note\">No risk skips recorded yet for this session.</p>"
-        )
+        skip_parts.append('<p class="note">No risk skips recorded yet for this session.</p>')
     skip_parts.append("</div>")
     parts.append("".join(skip_parts))
 
-    parts.append("<div class=\"strategy-orchestrator\"><h2>Strategy Orchestrator</h2>")
+    parts.append('<div class="strategy-orchestrator"><h2>Strategy Orchestrator</h2>')
     if not is_operator:
-        parts.append("<div class=\"strategy-orchestrator-readonly\">READ ONLY</div>")
+        parts.append('<div class="strategy-orchestrator-readonly">READ ONLY</div>')
     parts.append(
-        "<p class=\"meta\">Orchestrator alerts for skip/risk_limit/hold_active and cooldown/fail "
+        '<p class="meta">Orchestrator alerts for skip/risk_limit/hold_active and cooldown/fail '
         "are forwarded to ops Telegram/audit.</p>"
     )
     if strategy_plan_error:
         parts.append(
-            "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">"
+            '<p class="note" style="color:#b91c1c;font-weight:600;">'
             f"Unable to compute plan: {_fmt(strategy_plan_error)}"
             "</p>"
         )
     else:
         if strategy_plan_ts:
             parts.append(
-                f"<div class=\"meta\">Plan computed at <strong>{_fmt(strategy_plan_ts)}</strong></div>"
+                f'<div class="meta">Plan computed at <strong>{_fmt(strategy_plan_ts)}</strong></div>'
             )
         if strategy_risk:
             risk_ok = bool(strategy_risk.get("risk_caps_ok", True))
             if risk_ok:
-                risk_summary_html = (
-                    "<div class=\"meta\"><strong style=\"color:#166534;\">Risk gates: clear</strong></div>"
-                )
+                risk_summary_html = '<div class="meta"><strong style="color:#166534;">Risk gates: clear</strong></div>'
             else:
                 reason_text = _fmt(strategy_risk.get("reason_if_blocked") or "blocked")
                 risk_summary_html = (
-                    "<div class=\"meta\"><strong style=\"color:#b91c1c;\">Risk gates blocking</strong>"
+                    '<div class="meta"><strong style="color:#b91c1c;">Risk gates blocking</strong>'
                     f" — {reason_text}</div>"
                 )
             parts.append(risk_summary_html)
@@ -2639,7 +2607,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             "<th>Last Error</th><th>Last Run</th></tr></thead><tbody>"
         )
         if not strategy_entries:
-            parts.append("<tr><td colspan=\"6\">No strategies registered.</td></tr>")
+            parts.append('<tr><td colspan="6">No strategies registered.</td></tr>')
         else:
             for entry in strategy_entries:
                 if not isinstance(entry, Mapping):
@@ -2659,9 +2627,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                     reason_class = "reason-cooldown"
                 if decision_raw == "skip" and reason_raw in {"hold_active", "risk_limit"}:
                     reason_class = "reason-critical"
-                decision_html = f"<span class=\"{decision_class}\">{_fmt(decision_raw or 'n/a')}</span>"
+                decision_html = (
+                    f"<span class=\"{decision_class}\">{_fmt(decision_raw or 'n/a')}</span>"
+                )
                 reason_html = (
-                    f"<span class=\"{reason_class}\">{_fmt(reason_raw)}</span>" if reason_class else _fmt(reason_raw)
+                    f'<span class="{reason_class}">{_fmt(reason_raw)}</span>'
+                    if reason_class
+                    else _fmt(reason_raw)
                 )
                 parts.append(
                     "<tr><td>{name}</td><td>{decision}</td><td>{reason}</td><td>{last_result}</td><td>{last_error}</td>"
@@ -2683,7 +2655,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         if success_rate_display:
             reason_clause += f" Success rate (1h): {success_rate_display}."
         parts.append(
-            "<div class=\"flash\" style=\"background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;\">"
+            '<div class="flash" style="background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d;">'
             "<strong>RISK_THROTTLED</strong> — automatic risk guard hold active. "
             "Manual two-step RESUME approval required before trading can restart."
             f"{reason_clause}"
@@ -2706,7 +2678,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     )
     parts.append("<h2>Recon</h2>")
     parts.append(
-        "<div style=\"{style}padding:1rem;border-radius:8px;margin-bottom:1rem;\">".format(
+        '<div style="{style}padding:1rem;border-radius:8px;margin-bottom:1rem;">'.format(
             style=card_style
         )
     )
@@ -2714,9 +2686,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     status_colour = "#b91c1c" if mismatch_count or desync_detected else "#166534"
     header_html = (
         '<div style="display:flex;justify-content:space-between;align-items:center;">'
-        '<strong>Reconciliation</strong>'
+        "<strong>Reconciliation</strong>"
         f'<span style="font-weight:700;color:{status_colour};">{status_label}</span>'
-        '</div>'
+        "</div>"
     )
     parts.append(header_html)
     summary_bits = [f"Diffs: {_fmt(mismatch_count)}"]
@@ -2725,13 +2697,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     parts.append("<p>{text}</p>".format(text=" · ".join(summary_bits)))
     if mismatch_count or desync_detected:
         parts.append(
-            "<p style=\"font-weight:700;color:#b91c1c;\">STATE DESYNC — manual intervention required</p>"
+            '<p style="font-weight:700;color:#b91c1c;">STATE DESYNC — manual intervention required</p>'
         )
     if last_recon_ts:
-        parts.append(f"<p class=\"note\">Last checked: {_fmt(last_recon_ts)}.</p>")
+        parts.append(f'<p class="note">Last checked: {_fmt(last_recon_ts)}.</p>')
     if recon_error:
         parts.append(
-            "<p style=\"margin:0;color:#b91c1c;font-weight:600;\">Error: {err}</p>".format(
+            '<p style="margin:0;color:#b91c1c;font-weight:600;">Error: {err}</p>'.format(
                 err=_fmt(recon_error)
             )
         )
@@ -2741,13 +2713,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     visible_diffs = recon_diffs[:5]
     if visible_diffs:
         parts.append(
-            "<table style=\"width:100%;margin-top:0.75rem;border-collapse:collapse;\">"
-            "<thead><tr><th style=\"text-align:left;padding:0.25rem;\">Venue</th>"
-            "<th style=\"text-align:left;padding:0.25rem;\">Symbol</th>"
-            "<th style=\"text-align:right;padding:0.25rem;\">Exchange</th>"
-            "<th style=\"text-align:right;padding:0.25rem;\">Ledger</th>"
-            "<th style=\"text-align:right;padding:0.25rem;\">Delta</th>"
-            "<th style=\"text-align:right;padding:0.25rem;\">Notional&nbsp;USD</th></tr></thead><tbody>"
+            '<table style="width:100%;margin-top:0.75rem;border-collapse:collapse;">'
+            '<thead><tr><th style="text-align:left;padding:0.25rem;">Venue</th>'
+            '<th style="text-align:left;padding:0.25rem;">Symbol</th>'
+            '<th style="text-align:right;padding:0.25rem;">Exchange</th>'
+            '<th style="text-align:right;padding:0.25rem;">Ledger</th>'
+            '<th style="text-align:right;padding:0.25rem;">Delta</th>'
+            '<th style="text-align:right;padding:0.25rem;">Notional&nbsp;USD</th></tr></thead><tbody>'
         )
         for diff in visible_diffs:
             notional_value = diff.get("notional_usd")
@@ -2757,12 +2729,12 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 notional_display = notional_value
             parts.append(
                 "<tr>"
-                "<td style=\"padding:0.25rem;\">{venue}</td>"
-                "<td style=\"padding:0.25rem;\">{symbol}</td>"
-                "<td style=\"padding:0.25rem;text-align:right;\">{exch}</td>"
-                "<td style=\"padding:0.25rem;text-align:right;\">{ledger}</td>"
-                "<td style=\"padding:0.25rem;text-align:right;\">{delta}</td>"
-                "<td style=\"padding:0.25rem;text-align:right;\">{notional}</td>"
+                '<td style="padding:0.25rem;">{venue}</td>'
+                '<td style="padding:0.25rem;">{symbol}</td>'
+                '<td style="padding:0.25rem;text-align:right;">{exch}</td>'
+                '<td style="padding:0.25rem;text-align:right;">{ledger}</td>'
+                '<td style="padding:0.25rem;text-align:right;">{delta}</td>'
+                '<td style="padding:0.25rem;text-align:right;">{notional}</td>'
                 "</tr>".format(
                     venue=_fmt(diff.get("venue")),
                     symbol=_fmt(diff.get("symbol")),
@@ -2776,13 +2748,13 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         remaining = max(0, diff_count - len(visible_diffs))
         if remaining > 0:
             parts.append(
-                "<p style=\"margin-top:0.5rem;color:#7f1d1d;\">+{count} more diffs not shown</p>".format(
+                '<p style="margin-top:0.5rem;color:#7f1d1d;">+{count} more diffs not shown</p>'.format(
                     count=_fmt(remaining)
                 )
             )
     elif desync_detected and reconciliation_issues:
         visible_issues = reconciliation_issues[:5]
-        parts.append("<ul style=\"background:#fff;border:1px solid #fca5a5;padding:0.75rem 1rem;\">")
+        parts.append('<ul style="background:#fff;border:1px solid #fca5a5;padding:0.75rem 1rem;">')
         for issue in visible_issues:
             summary = "{kind}: {venue} {symbol} {side} — {detail}".format(
                 kind=_fmt(issue.get("kind")),
@@ -2791,26 +2763,28 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 side=_fmt(issue.get("side")),
                 detail=_fmt(issue.get("description")),
             )
-            parts.append(f"<li style=\"margin-bottom:0.5rem;\">{summary}</li>")
+            parts.append(f'<li style="margin-bottom:0.5rem;">{summary}</li>')
         remaining = max(0, issue_count - len(visible_issues))
         if remaining > 0:
-            parts.append(
-                f"<li style=\"color:#b91c1c;\">+{remaining} more issues not shown</li>"
-            )
+            parts.append(f'<li style="color:#b91c1c;">+{remaining} more issues not shown</li>')
         parts.append("</ul>")
     else:
-        parts.append("<p style=\"margin:0;\">All venues in sync.</p>")
+        parts.append('<p style="margin:0;">All venues in sync.</p>')
     parts.append("</div>")
 
     parts.append("<h2>Balances / Liquidity</h2>")
     if liquidity_blocked:
-        reason_text = liquidity_reason if liquidity_reason and liquidity_reason != "ok" else "insufficient free balance"
-        parts.append(
-            "<p><strong style=\"color:#b91c1c;\">TRADING HALTED FOR SAFETY — trading halted for safety.</strong></p>"
+        reason_text = (
+            liquidity_reason
+            if liquidity_reason and liquidity_reason != "ok"
+            else "insufficient free balance"
         )
-        parts.append(f"<p class=\"note\">Reason: {_fmt(reason_text)}</p>")
+        parts.append(
+            '<p><strong style="color:#b91c1c;">TRADING HALTED FOR SAFETY — trading halted for safety.</strong></p>'
+        )
+        parts.append(f'<p class="note">Reason: {_fmt(reason_text)}</p>')
     elif liquidity_reason and liquidity_reason not in {"", "ok"}:
-        parts.append(f"<p class=\"note\">Status: {_fmt(liquidity_reason)}</p>")
+        parts.append(f'<p class="note">Status: {_fmt(liquidity_reason)}</p>')
     if liquidity_snapshot:
         parts.append(
             "<table><thead><tr><th>Venue</th><th>Free USDT</th><th>Used USDT</th><th>Risk OK</th><th>Reason</th></tr></thead><tbody>"
@@ -2845,9 +2819,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append("<p>No balance snapshot available.</p>")
 
     parts.append("<h2>Active Alerts / Recent Audit</h2>")
-    parts.append("<table><thead><tr><th>Alert</th><th>Detail</th><th>Active Since</th></tr></thead><tbody>")
+    parts.append(
+        "<table><thead><tr><th>Alert</th><th>Detail</th><th>Active Since</th></tr></thead><tbody>"
+    )
     if not active_alerts:
-        parts.append("<tr><td colspan=\"3\">No active risk alerts</td></tr>")
+        parts.append('<tr><td colspan="3">No active risk alerts</td></tr>')
     else:
         for alert in active_alerts:
             text_html = _fmt(alert.get("text"))
@@ -2862,9 +2838,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
     parts.append("</tbody></table>")
 
-    parts.append("<table><thead><tr><th>Timestamp</th><th>Event</th><th>Detail</th></tr></thead><tbody>")
+    parts.append(
+        "<table><thead><tr><th>Timestamp</th><th>Event</th><th>Detail</th></tr></thead><tbody>"
+    )
     if not recent_audit:
-        parts.append("<tr><td colspan=\"3\">No recent audit entries</td></tr>")
+        parts.append('<tr><td colspan="3">No recent audit entries</td></tr>')
     else:
         for entry in recent_audit:
             text_html = _fmt(entry.get("text"))
@@ -2884,7 +2862,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         "<table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Status</th><th>Reason</th></tr></thead><tbody>"
     )
     if not recent_ops_incidents:
-        parts.append("<tr><td colspan=\"5\">No operational events logged</td></tr>")
+        parts.append('<tr><td colspan="5">No operational events logged</td></tr>')
     else:
         for entry in recent_ops_incidents:
             status_badge = _ops_status_badge(entry.get("status"), entry.get("action"))
@@ -2909,9 +2887,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
         window_value = risk_advice.get("analysis_window")
         if window_value:
-            parts.append(
-                f"<p class=\"note\">Analysis window: {_fmt(window_value)} snapshots.</p>"
-            )
+            parts.append(f'<p class="note">Analysis window: {_fmt(window_value)} snapshots.</p>')
         parts.append(
             "<table><thead><tr><th>Limit</th><th>Current</th><th>Suggested</th></tr></thead><tbody>"
             f"<tr><td>MAX_TOTAL_NOTIONAL_USDT</td><td>{_fmt(risk_advice.get('current_max_notional'))}</td>"
@@ -2927,10 +2903,10 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
         reason_text = _fmt(risk_advice.get("reason"))
         if reason_text:
-            parts.append(f"<p class=\"note\">Reason: {reason_text}</p>")
+            parts.append(f'<p class="note">Reason: {reason_text}</p>')
         if risk_advice.get("recommend_dry_run_mode"):
             parts.append(
-                "<p class=\"note\">Advisor suggests keeping DRY_RUN_MODE engaged while conditions are investigated.</p>"
+                '<p class="note">Advisor suggests keeping DRY_RUN_MODE engaged while conditions are investigated.</p>'
             )
 
     parts.append("<h2>Risk &amp; PnL trend</h2>")
@@ -2959,7 +2935,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
         parts.append("</tbody></table>")
         parts.append(
-            "<p class=\"note\">Open positions: {open_count} &nbsp; Partial: {partial_count} &nbsp; "
+            '<p class="note">Open positions: {open_count} &nbsp; Partial: {partial_count} &nbsp; '
             "Simulated: {sim_positions}</p>".format(
                 open_count=_fmt(trend.get("open_positions")),
                 partial_count=_fmt(trend.get("partial_positions")),
@@ -2971,7 +2947,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             per_venue_text = ", ".join(
                 f"{escape(str(venue))}: {_fmt(value)}" for venue, value in sorted(per_venue.items())
             )
-            parts.append(f"<p class=\"note\">Per-venue exposure: {per_venue_text}</p>")
+            parts.append(f'<p class="note">Per-venue exposure: {per_venue_text}</p>')
         simulated_total = trend.get("simulated_total")
         simulated_per_venue = trend.get("simulated_per_venue") or {}
         if simulated_total or simulated_per_venue:
@@ -2983,7 +2959,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                 )
                 sim_detail = f" (per venue: {sim_detail})"
             parts.append(
-                "<p class=\"note\">Simulated exposure total {total}{detail}</p>".format(
+                '<p class="note">Simulated exposure total {total}{detail}</p>'.format(
                     total=_fmt(simulated_total),
                     detail=sim_detail,
                 )
@@ -2999,9 +2975,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if risk_throttled:
         mode_value = f"RISK_THROTTLED ({mode_value})"
     parts.append(f"<tr><th>Mode</th><td>{mode_value}</td></tr>")
-    parts.append(
-        f"<tr><th>Universe</th><td>{_universe_badge(universe_enforced)}</td></tr>"
-    )
+    parts.append(f"<tr><th>Universe</th><td>{_universe_badge(universe_enforced)}</td></tr>")
     partial_label = _fmt(partial_rebalance.get("label")) or "OK"
     partial_count = _fmt(partial_rebalance.get("count"))
     partial_attempts = _fmt(partial_rebalance.get("attempts"))
@@ -3019,7 +2993,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             detail += f" (since {_fmt(hold_since)})"
         hold_cell = f'<span style="color:#b00020;font-weight:700;">{detail}</span>'
     else:
-        hold_cell = '<span style=\"color:#1b7f3b;font-weight:600;\">NO</span>'
+        hold_cell = '<span style="color:#1b7f3b;font-weight:600;">NO</span>'
     parts.append(f"<tr><th>HOLD Active</th><td>{hold_cell}</td></tr>")
 
     if pretrade_reason:
@@ -3059,9 +3033,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         guard_cell = '<span style="color:#b00020;font-weight:700;">NO</span>'
         guard_suffix = f" — {_fmt(edge_guard_reason)}"
-    parts.append(
-        f"<tr><th>Edge guard status</th><td>{guard_cell}{guard_suffix}</td></tr>"
-    )
+    parts.append(f"<tr><th>Edge guard status</th><td>{guard_cell}{guard_suffix}</td></tr>")
     parts.append(
         "<tr><th>Safe Mode</th><td>{}</td></tr>".format(
             _bool_pill(bool(context.get("control", {}).get("safe_mode")), true="ON", false="OFF")
@@ -3071,9 +3043,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if safety.get("dry_run") is not None:
         dry_run_flags.append(f"dry_run={'on' if safety.get('dry_run') else 'off'}")
     if safety.get("dry_run_mode") is not None:
-        dry_run_flags.append(
-            f"dry_run_mode={'on' if safety.get('dry_run_mode') else 'off'}"
-        )
+        dry_run_flags.append(f"dry_run_mode={'on' if safety.get('dry_run_mode') else 'off'}")
     parts.append(
         "<tr><th>Dry-Run Flags</th><td>{}</td></tr>".format(
             " &nbsp;".join(f"<span>{escape(flag)}</span>" for flag in dry_run_flags) or ""
@@ -3118,8 +3088,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             if not isinstance(symbols, Mapping):
                 continue
             symbol_entries = ", ".join(
-                f"{escape(str(symbol))}={_fmt(count)}"
-                for symbol, count in sorted(symbols.items())
+                f"{escape(str(symbol))}={_fmt(count)}" for symbol, count in sorted(symbols.items())
             )
             runaway_counts.append(f"{escape(str(venue))}: {symbol_entries}")
     else:
@@ -3142,13 +3111,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             detail_bits.append(f"cooldown_remaining={_fmt(cooldown_remaining)}s")
         detail_suffix = f" ({', '.join(detail_bits)})" if detail_bits else ""
         runaway_counts.append(
-            f"<span style=\"color:#b00020;font-weight:600;\">Last block: {reason_text}{detail_suffix}</span>"
+            f'<span style="color:#b00020;font-weight:600;">Last block: {reason_text}{detail_suffix}</span>'
         )
     runaway_text = "<br />".join(runaway_counts)
     details_text = " | ".join(runaway_details)
-    parts.append(
-        f"<tr><th>Runaway guard v2</th><td>{details_text}<br />{runaway_text}</td></tr>"
-    )
+    parts.append(f"<tr><th>Runaway guard v2</th><td>{details_text}<br />{runaway_text}</td></tr>")
     resume_request = safety.get("resume_request")
     if isinstance(resume_request, Mapping):
         rr_line = (
@@ -3158,7 +3125,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append(f"<tr><th>Pending Resume Request</th><td>{rr_line}</td></tr>")
     parts.append("</tbody></table>")
 
-    parts.append("<div class=\"partial-hedge\">")
+    parts.append('<div class="partial-hedge">')
     parts.append("<h2>Partial Hedge</h2>")
     meta_lines = [
         f"Enabled: {'YES' if partial_hedge_enabled else 'NO'}",
@@ -3170,21 +3137,15 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     if partial_hedge_auto_hold:
         meta_lines.append("Auto-HOLD: engaged")
     parts.append(
-        "<p class=\"meta\">{}</p>".format(
-            " &bull; ".join(escape(line) for line in meta_lines)
-        )
+        '<p class="meta">{}</p>'.format(" &bull; ".join(escape(line) for line in meta_lines))
     )
     if partial_hedge_generated:
-        parts.append(
-            f"<p class=\"meta\">Plan generated at {_fmt(partial_hedge_generated)}</p>"
-        )
+        parts.append(f'<p class="meta">Plan generated at {_fmt(partial_hedge_generated)}</p>')
     if partial_hedge_error:
-        parts.append(
-            f"<p class=\"warning\">Last error: {_fmt(partial_hedge_error)}</p>"
-        )
+        parts.append(f'<p class="warning">Last error: {_fmt(partial_hedge_error)}</p>')
     if partial_hedge_execution:
         parts.append(
-            "<p class=\"meta\">Last execution: status={} at {}</p>".format(
+            '<p class="meta">Last execution: status={} at {}</p>'.format(
                 _fmt(partial_hedge_execution.get("status")),
                 _fmt(partial_hedge_execution.get("ts")),
             )
@@ -3208,27 +3169,25 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         parts.append("</tbody></table>")
     else:
-        parts.append("<p class=\"meta\">No hedge orders required.</p>")
-    warning_text = (
-        "Execution requires two active approvals and places market orders immediately."
-    )
-    parts.append(f"<p class=\"warning\">{escape(warning_text)}</p>")
+        parts.append('<p class="meta">No hedge orders required.</p>')
+    warning_text = "Execution requires two active approvals and places market orders immediately."
+    parts.append(f'<p class="warning">{escape(warning_text)}</p>')
     if partial_hedge_execute_reason:
         parts.append(
-            f"<p class=\"meta\">Execute disabled: {escape(partial_hedge_execute_reason)}</p>"
+            f'<p class="meta">Execute disabled: {escape(partial_hedge_execute_reason)}</p>'
         )
-    button_attrs = "class=\"execute\" type=\"button\" onclick=\"executePartialHedge()\""
+    button_attrs = 'class="execute" type="button" onclick="executePartialHedge()"'
     if partial_hedge_execute_disabled:
         button_attrs += " disabled"
     parts.append(f"<button {button_attrs}>Execute plan</button>")
     parts.append("</div>")
 
-    parts.append("<h3 style=\"margin-top:1rem;\">Recent operator actions</h3>")
+    parts.append('<h3 style="margin-top:1rem;">Recent operator actions</h3>')
     parts.append(
         "<table><thead><tr><th>Timestamp</th><th>Operator</th><th>Action</th><th>Details</th></tr></thead><tbody>"
     )
     if not recent_operator_actions:
-        parts.append("<tr><td colspan=\"4\">No operator actions recorded</td></tr>")
+        parts.append('<tr><td colspan="4">No operator actions recorded</td></tr>')
     else:
         for action_entry in recent_operator_actions:
             parts.append(
@@ -3243,11 +3202,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     risk_autopilot_label = "ENABLED" if risk_snapshot_autopilot else "DISABLED"
     risk_autopilot_color = "#1b7f3b" if risk_snapshot_autopilot else "#b00020"
-    risk_autopilot_html = (
-        f'<span class="risk-pill" style="color:{risk_autopilot_color};">{risk_autopilot_label}</span>'
-    )
+    risk_autopilot_html = f'<span class="risk-pill" style="color:{risk_autopilot_color};">{risk_autopilot_label}</span>'
 
-    parts.append("<div class=\"risk-accounting\">")
+    parts.append('<div class="risk-accounting">')
     parts.append("<h2>Risk snapshot (execution)</h2>")
     parts.append(
         f"<p><strong>Total open notional:</strong> {_fmt(accounting_totals.get('open_notional'))}</p>"
@@ -3266,11 +3223,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         realized_value = bot_loss_cap.get("realized_today_usdt")
         remaining_value = bot_loss_cap.get("remaining_usdt")
         parts.append(
-            "<div style=\"margin:0.75rem 0;padding:0.75rem 1rem;border:1px solid #d0d5dd;"
-            "background:#f9fafb;border-radius:6px;\">"
-            f"<p style=\"margin:0 0 0.35rem 0;\"><strong>Daily loss cap:</strong> "
-            f"<span style=\"color:{status_color};font-weight:700;\">{status_label}</span></p>"
-            f"<p style=\"margin:0;font-size:0.95rem;\">Cap: {_fmt(cap_value)} · "
+            '<div style="margin:0.75rem 0;padding:0.75rem 1rem;border:1px solid #d0d5dd;'
+            'background:#f9fafb;border-radius:6px;">'
+            f'<p style="margin:0 0 0.35rem 0;"><strong>Daily loss cap:</strong> '
+            f'<span style="color:{status_color};font-weight:700;">{status_label}</span></p>'
+            f'<p style="margin:0;font-size:0.95rem;">Cap: {_fmt(cap_value)} · '
             f"Realized: {_fmt(realized_value)} · Remaining: {_fmt(remaining_value)}</p>"
             "</div>"
         )
@@ -3282,7 +3239,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         )
     if accounting_simulated:
         parts.append(
-            "<p class=\"note\">Simulated totals — "
+            '<p class="note">Simulated totals — '
             f"notional: {_fmt(accounting_simulated.get('open_notional'))}, "
             f"positions: {_fmt(accounting_simulated.get('open_positions'))}</p>"
         )
@@ -3295,13 +3252,21 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         for name in sorted(accounting_per_strategy):
             entry = accounting_per_strategy.get(name) or {}
             budget_payload = entry.get("budget") if isinstance(entry.get("budget"), Mapping) else {}
-            used_value = budget_payload.get("used") if isinstance(budget_payload, Mapping) else entry.get("budget_used")
-            limit_value = budget_payload.get("limit") if isinstance(budget_payload, Mapping) else None
+            used_value = (
+                budget_payload.get("used")
+                if isinstance(budget_payload, Mapping)
+                else entry.get("budget_used")
+            )
+            limit_value = (
+                budget_payload.get("limit") if isinstance(budget_payload, Mapping) else None
+            )
             used_text = _fmt(used_value)
             limit_text = _fmt(limit_value) if limit_value not in (None, "") else "n/a"
             breaches = entry.get("breaches") if isinstance(entry.get("breaches"), list) else []
             if breaches:
-                breach_cell = f'<span class="breach">{_fmt(", ".join(str(b) for b in breaches))}</span>'
+                breach_cell = (
+                    f'<span class="breach">{_fmt(", ".join(str(b) for b in breaches))}</span>'
+                )
             else:
                 breach_cell = '<span class="breach-ok">ok</span>'
             parts.append(
@@ -3317,22 +3282,20 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         parts.append("</tbody></table>")
     else:
-        parts.append("<p class=\"note\">No strategy entries recorded.</p>")
+        parts.append('<p class="note">No strategy entries recorded.</p>')
     parts.append("</div>")
 
-    parts.append("<div class=\"risk-snapshot\">")
+    parts.append('<div class="risk-snapshot">')
     parts.append("<h2>Risk snapshot</h2>")
     parts.append(
-        f"<p><span class=\"risk-label\">total_notional_usd:</span> <strong>{_fmt(risk_snapshot_total)}</strong></p>"
+        f'<p><span class="risk-label">total_notional_usd:</span> <strong>{_fmt(risk_snapshot_total)}</strong></p>'
     )
     parts.append(
-        f"<p><span class=\"risk-label\">partial_hedges_count:</span> <strong>{_fmt(risk_snapshot_partial)}</strong></p>"
+        f'<p><span class="risk-label">partial_hedges_count:</span> <strong>{_fmt(risk_snapshot_partial)}</strong></p>'
     )
+    parts.append(f'<p><span class="risk-label">autopilot_enabled:</span> {risk_autopilot_html}</p>')
     parts.append(
-        f"<p><span class=\"risk-label\">autopilot_enabled:</span> {risk_autopilot_html}</p>"
-    )
-    parts.append(
-        f"<p><span class=\"risk-label\">risk_score:</span> <strong>{_fmt(risk_snapshot_score)}</strong></p>"
+        f'<p><span class="risk-label">risk_score:</span> <strong>{_fmt(risk_snapshot_score)}</strong></p>'
     )
     if risk_snapshot_per_venue:
         parts.append(
@@ -3350,7 +3313,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             )
         parts.append("</tbody></table>")
     else:
-        parts.append("<p class=\"note\">No active venues recorded.</p>")
+        parts.append('<p class="note">No active venues recorded.</p>')
     parts.append("</div>")
 
     parts.append("<h2>Auto-Hedge</h2><table><tbody>")
@@ -3375,9 +3338,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
             rate_text = "n/a"
         else:
             rate_text = f"{success_rate * 100:.1f}%"
-        parts.append(
-            f"<p>Success rate (last {sample_size} legs): <strong>{rate_text}</strong></p>"
-        )
+        parts.append(f"<p>Success rate (last {sample_size} legs): <strong>{rate_text}</strong></p>")
         parts.append(
             "<table><thead><tr><th>Timestamp</th><th>Venue</th><th>Side</th>"
             "<th>Planned Px</th><th>Fill Px</th><th>Slippage (bps)</th><th>Status</th>"
@@ -3428,14 +3389,16 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
                     )
                 )
         else:
-            parts.append("<tr><td colspan=\"4\">No venues recorded.</td></tr>")
+            parts.append('<tr><td colspan="4">No venues recorded.</td></tr>')
         parts.append("</tbody></table>")
 
-    parts.append("<h2>Risk Limits</h2><table><thead><tr><th>Limit</th><th>Configured Value</th></tr></thead><tbody>")
+    parts.append(
+        "<h2>Risk Limits</h2><table><thead><tr><th>Limit</th><th>Configured Value</th></tr></thead><tbody>"
+    )
     for name, value in sorted(risk_limits_env.items()):
         parts.append(f"<tr><td>{_fmt(name)}</td><td>{_fmt(value)}</td></tr>")
     parts.append("</tbody></table>")
-    parts.append(f"<p class=\"note\">Runtime risk limits snapshot: {_fmt(risk_state)}</p>")
+    parts.append(f'<p class="note">Runtime risk limits snapshot: {_fmt(risk_state)}</p>')
 
     parts.append("<h2>Daily PnL / Ops summary</h2>")
     if not daily_report:
@@ -3469,7 +3432,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         exposure_samples = int(float(daily_report.get("exposure_samples") or 0))
         slippage_samples = int(float(daily_report.get("slippage_samples") or 0))
         parts.append(
-            "<p class=\"note\">Window: {window}h; last snapshot {ts}. PnL samples: {pnl}, "
+            '<p class="note">Window: {window}h; last snapshot {ts}. PnL samples: {pnl}, '
             "exposure samples: {exp}; slippage samples: {slip}.</p>".format(
                 window=_fmt(window),
                 ts=_fmt(timestamp),
@@ -3481,7 +3444,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     parts.append("<h2>Exposure (Open / Partial)</h2>")
     if exposures:
-        parts.append("<table><thead><tr><th>Venue</th><th>Long Notional</th><th>Short Notional</th><th>Net USDT</th></tr></thead><tbody>")
+        parts.append(
+            "<table><thead><tr><th>Venue</th><th>Long Notional</th><th>Short Notional</th><th>Net USDT</th></tr></thead><tbody>"
+        )
         for venue, payload in sorted(exposures.items()):
             risk_badge = ""
             try:
@@ -3554,9 +3519,7 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         parts.append("<p>No open hedge positions.</p>")
 
     parts.append("<h2>Exchanges Health</h2>")
-    parts.append(
-        f"<p>Overall status: {_status_span(watchdog_overall_ok)}</p>"
-    )
+    parts.append(f"<p>Overall status: {_status_span(watchdog_overall_ok)}</p>")
     if watchdog_rows:
         parts.append(
             "<table><thead><tr><th>Exchange</th><th>Status</th><th>Last check</th><th>Reason</th></tr></thead><tbody>"
@@ -3582,17 +3545,19 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         parts.append("<p>No watchdog checks recorded.</p>")
 
-    parts.append("<h2>Background Health</h2><table><thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead><tbody>")
+    parts.append(
+        "<h2>Background Health</h2><table><thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead><tbody>"
+    )
     for entry in health_checks:
         name = _fmt(entry.get("name"))
         ok = bool(entry.get("ok"))
         detail_value = entry.get("detail")
         detail = _fmt(detail_value)
         if not ok:
-            detail = f"<span style=\"color:#b00020;font-weight:700;\">{detail or 'unavailable'}</span>"
-        parts.append(
-            f"<tr><td>{name}</td><td>{_status_span(ok)}</td><td>{detail}</td></tr>"
-        )
+            detail = (
+                f"<span style=\"color:#b00020;font-weight:700;\">{detail or 'unavailable'}</span>"
+            )
+        parts.append(f"<tr><td>{name}</td><td>{_status_span(ok)}</td><td>{detail}</td></tr>")
     parts.append("</tbody></table>")
 
     parts.append("<h2>Pending Approvals</h2>")
@@ -3615,40 +3580,40 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     else:
         parts.append("<p>No pending approvals.</p>")
 
-    controls_parts = ["<div class=\"controls\"><h2>Controls</h2>"]
+    controls_parts = ['<div class="controls"><h2>Controls</h2>']
 
     def _controls_form_markup(disabled_attr: str) -> list[str]:
         return [
             (
-                "<form method=\"post\" action=\"/api/ui/dashboard-hold\"><label for=\"hold-reason\">Trigger HOLD</label>"
-                f"<input id=\"hold-reason\" name=\"reason\" type=\"text\" placeholder=\"reason (optional)\"{disabled_attr} />"
-                "<label for=\"hold-operator\">Operator (optional)</label>"
-                f"<input id=\"hold-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
-                f"<button type=\"submit\"{disabled_attr}>Enable HOLD</button></form>"
+                '<form method="post" action="/api/ui/dashboard-hold"><label for="hold-reason">Trigger HOLD</label>'
+                f'<input id="hold-reason" name="reason" type="text" placeholder="reason (optional)"{disabled_attr} />'
+                '<label for="hold-operator">Operator (optional)</label>'
+                f'<input id="hold-operator" name="operator" type="text" placeholder="who is requesting"{disabled_attr} />'
+                f'<button type="submit"{disabled_attr}>Enable HOLD</button></form>'
             ),
             (
-                "<form method=\"post\" action=\"/api/ui/dashboard-resume-request\"><label for=\"resume-reason\">Request RESUME</label>"
-                f"<input id=\"resume-reason\" name=\"reason\" type=\"text\" placeholder=\"Why trading should resume\" required{disabled_attr} />"
-                "<label for=\"resume-operator\">Operator (optional)</label>"
-                f"<input id=\"resume-operator\" name=\"operator\" type=\"text\" placeholder=\"who is requesting\"{disabled_attr} />"
-                "<div class=\"note\">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>"
-                f"<button type=\"submit\"{disabled_attr}>Request RESUME</button></form>"
+                '<form method="post" action="/api/ui/dashboard-resume-request"><label for="resume-reason">Request RESUME</label>'
+                f'<input id="resume-reason" name="reason" type="text" placeholder="Why trading should resume" required{disabled_attr} />'
+                '<label for="resume-operator">Operator (optional)</label>'
+                f'<input id="resume-operator" name="operator" type="text" placeholder="who is requesting"{disabled_attr} />'
+                '<div class="note">Request is logged and still requires second-operator approval with APPROVE_TOKEN.</div>'
+                f'<button type="submit"{disabled_attr}>Request RESUME</button></form>'
             ),
             (
-                "<form method=\"post\" action=\"/api/ui/dashboard-unfreeze-strategy\"><label for=\"unfreeze-strategy\">Unfreeze strategy</label>"
-                f"<input id=\"unfreeze-strategy\" name=\"strategy\" type=\"text\" placeholder=\"strategy identifier\" required{disabled_attr} />"
-                "<label for=\"unfreeze-reason\">Reason</label>"
-                f"<input id=\"unfreeze-reason\" name=\"reason\" type=\"text\" placeholder=\"Why override is safe\" required{disabled_attr} />"
-                "<div class=\"note\">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded. Second-operator approval is required.</div>"
-                f"<button type=\"submit\"{disabled_attr}>Request unfreeze</button></form>"
+                '<form method="post" action="/api/ui/dashboard-unfreeze-strategy"><label for="unfreeze-strategy">Unfreeze strategy</label>'
+                f'<input id="unfreeze-strategy" name="strategy" type="text" placeholder="strategy identifier" required{disabled_attr} />'
+                '<label for="unfreeze-reason">Reason</label>'
+                f'<input id="unfreeze-reason" name="reason" type="text" placeholder="Why override is safe" required{disabled_attr} />'
+                '<div class="note">Clears the risk freeze and resets consecutive failure counters. Audit trail is recorded. Second-operator approval is required.</div>'
+                f'<button type="submit"{disabled_attr}>Request unfreeze</button></form>'
             ),
             (
-                "<form method=\"post\" action=\"/api/ui/dashboard-kill\"><label for=\"kill-operator\">Emergency Cancel All / Kill Switch</label>"
-                f"<input id=\"kill-operator\" name=\"operator\" type=\"text\" placeholder=\"operator (optional)\"{disabled_attr} />"
-                "<label for=\"kill-reason\">Reason (optional)</label>"
-                f"<input id=\"kill-reason\" name=\"reason\" type=\"text\" placeholder=\"Why kill switch is required\"{disabled_attr} />"
-                "<div class=\"note\">Requests a dual-approval kill switch. Orders are cancelled only after the second confirmation.</div>"
-                f"<button type=\"submit\"{disabled_attr}>Request emergency CANCEL ALL</button></form>"
+                '<form method="post" action="/api/ui/dashboard-kill"><label for="kill-operator">Emergency Cancel All / Kill Switch</label>'
+                f'<input id="kill-operator" name="operator" type="text" placeholder="operator (optional)"{disabled_attr} />'
+                '<label for="kill-reason">Reason (optional)</label>'
+                f'<input id="kill-reason" name="reason" type="text" placeholder="Why kill switch is required"{disabled_attr} />'
+                '<div class="note">Requests a dual-approval kill switch. Orders are cancelled only after the second confirmation.</div>'
+                f'<button type="submit"{disabled_attr}>Request emergency CANCEL ALL</button></form>'
             ),
         ]
 
@@ -3656,11 +3621,11 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
         controls_parts.extend(_controls_form_markup(""))
     elif is_auditor:
         controls_parts.append(
-            "<p class=\"note\" style=\"color:#1f2937;font-weight:600;\">Auditor role: read only. Trading controls are hidden.</p>"
+            '<p class="note" style="color:#1f2937;font-weight:600;">Auditor role: read only. Trading controls are hidden.</p>'
         )
     else:
         controls_parts.append(
-            "<p class=\"note\" style=\"color:#b91c1c;font-weight:600;\">Controls require operator role. Requests cannot be initiated from viewer accounts.</p>"
+            '<p class="note" style="color:#b91c1c;font-weight:600;">Controls require operator role. Requests cannot be initiated from viewer accounts.</p>'
         )
 
     controls_parts.append("</div>")
@@ -3668,7 +3633,9 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
 
     build_value = _fmt(context.get("build_version")) or "n/a"
     build_timestamp_raw = context.get("build_timestamp")
-    build_timestamp = _fmt(build_timestamp_raw) if build_timestamp_raw else _fmt(_build_timestamp_value())
+    build_timestamp = (
+        _fmt(build_timestamp_raw) if build_timestamp_raw else _fmt(_build_timestamp_value())
+    )
     last_snapshot_ts = ""
     if pnl_history:
         try:
@@ -3685,8 +3652,8 @@ def render_dashboard_html(context: Dict[str, Any]) -> str:
     runbook_label = "Warnings runbook"
     parts.append(
         "<footer>Build version: <strong>{build}</strong> • Build timestamp: {build_ts} • Last PnL snapshot: {snapshot} • "
-        "<a href=\"{runbook}\" target=\"_blank\" rel=\"noopener\">{runbook_label}</a> • "
-        "<span class=\"footer-warning\">{warning}</span></footer>".format(
+        '<a href="{runbook}" target="_blank" rel="noopener">{runbook_label}</a> • '
+        '<span class="footer-warning">{warning}</span></footer>'.format(
             build=build_value,
             build_ts=build_timestamp,
             snapshot=last_snapshot_ts,
@@ -3719,4 +3686,3 @@ __all__ = [
     "render_dashboard_html",
     "build_reconciliation_summary",
 ]
-

@@ -37,7 +37,9 @@ class DerivClient(Protocol):
 
     def positions(self) -> List[Dict[str, object]]: ...
 
-    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> List[Dict[str, object]]: ...
+    def recent_fills(
+        self, symbol: str | None = None, since: float | None = None
+    ) -> List[Dict[str, object]]: ...
 
 
 @dataclass
@@ -136,16 +138,20 @@ class InMemoryDerivClient:
     def positions(self) -> List[Dict[str, object]]:
         results: List[Dict[str, object]] = []
         for sym, entry in self.positions_data.items():
-            results.append({
-                "symbol": sym,
-                "long": entry.get("long", 0.0),
-                "short": entry.get("short", 0.0),
-                "margin_type": self.margin_type.get(sym, "isolated"),
-                "leverage": self.leverage.get(sym, 1),
-            })
+            results.append(
+                {
+                    "symbol": sym,
+                    "long": entry.get("long", 0.0),
+                    "short": entry.get("short", 0.0),
+                    "margin_type": self.margin_type.get(sym, "isolated"),
+                    "leverage": self.leverage.get(sym, 1),
+                }
+            )
         return results
 
-    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> List[Dict[str, object]]:
+    def recent_fills(
+        self, symbol: str | None = None, since: float | None = None
+    ) -> List[Dict[str, object]]:
         if symbol:
             symbol_upper = symbol.upper()
             return [entry for entry in self.fills if entry.get("symbol") == symbol_upper]

@@ -11,7 +11,9 @@ from app.strategy_orchestrator import StrategyOrchestrator, reset_strategy_orche
 
 
 @pytest.fixture
-def authed_client(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
+def authed_client(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> TestClient:
     secrets_path = tmp_path / "secrets.json"
     secrets_payload = {
         "operator_tokens": {
@@ -31,10 +33,14 @@ def test_strategy_toggle_rbac_and_status(authed_client: TestClient) -> None:
     operator_headers = {"Authorization": "Bearer operator-token"}
     enable_payload = {"strategy": "cross_exchange_arb", "reason": "scheduled"}
 
-    forbidden = authed_client.post("/api/ui/strategy/enable", json=enable_payload, headers=viewer_headers)
+    forbidden = authed_client.post(
+        "/api/ui/strategy/enable", json=enable_payload, headers=viewer_headers
+    )
     assert forbidden.status_code == 403
 
-    enabled = authed_client.post("/api/ui/strategy/enable", json=enable_payload, headers=operator_headers)
+    enabled = authed_client.post(
+        "/api/ui/strategy/enable", json=enable_payload, headers=operator_headers
+    )
     assert enabled.status_code == 200
     assert "cross_exchange_arb" in enabled.json().get("enabled_strategies", [])
 

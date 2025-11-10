@@ -1,4 +1,5 @@
 """Restart-resume helpers for FEATURE_JOURNAL."""
+
 from __future__ import annotations
 
 import logging

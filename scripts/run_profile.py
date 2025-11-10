@@ -64,7 +64,8 @@ def _prepare_environment(profile: RuntimeProfile) -> int:
 
     applied = apply_profile_environment(profile, profile_cfg)
     LOGGER.info(
-        "Активируем профиль=%s", profile.value,
+        "Активируем профиль=%s",
+        profile.value,
     )
     LOGGER.debug(
         "Параметры окружения: %s",
@@ -108,9 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     exit_code = _prepare_environment(profile)
     if exit_code != 0:
         return exit_code
-    LOGGER.info(
-        "Запуск сервиса host=%s port=%s профиль=%s", args.host, args.port, profile.value
-    )
+    LOGGER.info("Запуск сервиса host=%s port=%s профиль=%s", args.host, args.port, profile.value)
     return _run_uvicorn(args.host, args.port, args.reload)
 
 

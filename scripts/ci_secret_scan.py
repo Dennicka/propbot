@@ -64,9 +64,7 @@ def main() -> int:
             continue
         findings = _scan_file(file_path)
         for label, line, snippet in findings:
-            failures.append(
-                f"{relative}:{line} -> {label}: {snippet}"
-            )
+            failures.append(f"{relative}:{line} -> {label}: {snippet}")
     if failures:
         print("Potential secrets detected:\n" + "\n".join(failures))
         return 1

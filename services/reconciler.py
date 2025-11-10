@@ -112,7 +112,9 @@ def _expected_exposures(
             if leg_status in {"closed", "filled"}:
                 continue
             leg_side = _normalise_side(leg.get("side"))
-            venue = _normalise_venue(leg.get("venue") or position.get("long_venue") or position.get("short_venue"))
+            venue = _normalise_venue(
+                leg.get("venue") or position.get("long_venue") or position.get("short_venue")
+            )
             if not leg_side:
                 long_venue = _normalise_venue(position.get("long_venue"))
                 short_venue = _normalise_venue(position.get("short_venue"))
@@ -157,7 +159,9 @@ def _expected_exposures(
     return expected, partial_legs
 
 
-def _actual_exposures(exchange_positions: Sequence[Mapping[str, Any]]) -> Dict[Tuple[str, str, str], float]:
+def _actual_exposures(
+    exchange_positions: Sequence[Mapping[str, Any]]
+) -> Dict[Tuple[str, str, str], float]:
     actual: Dict[Tuple[str, str, str], float] = {}
     for row in exchange_positions:
         if not isinstance(row, Mapping):
@@ -306,4 +310,3 @@ def reconcile(
 
 
 __all__ = ["detect_desyncs", "reconcile"]
-

@@ -434,7 +434,11 @@ class _BaseBinanceBroker(Broker):
             ledger.record_event(
                 level="WARNING",
                 code="binance_cancel_skipped",
-                payload={"venue": self.venue, "order_id": order_id, "reason": "missing_credentials"},
+                payload={
+                    "venue": self.venue,
+                    "order_id": order_id,
+                    "reason": "missing_credentials",
+                },
             )
             return
         params: Dict[str, Any] = {"symbol": symbol}
@@ -506,9 +510,7 @@ class _BaseBinanceBroker(Broker):
             if not symbol or abs(qty) <= 1e-12:
                 continue
             entry_price = _float(
-                row.get("avg_entry")
-                or row.get("entry_price")
-                or row.get("entryPrice"),
+                row.get("avg_entry") or row.get("entry_price") or row.get("entryPrice"),
                 0.0,
             )
             mark_price = _float(row.get("mark_price") or row.get("markPrice"), entry_price)
@@ -536,11 +538,7 @@ class _BaseBinanceBroker(Broker):
         target = str(venue or self.venue).lower()
         if orders is None:
             fetched = await asyncio.to_thread(ledger.fetch_open_orders)
-            orders = [
-                order
-                for order in fetched
-                if str(order.get("venue") or "").lower() == target
-            ]
+            orders = [order for order in fetched if str(order.get("venue") or "").lower() == target]
         order_ids: List[int] = []
         for order in orders:
             try:
@@ -642,7 +640,11 @@ class _BaseBinanceBroker(Broker):
         return symbols
 
     async def _symbols_for_fills(self) -> List[str]:
-        buckets = [await self._active_symbols(), await self._recent_fill_symbols(), list(self._symbol_cache)]
+        buckets = [
+            await self._active_symbols(),
+            await self._recent_fill_symbols(),
+            list(self._symbol_cache),
+        ]
         symbols: List[str] = []
         seen: set[str] = set()
         for bucket in buckets:
@@ -669,7 +671,9 @@ class _BaseBinanceBroker(Broker):
             for symbol in symbols:
                 symbol_params = dict(params)
                 symbol_params["symbol"] = symbol
-                response = await self._request("GET", "/fapi/v1/userTrades", params=symbol_params, signed=True)
+                response = await self._request(
+                    "GET", "/fapi/v1/userTrades", params=symbol_params, signed=True
+                )
                 if isinstance(response, list):
                     trades.extend(response)
         except Exception as exc:  # pragma: no cover - defensive logging
@@ -757,4 +761,3 @@ class BinanceLiveBroker(_BaseBinanceBroker):
             default_base_url=_DEFAULT_LIVE_BASE_URL,
             venue_type="binance-live",
         )
-

@@ -69,7 +69,10 @@ app.include_router(arb.router, prefix="/api/arb")
 app.include_router(deriv.router, prefix="/api/deriv")
 app.include_router(hedge.router, prefix="/api/hedge")
 
+
 # Prometheus metrics endpoint
 @app.get("/metrics")
 def metrics() -> Response:
-    return Response(generate_latest(REGISTRY), media_type="text/plain; version=0.0.4; charset=utf-8")
+    return Response(
+        generate_latest(REGISTRY), media_type="text/plain; version=0.0.4; charset=utf-8"
+    )

@@ -46,7 +46,9 @@ class DummyRuntime:
     def get_state(self):
         return self.state
 
-    def record_stuck_resolver_retry(self, *, intent_id: str, timestamp: float | None = None) -> None:
+    def record_stuck_resolver_retry(
+        self, *, intent_id: str, timestamp: float | None = None
+    ) -> None:
         self.retries.append((intent_id, timestamp))
 
     def record_incident(self, kind: str, details: dict) -> None:
@@ -86,6 +88,7 @@ def _reset_order_store(tmp_path, monkeypatch):
         order_store.metadata.drop_all(order_store.get_engine())
         order_store._ENGINE = None  # type: ignore[attr-defined]
         order_store._SESSION_FACTORY = None  # type: ignore[attr-defined]
+
 
 @pytest.mark.asyncio
 async def test_cancels_and_retries_after_timeout(monkeypatch):
@@ -280,4 +283,3 @@ async def test_does_not_retry_terminal_states(monkeypatch):
     assert broker.cancels == []
     assert broker.submits == [intent_id]
     assert runtime_stub.retries == []
-

@@ -143,9 +143,7 @@ def _resolve_remote_state(
     else:
         payload_for_update = payload
     new_state = apply_exchange_update(current_state, payload_for_update)
-    target_state = _ORDER_STATUS_TO_INTENT.get(
-        new_state.status, order_store.OrderIntentState.ACKED
-    )
+    target_state = _ORDER_STATUS_TO_INTENT.get(new_state.status, order_store.OrderIntentState.ACKED)
     filled_qty = new_state.cum_filled
     remaining_qty: float | None
     if new_state.qty > 0:
@@ -246,7 +244,9 @@ def enforce_reduce_only(
     return True, native_supported, None
 
 
-def _is_reduce_only_order(side: str, qty: float | int | str | None, current_position: float) -> bool:
+def _is_reduce_only_order(
+    side: str, qty: float | int | str | None, current_position: float
+) -> bool:
     qty_value = _coerce_float(qty)
     if qty_value <= 0:
         return False
@@ -403,9 +403,8 @@ class OrderRouter:
                 reduce_only_flag = reduce_only_flag or native_supported
             else:
                 reason_text = (
-                    (reduce_reason or gate_reason or "PRETRADE_BLOCKED").strip()
-                    or "PRETRADE_BLOCKED"
-                )
+                    reduce_reason or gate_reason or "PRETRADE_BLOCKED"
+                ).strip() or "PRETRADE_BLOCKED"
                 PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
                 runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
                 log_operator_action(
@@ -472,9 +471,7 @@ class OrderRouter:
                 increment = 0.0
                 if delta_qty > 0:
                     increment = (
-                        notional_value
-                        if notional_value > 0
-                        else delta_qty * price_reference
+                        notional_value if notional_value > 0 else delta_qty * price_reference
                     )
                 new_abs_position = current_long_abs + max(increment, 0.0)
             else:
@@ -485,16 +482,12 @@ class OrderRouter:
                 increment = 0.0
                 if delta_qty < 0:
                     increment = (
-                        notional_value
-                        if notional_value > 0
-                        else (-delta_qty) * price_reference
+                        notional_value if notional_value > 0 else (-delta_qty) * price_reference
                     )
                 new_abs_position = current_short_abs + max(increment, 0.0)
             else:
                 new_abs_position = abs(new_base_qty) * price_reference
-        increasing = bool(target_side) and (
-            new_abs_position > current_side_abs + 1e-6
-        )
+        increasing = bool(target_side) and (new_abs_position > current_side_abs + 1e-6)
         if increasing and target_side is not None:
             state = runtime.get_state()
             caps_ctx: Dict[str, object] = {
@@ -524,15 +517,21 @@ class OrderRouter:
                         "reason": reason_text,
                         "qty": qty,
                         "price": price,
-                        "projected_global": projection.get("global", {}).get("projected")
-                        if isinstance(projection, Mapping)
-                        else None,
-                        "projected_side": projection.get("side", {}).get("projected")
-                        if isinstance(projection, Mapping)
-                        else None,
-                        "projected_venue": projection.get("venue_total", {}).get("projected")
-                        if isinstance(projection, Mapping)
-                        else None,
+                        "projected_global": (
+                            projection.get("global", {}).get("projected")
+                            if isinstance(projection, Mapping)
+                            else None
+                        ),
+                        "projected_side": (
+                            projection.get("side", {}).get("projected")
+                            if isinstance(projection, Mapping)
+                            else None
+                        ),
+                        "projected_venue": (
+                            projection.get("venue_total", {}).get("projected")
+                            if isinstance(projection, Mapping)
+                            else None
+                        ),
                         "cap_global": caps_payload.get("global_max_abs"),
                         "cap_side": caps_payload.get("side_max_abs"),
                         "cap_venue": caps_payload.get("venue_max_abs"),
@@ -622,13 +621,9 @@ class OrderRouter:
                         broker_order_id=intent.broker_order_id,
                         state=intent.state,
                     )
-                if (
-                    prev_request_id == client_request_id
-                    and current_state
-                    in (
-                        order_store.OrderIntentState.PENDING,
-                        order_store.OrderIntentState.SENT,
-                    )
+                if prev_request_id == client_request_id and current_state in (
+                    order_store.OrderIntentState.PENDING,
+                    order_store.OrderIntentState.SENT,
                 ):
                     IDEMPOTENCY_HIT_TOTAL.labels(operation="submit").inc()
                     return OrderRef(
@@ -773,9 +768,7 @@ class OrderRouter:
             try:
                 await self._broker.cancel(venue=venue, order_id=broker_order_id)
             except Exception as exc:  # pragma: no cover - broker errors propagate
-                LOGGER.info(
-                    "cancel failed", extra={"order_id": broker_order_id, "error": str(exc)}
-                )
+                LOGGER.info("cancel failed", extra={"order_id": broker_order_id, "error": str(exc)})
                 with order_store.session_scope() as session:
                     intent = order_store.ensure_cancel_intent(
                         session,
@@ -851,7 +844,11 @@ class OrderRouter:
                     side=side,
                     order_type=str(new_params.get("type", base_type)),
                     qty=float(new_params.get("qty", base_qty)),
-                    price=float(new_params.get("price")) if new_params.get("price") is not None else None,
+                    price=(
+                        float(new_params.get("price"))
+                        if new_params.get("price") is not None
+                        else None
+                    ),
                     tif=new_params.get("tif") or base_tif,
                     strategy=new_params.get("strategy") or base_strategy,
                     replaced_by=None,
@@ -1070,4 +1067,3 @@ def _replacement_depth(session, intent_id: str) -> int:
 
 
 __all__ = ["OrderRouter", "OrderRef", "OrderRouterError", "enforce_reduce_only"]
-

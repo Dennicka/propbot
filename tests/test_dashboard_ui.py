@@ -952,7 +952,7 @@ def test_dashboard_shows_account_health_banner(monkeypatch, client) -> None:
     assert response.status_code == 200
     html = response.text
 
-    assert 'ACCOUNT HEALTH:</span> CRITICAL' in html
+    assert "ACCOUNT HEALTH:</span> CRITICAL" in html
     assert 'class="account-health-banner"' in html
-    assert 'ACCOUNT_HEALTH::CRITICAL::BINANCE' in html
+    assert "ACCOUNT_HEALTH::CRITICAL::BINANCE" in html
     assert 'title="BINANCE: ratio=0.9500, free=5.00 USD' in html

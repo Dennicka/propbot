@@ -213,7 +213,9 @@ class DailyPnLReporter:
             "unrealised_pnl_usdt": _coerce_float(pnl_snapshot.get("unrealized_pnl_usdt")),
             "realised_pnl_today_usdt": 0.0,
             "total_exposure_usdt": _coerce_float(pnl_snapshot.get("total_exposure_usdt")),
-            "per_strategy_headroom": {str(key): dict(value) for key, value in dict(headroom).items()},
+            "per_strategy_headroom": {
+                str(key): dict(value) for key, value in dict(headroom).items()
+            },
             "enabled_strategies": sorted(enabled_strategies),
             "autopilot_active": bool(orchestrator_snapshot.get("autopilot_active")),
         }

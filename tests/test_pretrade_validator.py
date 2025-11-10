@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.config.schema import GuardrailsConfig, MaintenanceConfig, MaintenanceScheduleWindow, PretradeConfig
+from app.config.schema import (
+    GuardrailsConfig,
+    MaintenanceConfig,
+    MaintenanceScheduleWindow,
+    PretradeConfig,
+)
 from app.rules.pretrade import PretradeValidator
 from app.services import runtime
 

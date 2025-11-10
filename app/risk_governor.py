@@ -186,7 +186,9 @@ def _build_risk_snapshot(
         exposures_by_venue[venue] = exposures_by_venue.get(venue, 0.0) + abs(notional)
         total_unrealized += float(getattr(position, "upnl", 0.0) or 0.0)
 
-    daily_realized = float(getattr(getattr(risk_state, "current", SimpleNamespace()), "daily_loss_usdt", 0.0) or 0.0)
+    daily_realized = float(
+        getattr(getattr(risk_state, "current", SimpleNamespace()), "daily_loss_usdt", 0.0) or 0.0
+    )
 
     payload = {
         "collected_ts": datetime.now(timezone.utc).isoformat(),
@@ -282,6 +284,8 @@ async def validate(*, context: str = "runtime") -> Optional[str]:
     if reason:
         engaged = runtime.engage_safety_hold(reason, source=f"risk_governor:{context}")
         if engaged:
-            LOGGER.warning("risk governor engaged HOLD", extra={"reason": reason, "context": context})
+            LOGGER.warning(
+                "risk governor engaged HOLD", extra={"reason": reason, "context": context}
+            )
         return reason
     return None

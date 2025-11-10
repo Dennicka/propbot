@@ -62,20 +62,24 @@ def test_evaluate_balances_detects_margin_pressure(monkeypatch):
     monkeypatch.setitem(
         balances_monitor._CLIENTS,
         "binance",
-        DummyClient({
-            "available_balance": 500.0,
-            "total_balance": 600.0,
-            "margin_ratio": 0.85,
-        }),
+        DummyClient(
+            {
+                "available_balance": 500.0,
+                "total_balance": 600.0,
+                "margin_ratio": 0.85,
+            }
+        ),
     )
     monkeypatch.setitem(
         balances_monitor._CLIENTS,
         "okx",
-        DummyClient({
-            "available_balance": 500.0,
-            "total_equity": 600.0,
-            "mgnRatio": 0.2,
-        }),
+        DummyClient(
+            {
+                "available_balance": 500.0,
+                "total_equity": 600.0,
+                "mgnRatio": 0.2,
+            }
+        ),
     )
 
     result = balances_monitor.evaluate_balances(auto_hold=False)
