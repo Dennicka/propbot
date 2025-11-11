@@ -38,10 +38,10 @@ test:
 	$(PYTEST) -q --maxfail=1
 
 golden-check:
-        PYTHONPATH=. python -m app.cli_golden check
+	PYTHONPATH=. python -m app.cli_golden check
 
 golden-replay:
-        PYTHONPATH=. python -m app.golden.replay
+	PYTHONPATH=. python -m app.golden.replay
 
 verify:
 	ruff check .
@@ -51,20 +51,14 @@ verify:
 	pytest -q tests/golden
 	@if command -v pip-audit >/dev/null 2>&1; then \
 		pip-audit -r requirements.txt; \
-	elif python - <<'PYCODE_PIPAUDIT' >/dev/null 2>&1; then \
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec('pip_audit') else 1)
-PYCODE_PIPAUDIT
+	elif python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pip_audit') else 1)" >/dev/null 2>&1; then \
 		python -m pip_audit -r requirements.txt; \
 	else \
 		echo "pip-audit not installed, skipping"; \
 	fi
 	@if command -v bandit >/dev/null 2>&1; then \
 		bandit -q -r app services; \
-	elif python - <<'PYCODE_BANDIT' >/dev/null 2>&1; then \
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec('bandit') else 1)
-PYCODE_BANDIT
+	elif python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('bandit') else 1)" >/dev/null 2>&1; then \
 		python -m bandit -q -r app services; \
 	else \
 		echo "bandit not installed, skipping"; \
