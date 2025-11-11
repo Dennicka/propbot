@@ -105,7 +105,7 @@ async def test_build_pnl_attribution_respects_exclude_flag(monkeypatch: pytest.M
     monkeypatch.setattr(
         service,
         "_load_funding_events",
-        lambda limit=200: [dict(item) for item in funding_entries],
+        lambda *, limit=200, mode="paper": [dict(item) for item in funding_entries],
     )
 
     class DummyTracker:
@@ -186,7 +186,7 @@ async def test_build_pnl_attribution_includes_simulated_when_flag_false(
     monkeypatch.setattr(
         service,
         "_load_funding_events",
-        lambda limit=200: [dict(item) for item in funding_entries],
+        lambda *, limit=200, mode="paper": [dict(item) for item in funding_entries],
     )
 
     class DummyTracker:

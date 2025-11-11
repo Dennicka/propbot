@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Iterator, List, Sequence
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _to_decimal(value: object, *, default: Decimal = Decimal("0")) -> Decimal:
@@ -39,7 +43,18 @@ def _date_key(ts: float, tz: str | ZoneInfo) -> str:
     if isinstance(tz, str):
         try:
             tzinfo = ZoneInfo(tz)
-        except Exception:  # pragma: no cover - defensive fallback
+        except (ZoneInfoNotFoundError, ValueError) as exc:  # pragma: no cover - defensive fallback
+            LOGGER.warning(
+                "pnl_ledger.invalid_timezone",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "_date_key",
+                    "requested_tz": tz,
+                    "operation": "zoneinfo_lookup",
+                    "error": str(exc),
+                },
+                exc_info=True,
+            )
             tzinfo = timezone.utc
     else:
         tzinfo = tz

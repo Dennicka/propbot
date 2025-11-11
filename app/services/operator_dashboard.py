@@ -431,8 +431,15 @@ def _safety_snapshot(state) -> Dict[str, Any]:
     return payload
 
 
+def _resolve_mode(state) -> str:
+    control = getattr(state, "control", None)
+    environment = getattr(control, "environment", None) if control else None
+    return str(environment or "paper").lower()
+
+
 async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     state = get_state()
+    mode = _resolve_mode(state)
     runtime_badges = get_runtime_badges()
     runtime_snapshot_payload = make_runtime_snapshot()
     persisted = load_runtime_payload()
@@ -456,8 +463,18 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     pnl_snapshot = build_pnl_snapshot(positions_payload)
     try:
         pnl_attribution_payload = await build_pnl_attribution()
-    except Exception:  # pragma: no cover - dashboard should degrade gracefully
-        logger.exception("failed to build pnl attribution snapshot")
+    except Exception as exc:  # pragma: no cover - dashboard should degrade gracefully
+        logger.error(
+            "operator_dashboard.pnl_attribution_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "build_dashboard_context",
+                "operation": "build_pnl_attribution",
+                "mode": mode,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         pnl_attribution_payload = {
             "generated_at": _fmt(datetime.now(timezone.utc)),
             "by_strategy": {},
@@ -553,7 +570,17 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     try:
         recent_operator_actions = list_recent_operator_actions(limit=5)
     except Exception as exc:
-        logger.exception("failed to load recent operator actions", extra={"error": str(exc)})
+        logger.warning(
+            "operator_dashboard.recent_actions_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "build_dashboard_context",
+                "operation": "list_recent_operator_actions",
+                "mode": mode,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         recent_operator_actions = []
     recent_ops_incidents = list_recent_events(limit=10)
 
@@ -590,13 +617,33 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     try:
         daily_report = load_latest_report()
     except Exception as exc:
-        logger.exception("failed to load daily pnl report", extra={"error": str(exc)})
+        logger.warning(
+            "operator_dashboard.daily_report_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "build_dashboard_context",
+                "operation": "load_latest_report",
+                "mode": mode,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         daily_report = None
 
     try:
         last_backtest_report = load_latest_backtest_summary()
     except Exception as exc:
-        logger.exception("failed to load backtest summary", extra={"error": str(exc)})
+        logger.warning(
+            "operator_dashboard.backtest_summary_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "build_dashboard_context",
+                "operation": "load_latest_backtest_summary",
+                "mode": mode,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         last_backtest_report = None
     backtest_payload: dict[str, object] | None = None
     if last_backtest_report:
@@ -627,6 +674,17 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     try:
         strategy_plan = strategy_orchestrator.compute_next_plan()
     except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning(
+            "operator_dashboard.strategy_plan_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "build_dashboard_context",
+                "operation": "strategy_orchestrator.compute_next_plan",
+                "mode": mode,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         strategy_plan = {"error": str(exc)}
 
     hold_info = {
@@ -794,7 +852,18 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             tca_preview_error = "TCA router disabled"
         except Exception as exc:  # pragma: no cover - defensive
             tca_preview_error = str(exc)
-            logger.debug("tca preview unavailable", exc_info=exc)
+            logger.warning(
+                "operator_dashboard.tca_preview_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "build_dashboard_context",
+                    "operation": "compute_tca_preview",
+                    "mode": mode,
+                    "symbol": default_symbol,
+                    "error": str(exc),
+                },
+                exc_info=True,
+            )
 
     smart_router_preview: Dict[str, object] | None = None
     smart_router_error: str | None = None
@@ -811,9 +880,17 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
                         book = market_data.top_of_book(venue, symbol_norm)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(
-                            "operator_dashboard: failed to fetch top of book",
-                            extra={"venue": venue, "symbol": symbol_norm},
-                            exc_info=exc,
+                            "operator_dashboard.top_of_book_failed",
+                            extra={
+                                "log_module": __name__,
+                                "log_function": "build_dashboard_context",
+                                "operation": "market_data.top_of_book",
+                                "mode": mode,
+                                "venue": venue,
+                                "symbol": symbol_norm,
+                                "error": str(exc),
+                            },
+                            exc_info=True,
                         )
                         continue
                     ask = _coerce_float(book.get("ask"))
@@ -851,7 +928,18 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
             smart_router_error = str(exc)
         except Exception as exc:  # pragma: no cover - defensive
             smart_router_error = str(exc)
-            logger.debug("smart router preview unavailable", exc_info=exc)
+            logger.warning(
+                "operator_dashboard.smart_router_preview_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "build_dashboard_context",
+                    "operation": "SmartRouter.choose",
+                    "mode": mode,
+                    "symbol": default_symbol,
+                    "error": str(exc),
+                },
+                exc_info=True,
+            )
 
     return {
         "request": request,

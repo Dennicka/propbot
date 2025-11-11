@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,19 +39,36 @@ def _env_flag(name: str, default: bool = True) -> bool:
 def _exclude_simulated_entries() -> bool:
     try:
         return FeatureFlags.exclude_dry_run_from_pnl()
-    except Exception as exc:
-        LOGGER.debug(
-            "failed to resolve feature flag for pnl simulation exclusion",
-            extra={"error": str(exc)},
+    except (RuntimeError, ValueError, OSError) as exc:
+        LOGGER.warning(
+            "portfolio.exclude_simulated_flag_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "_exclude_simulated_entries",
+                "operation": "feature_flag_lookup",
+                "error": str(exc),
+            },
+            exc_info=True,
         )
         return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
 
 
-def _load_funding_events(limit: int = 200) -> List[dict[str, Any]]:
+def _load_funding_events(*, limit: int = 200, mode: str) -> List[dict[str, Any]]:
     try:
         events = ledger.fetch_events(limit=limit, order="desc")
-    except Exception as exc:
-        LOGGER.debug("failed to fetch funding events", extra={"error": str(exc)}, exc_info=True)
+    except (sqlite3.Error, ValueError) as exc:
+        LOGGER.warning(
+            "portfolio.funding_events_fetch_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "_load_funding_events",
+                "operation": "ledger.fetch_events",
+                "mode": mode,
+                "limit": limit,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         return []
     funding_rows: List[dict[str, Any]] = []
     for event in events:
@@ -97,8 +115,8 @@ def _load_funding_events(limit: int = 200) -> List[dict[str, Any]]:
     return funding_rows
 
 
-def _funding_breakdown(exclude_simulated: bool) -> tuple[dict[str, float], float]:
-    funding_events = _load_funding_events()
+def _funding_breakdown(exclude_simulated: bool, *, mode: str) -> tuple[dict[str, float], float]:
+    funding_events = _load_funding_events(mode=mode)
     totals: Dict[str, float] = defaultdict(float)
     for entry in funding_events:
         if exclude_simulated and entry.get("simulated"):
@@ -204,8 +222,8 @@ async def snapshot(since: datetime | None = None) -> PortfolioSnapshot:
     exclude_simulated = _exclude_simulated_entries()
 
     if use_testnet_brokers:
-        exposures, fills = await _collect_testnet_snapshot(state, since)
-        balances = await _collect_testnet_balances(state)
+        exposures, fills = await _collect_testnet_snapshot(state, since, mode=environment)
+        balances = await _collect_testnet_balances(state, mode=environment)
     else:
         exposures = await asyncio.to_thread(_paper_exposures)
         fills = await asyncio.to_thread(ledger.fetch_fills_since, since)
@@ -222,7 +240,7 @@ async def snapshot(since: datetime | None = None) -> PortfolioSnapshot:
     trading_total = realized_breakdown.trading
     fees_total = realized_breakdown.fees
 
-    funding_by_symbol, funding_total = _funding_breakdown(exclude_simulated)
+    funding_by_symbol, funding_total = _funding_breakdown(exclude_simulated, mode=environment)
 
     positions = _build_positions(exposures, marks, symbol_breakdowns, funding_by_symbol)
     balances_payload = _normalise_balances(balances)
@@ -264,7 +282,14 @@ async def snapshot(since: datetime | None = None) -> PortfolioSnapshot:
     except Exception:  # pragma: no cover - metrics must not break snapshot
         LOGGER.exception(
             "failed to update pnl metrics",
-            extra={"profile": environment, "exclude_simulated": exclude_simulated},
+            extra={
+                "log_module": __name__,
+                "log_function": "snapshot",
+                "operation": "pnl_metrics.update",
+                "profile": environment,
+                "mode": environment,
+                "exclude_simulated": exclude_simulated,
+            },
         )
 
     LOGGER.debug(
@@ -318,7 +343,7 @@ def _paper_balances() -> List[Dict[str, object]]:
 
 
 async def _collect_testnet_snapshot(
-    state, since: datetime | None
+    state, since: datetime | None, *, mode: str
 ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
     runtime = state.derivatives
     if not runtime or not runtime.venues:
@@ -343,7 +368,16 @@ async def _collect_testnet_snapshot(
         venue, _ = venue_info
         if isinstance(result, Exception):  # pragma: no cover - defensive logging
             LOGGER.warning(
-                "failed to aggregate positions", extra={"venue": venue, "error": str(result)}
+                "portfolio.collect_positions_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "_collect_testnet_snapshot",
+                    "operation": "broker.get_positions",
+                    "venue": venue,
+                    "mode": mode,
+                    "error": str(result),
+                },
+                exc_info=True,
             )
             continue
         exposures.extend(result)
@@ -353,7 +387,16 @@ async def _collect_testnet_snapshot(
         venue, _ = venue_info
         if isinstance(result, Exception):  # pragma: no cover - defensive logging
             LOGGER.warning(
-                "failed to aggregate fills", extra={"venue": venue, "error": str(result)}
+                "portfolio.collect_fills_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "_collect_testnet_snapshot",
+                    "operation": "broker.get_fills",
+                    "venue": venue,
+                    "mode": mode,
+                    "error": str(result),
+                },
+                exc_info=True,
             )
             continue
         fills.extend(result)
@@ -368,7 +411,7 @@ async def _collect_testnet_snapshot(
     return exposures, fills
 
 
-async def _collect_testnet_balances(state) -> List[Dict[str, object]]:
+async def _collect_testnet_balances(state, *, mode: str) -> List[Dict[str, object]]:
     runtime = state.derivatives
     if not runtime or not runtime.venues:
         return await asyncio.to_thread(_paper_balances)
@@ -388,7 +431,16 @@ async def _collect_testnet_balances(state) -> List[Dict[str, object]]:
         venue, _ = venue_info
         if isinstance(result, Exception):  # pragma: no cover - defensive logging
             LOGGER.warning(
-                "failed to aggregate balances", extra={"venue": venue, "error": str(result)}
+                "portfolio.collect_balances_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "_collect_testnet_balances",
+                    "operation": "broker.balances",
+                    "venue": venue,
+                    "mode": mode,
+                    "error": str(result),
+                },
+                exc_info=True,
             )
             continue
         payload = result.get("balances") if isinstance(result, Mapping) else None
