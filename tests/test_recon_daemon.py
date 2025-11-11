@@ -19,6 +19,14 @@ def _daemon_config() -> DaemonConfig:
         position_size_warn=Decimal("0.1"),
         position_size_critical=Decimal("0.5"),
         order_critical_missing=True,
+        pnl_warn_usd=Decimal("5"),
+        pnl_critical_usd=Decimal("25"),
+        pnl_relative_warn=Decimal("0.01"),
+        pnl_relative_critical=Decimal("0.05"),
+        fee_warn_usd=Decimal("1"),
+        fee_critical_usd=Decimal("5"),
+        funding_warn_usd=Decimal("1"),
+        funding_critical_usd=Decimal("5"),
     )
 
 
@@ -116,3 +124,50 @@ def test_recon_cycle_logs_and_metrics_for_warn(monkeypatch: pytest.MonkeyPatch, 
         or "recon.drift" in getattr(record, "message", "")
         for record in caplog.records
     )
+
+
+def test_run_recon_cycle_detects_pnl(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _daemon_config()
+    ctx = SimpleNamespace(
+        cfg=SimpleNamespace(recon=cfg),
+        state=None,
+        local_balances=lambda: [],
+        remote_balances=lambda: [],
+        local_positions=lambda: [],
+        remote_positions=lambda: [],
+        local_orders=lambda: [],
+        remote_orders=lambda: [],
+        local_pnl=lambda: [
+            {
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "realized": Decimal("1"),
+                "fees": Decimal("0"),
+                "funding": Decimal("0"),
+                "rebates": Decimal("0"),
+                "net": Decimal("1"),
+                "supports_fees": True,
+                "supports_funding": True,
+            }
+        ],
+        remote_pnl=lambda: [
+            {
+                "venue": "binance",
+                "symbol": "BTCUSDT",
+                "realized": Decimal("20"),
+                "fees": Decimal("0"),
+                "funding": Decimal("0"),
+                "rebates": Decimal("0"),
+                "net": Decimal("20"),
+                "supports_fees": True,
+                "supports_funding": True,
+            }
+        ],
+    )
+
+    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", lambda **_: None)
+    monkeypatch.setattr("app.recon.daemon.runtime.engage_safety_hold", lambda *_, **__: False)
+
+    drifts = run_recon_cycle(ctx)
+    assert any(drift.kind == "PNL" for drift in drifts)
+    assert any(drift.severity == "CRITICAL" for drift in drifts if drift.kind == "PNL")

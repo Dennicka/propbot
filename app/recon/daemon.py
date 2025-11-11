@@ -6,9 +6,10 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from .. import ledger
 from ..broker.router import ExecutionRouter
@@ -27,8 +28,10 @@ from .core import (
     ReconResult,
     detect_balance_drifts,
     detect_order_drifts,
+    detect_pnl_drifts,
     detect_position_drifts,
 )
+from .core import _ledger_rows_from_pnl
 from .reconciler import Reconciler
 
 LOGGER = logging.getLogger(__name__)
@@ -47,6 +50,14 @@ class DaemonConfig:
     position_size_warn: Decimal = Decimal("0.001")
     position_size_critical: Decimal = Decimal("0.01")
     order_critical_missing: bool = True
+    pnl_warn_usd: Decimal = Decimal("10")
+    pnl_critical_usd: Decimal = Decimal("50")
+    pnl_relative_warn: Decimal = Decimal("0.02")
+    pnl_relative_critical: Decimal = Decimal("0.05")
+    fee_warn_usd: Decimal = Decimal("5")
+    fee_critical_usd: Decimal = Decimal("20")
+    funding_warn_usd: Decimal = Decimal("5")
+    funding_critical_usd: Decimal = Decimal("25")
 
 
 class ReconDaemon:
@@ -101,15 +112,17 @@ class ReconDaemon:
         LOGGER.info("recon.daemon_stop")
 
     async def _build_context(self, state) -> SimpleNamespace:
-        local_positions, local_balances, local_orders = await asyncio.gather(
+        local_positions, local_balances, local_orders, local_pnl = await asyncio.gather(
             self._fetch_local_positions(),
             self._fetch_local_balances(),
             self._fetch_local_orders(),
+            self._fetch_local_pnl(),
         )
-        remote_positions, remote_balances, remote_orders = await asyncio.gather(
+        remote_positions, remote_balances, remote_orders, remote_pnl = await asyncio.gather(
             self._fetch_remote_positions(),
             self._fetch_remote_balances(state),
             self._fetch_remote_orders(state),
+            self._fetch_remote_pnl(state),
         )
 
         cfg = SimpleNamespace(
@@ -123,6 +136,14 @@ class ReconDaemon:
                 position_size_warn=self._config.position_size_warn,
                 position_size_critical=self._config.position_size_critical,
                 order_critical_missing=self._config.order_critical_missing,
+                pnl_warn_usd=self._config.pnl_warn_usd,
+                pnl_critical_usd=self._config.pnl_critical_usd,
+                pnl_relative_warn=self._config.pnl_relative_warn,
+                pnl_relative_critical=self._config.pnl_relative_critical,
+                fee_warn_usd=self._config.fee_warn_usd,
+                fee_critical_usd=self._config.fee_critical_usd,
+                funding_warn_usd=self._config.funding_warn_usd,
+                funding_critical_usd=self._config.funding_critical_usd,
                 enabled=self._config.enabled,
             )
         )
@@ -136,6 +157,8 @@ class ReconDaemon:
             remote_balances=lambda: remote_balances,
             local_orders=lambda: local_orders,
             remote_orders=lambda: remote_orders,
+            local_pnl=lambda: local_pnl,
+            remote_pnl=lambda: remote_pnl,
         )
 
     async def _fetch_local_positions(self) -> Sequence[Mapping[str, object]]:
@@ -164,6 +187,17 @@ class ReconDaemon:
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.warning(
                 "recon.local_orders_failed",
+                extra={"event": "recon_error", "error": str(exc)},
+            )
+            return []
+
+    async def _fetch_local_pnl(self) -> Sequence[Mapping[str, object]]:
+        since_ts = await asyncio.to_thread(_determine_pnl_since_ts)
+        try:
+            return await asyncio.to_thread(_build_local_pnl_snapshot, since_ts)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "recon.local_pnl_failed",
                 extra={"event": "recon_error", "error": str(exc)},
             )
             return []
@@ -269,6 +303,79 @@ class ReconDaemon:
             return []
         return [dict(row) for row in payload if isinstance(row, Mapping)]
 
+    async def _fetch_remote_pnl(self, state) -> Sequence[Mapping[str, object]]:
+        runtime_deriv = getattr(state, "derivatives", None)
+        venues = getattr(runtime_deriv, "venues", {}) if runtime_deriv else {}
+        if not venues:
+            return []
+        router = ExecutionRouter()
+        since_ts = await asyncio.to_thread(_determine_pnl_since_ts)
+        since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc) if since_ts else None
+        tasks: list[asyncio.Task[list[Mapping[str, object]]]] = []
+        venue_order: list[str] = []
+        for venue_id in venues.keys():
+            venue = venue_id.replace("_", "-")
+            broker = router.broker_for_venue(venue)
+            if broker is None:
+                continue
+            venue_order.append(venue)
+            tasks.append(asyncio.create_task(self._broker_pnl(broker, venue, since_dt, since_ts)))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        snapshots: list[Mapping[str, object]] = []
+        for venue, result in zip(venue_order, results):
+            if isinstance(result, Exception):
+                LOGGER.warning(
+                    "recon.remote_pnl_failed",
+                    extra={"event": "recon_error", "venue": venue, "error": str(result)},
+                )
+                continue
+            snapshots.extend(result)
+        return snapshots
+
+    async def _broker_pnl(
+        self,
+        broker,
+        venue: str,
+        since_dt: datetime | None,
+        since_ts: float | None,
+    ) -> list[Mapping[str, object]]:
+        try:
+            fills_payload = await asyncio.wait_for(broker.get_fills(since=since_dt), timeout=10.0)
+        except asyncio.TimeoutError:
+            LOGGER.warning(
+                "recon.remote_pnl_timeout",
+                extra={"event": "recon_error", "venue": venue, "category": "fills"},
+            )
+            return []
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "recon.remote_pnl_fetch_failed",
+                extra={"event": "recon_error", "venue": venue, "error": str(exc)},
+            )
+            return []
+        fills: list[Mapping[str, object]] = []
+        if isinstance(fills_payload, Iterable):
+            for item in fills_payload:
+                normalised = _normalise_remote_fill(venue, item)
+                if normalised is not None:
+                    fills.append(normalised)
+        supports_fees = any("fee" in row and row["fee"] not in (None, "") for row in fills)
+        source = _StaticPnLSource(fills, [], supports_fees=supports_fees, supports_funding=False)
+        try:
+            return await asyncio.to_thread(
+                _build_remote_pnl_snapshot,
+                source,
+                since_ts,
+                supports_fees,
+                source.supports_funding,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "recon.remote_pnl_snapshot_failed",
+                extra={"event": "recon_error", "venue": venue, "error": str(exc)},
+            )
+            return []
+
 
 def _ctx_fetch(ctx, name: str, default):
     if ctx is None:
@@ -277,7 +384,7 @@ def _ctx_fetch(ctx, name: str, default):
     if callable(provider):
         try:
             return provider()
-        except Exception as exc:
+        except Exception as exc:  # defensive: recon must proceed even if provider fails
             LOGGER.exception(
                 "recon.ctx_provider_failed",
                 extra={"provider": name, "error": str(exc)},
@@ -286,6 +393,154 @@ def _ctx_fetch(ctx, name: str, default):
     if provider is not None:
         return provider
     return default() if callable(default) else default
+
+
+def _determine_pnl_since_ts() -> float | None:
+    try:
+        recent = ledger.fetch_recent_fills(200)
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.warning("recon.local_recent_fills_failed", extra={"event": "recon_error"})
+        return None
+    timestamps: list[float] = []
+    for row in recent:
+        if not isinstance(row, Mapping):
+            continue
+        ts_value = _coerce_timestamp(row.get("ts"))
+        if ts_value is not None:
+            timestamps.append(ts_value)
+    if not timestamps:
+        return None
+    earliest = min(timestamps)
+    window = max(earliest - 3600, 0.0)
+    return window
+
+
+def _build_local_pnl_snapshot(since_ts: float | None) -> list[Mapping[str, object]]:
+    from ..ledger import pnl_sources
+
+    pnl_ledger = pnl_sources.build_ledger_from_history(None, since_ts=since_ts)
+    return _ledger_rows_from_pnl(pnl_ledger, supports_fees=True, supports_funding=True)
+
+
+def _build_remote_pnl_snapshot(
+    source: "_StaticPnLSource",
+    since_ts: float | None,
+    supports_fees: bool,
+    supports_funding: bool,
+) -> list[Mapping[str, object]]:
+    from ..ledger import pnl_sources
+
+    pnl_ledger = pnl_sources.build_ledger_from_history(source, since_ts=since_ts)
+    return _ledger_rows_from_pnl(
+        pnl_ledger,
+        supports_fees=supports_fees,
+        supports_funding=supports_funding,
+    )
+
+
+def _coerce_timestamp(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            cleaned = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+            try:
+                parsed = datetime.fromisoformat(cleaned)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            else:
+                parsed = parsed.astimezone(timezone.utc)
+            return parsed.timestamp()
+    return None
+
+
+def _isoformat_ts(value: object) -> str:
+    ts = _coerce_timestamp(value)
+    if ts is None:
+        return datetime.now(timezone.utc).isoformat()
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def _normalise_remote_fill(venue: str, payload: object) -> Mapping[str, object] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    symbol = str(
+        payload.get("symbol") or payload.get("instId") or payload.get("instrument") or ""
+    ).upper()
+    if not symbol:
+        return None
+    qty = (
+        payload.get("qty")
+        or payload.get("size")
+        or payload.get("quantity")
+        or payload.get("base_qty")
+    )
+    price = payload.get("price") or payload.get("px") or payload.get("avgPrice")
+    side = payload.get("side") or payload.get("direction")
+    if side is None:
+        buyer_flag = payload.get("buyer")
+        if buyer_flag is True:
+            side = "buy"
+        elif buyer_flag is False:
+            side = "sell"
+    fee = payload.get("fee") or payload.get("commission") or payload.get("feePaid")
+    fee_asset = (
+        payload.get("fee_asset") or payload.get("feeCurrency") or payload.get("commissionAsset")
+    )
+    ts_value = payload.get("ts") or payload.get("timestamp") or payload.get("time")
+    iso_ts = _isoformat_ts(ts_value)
+    return {
+        "venue": venue,
+        "symbol": symbol,
+        "qty": qty,
+        "price": price,
+        "side": side or "buy",
+        "fee": fee,
+        "fee_asset": fee_asset,
+        "ts": iso_ts,
+    }
+
+
+class _StaticPnLSource:
+    def __init__(
+        self,
+        fills: Sequence[Mapping[str, object]],
+        events: Sequence[Mapping[str, object]],
+        *,
+        supports_fees: bool,
+        supports_funding: bool,
+    ) -> None:
+        self._fills = [dict(row) for row in fills if isinstance(row, Mapping)]
+        self._events = [dict(row) for row in events if isinstance(row, Mapping)]
+        self.supports_fees = supports_fees
+        self.supports_funding = supports_funding
+
+    def fetch_fills_since(self, since: object | None = None) -> list[Mapping[str, object]]:
+        threshold = None
+        if since is not None:
+            if isinstance(since, str):
+                threshold = _coerce_timestamp(since)
+            elif isinstance(since, (int, float)) and not isinstance(since, bool):
+                threshold = float(since)
+        if threshold is None:
+            return list(self._fills)
+        filtered: list[Mapping[str, object]] = []
+        for row in self._fills:
+            ts_value = _coerce_timestamp(row.get("ts"))
+            if ts_value is None or ts_value < threshold:
+                continue
+            filtered.append(row)
+        return filtered
+
+    def fetch_events(self, **_) -> list[Mapping[str, object]]:
+        return list(self._events)
 
 
 def _ctx_recon_config(ctx) -> object:
@@ -371,6 +626,7 @@ def _drift_code(drift: ReconDrift) -> str:
         "BALANCE": "BALANCE_DRIFT",
         "POSITION": "POSITION_DRIFT",
         "ORDER": "ORDER_DRIFT",
+        "PNL": "PNL_DRIFT",
     }.get(drift.kind, f"{drift.kind}_DRIFT")
 
 
@@ -479,6 +735,14 @@ def _resolve_daemon_config(cfg: object | None = None) -> DaemonConfig:
     position_warn = _extract("position_size_warn", config.position_size_warn)
     position_critical = _extract("position_size_critical", config.position_size_critical)
     order_missing_raw = _cfg_value(recon_cfg, "order_critical_missing")
+    pnl_warn = _extract("pnl_warn_usd", config.pnl_warn_usd)
+    pnl_critical = _extract("pnl_critical_usd", config.pnl_critical_usd)
+    pnl_rel_warn = _extract("pnl_relative_warn", config.pnl_relative_warn)
+    pnl_rel_critical = _extract("pnl_relative_critical", config.pnl_relative_critical)
+    fee_warn = _extract("fee_warn_usd", config.fee_warn_usd)
+    fee_critical = _extract("fee_critical_usd", config.fee_critical_usd)
+    funding_warn = _extract("funding_warn_usd", config.funding_warn_usd)
+    funding_critical = _extract("funding_critical_usd", config.funding_critical_usd)
 
     return DaemonConfig(
         enabled=bool(enabled_raw) if enabled_raw is not None else config.enabled,
@@ -498,6 +762,14 @@ def _resolve_daemon_config(cfg: object | None = None) -> DaemonConfig:
             if order_missing_raw is not None
             else config.order_critical_missing
         ),
+        pnl_warn_usd=pnl_warn,
+        pnl_critical_usd=pnl_critical,
+        pnl_relative_warn=pnl_rel_warn,
+        pnl_relative_critical=pnl_rel_critical,
+        fee_warn_usd=fee_warn,
+        fee_critical_usd=fee_critical,
+        funding_warn_usd=funding_warn,
+        funding_critical_usd=funding_critical,
     )
 
 
@@ -511,11 +783,14 @@ def run_recon_cycle(ctx) -> list[ReconDrift]:
     remote_positions = _ctx_fetch(ctx, "remote_positions", lambda: [])
     local_orders = _ctx_fetch(ctx, "local_orders", lambda: [])
     remote_orders = _ctx_fetch(ctx, "remote_orders", lambda: [])
+    local_pnl = _ctx_fetch(ctx, "local_pnl", lambda: [])
+    remote_pnl = _ctx_fetch(ctx, "remote_pnl", lambda: [])
 
     drifts: list[ReconDrift] = []
     drifts.extend(detect_balance_drifts(local_balances, remote_balances, recon_cfg))
     drifts.extend(detect_position_drifts(local_positions, remote_positions, recon_cfg))
     drifts.extend(detect_order_drifts(local_orders, remote_orders, recon_cfg))
+    drifts.extend(detect_pnl_drifts(local_pnl, remote_pnl, recon_cfg))
 
     worst = _worst_severity(drifts)
     ts = drifts[0].ts if drifts else time.time()
