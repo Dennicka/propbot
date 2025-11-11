@@ -44,31 +44,31 @@ golden-replay:
         PYTHONPATH=. python -m app.golden.replay
 
 verify:
-        ruff check .
-        black --check .
-        mypy --config-file mypy.ini app
-        pytest
-        pytest -q tests/golden
-        @if command -v pip-audit >/dev/null 2>&1; then \
-                pip-audit -r requirements.txt; \
-        elif python - <<'PYCODE_PIPAUDIT' >/dev/null 2>&1; then \
+	ruff check .
+	black --check .
+	mypy --config-file mypy.ini app
+	pytest
+	pytest -q tests/golden
+	@if command -v pip-audit >/dev/null 2>&1; then \
+		pip-audit -r requirements.txt; \
+	elif python - <<'PYCODE_PIPAUDIT' >/dev/null 2>&1; then \
 import importlib.util, sys
 sys.exit(0 if importlib.util.find_spec('pip_audit') else 1)
 PYCODE_PIPAUDIT
-                python -m pip_audit -r requirements.txt; \
-        else \
-                echo "pip-audit not installed, skipping"; \
-        fi
-        @if command -v bandit >/dev/null 2>&1; then \
-                bandit -q -r app services; \
-        elif python - <<'PYCODE_BANDIT' >/dev/null 2>&1; then \
+		python -m pip_audit -r requirements.txt; \
+	else \
+		echo "pip-audit not installed, skipping"; \
+	fi
+	@if command -v bandit >/dev/null 2>&1; then \
+		bandit -q -r app services; \
+	elif python - <<'PYCODE_BANDIT' >/dev/null 2>&1; then \
 import importlib.util, sys
 sys.exit(0 if importlib.util.find_spec('bandit') else 1)
 PYCODE_BANDIT
-                python -m bandit -q -r app services; \
-        else \
-                echo "bandit not installed, skipping"; \
-        fi
+		python -m bandit -q -r app services; \
+	else \
+		echo "bandit not installed, skipping"; \
+	fi
 
 # Acceptance targets:
 #   make acceptance_smoke   → quick smoke tests in CI/local env
