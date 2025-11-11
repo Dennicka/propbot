@@ -91,6 +91,13 @@ _CUM_KEYS = (
     "executedQty",
     "accumulated_qty",
 )
+_REMAINING_KEYS = (
+    "remaining_qty",
+    "remaining",
+    "leaves_qty",
+    "leavesQty",
+    "leavesQuantity",
+)
 _LAST_FILL_KEYS = (
     "last_fill_qty",
     "lastFillQty",
@@ -202,6 +209,15 @@ def _extract_cum(update: Mapping[str, Any]) -> float | None:
     return None
 
 
+def _extract_remaining(update: Mapping[str, Any]) -> float | None:
+    for key in _REMAINING_KEYS:
+        if key in update:
+            value = _coerce_float(update.get(key))
+            if value is not None:
+                return max(value, 0.0)
+    return None
+
+
 def _extract_last_fill_qty(update: Mapping[str, Any]) -> float | None:
     for key in _LAST_FILL_KEYS:
         if key in update:
@@ -279,6 +295,7 @@ def apply_exchange_update(
     )
     fill_id = _extract_fill_id(update)
     cum_from_update = _extract_cum(update)
+    remaining_qty = _extract_remaining(update)
     incremental_fill = _extract_last_fill_qty(update)
 
     new_cum = state.cum_filled
@@ -292,6 +309,12 @@ def apply_exchange_update(
             duplicate_fill = True
         else:
             new_cum = max(cum_from_update, state.cum_filled)
+    elif remaining_qty is not None and qty > 0:
+        derived_cum = max(qty - remaining_qty, 0.0)
+        if derived_cum <= state.cum_filled + _EPSILON:
+            duplicate_fill = True
+        else:
+            new_cum = max(derived_cum, state.cum_filled)
     elif incremental_fill is not None and incremental_fill > _EPSILON:
         if duplicate_fill:
             new_cum = state.cum_filled
