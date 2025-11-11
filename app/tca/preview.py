@@ -156,7 +156,11 @@ def compute_tca_preview(
             short_leg = entry.short
             long_symbol_norm = normalise_symbol(long_leg.symbol)
             short_symbol_norm = normalise_symbol(short_leg.symbol)
-        except AttributeError:  # pragma: no cover - defensive
+        except AttributeError as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "tca preview: skipping arbitrage pair entry missing attributes",
+                exc_info=exc,
+            )
             continue
         if target_norm in {long_symbol_norm, short_symbol_norm}:
             selected = entry
