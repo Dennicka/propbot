@@ -20,7 +20,14 @@ from .strategy_status import build_strategy_status
 LOGGER = logging.getLogger(__name__)
 
 
+def _resolve_mode(state) -> str:
+    control = getattr(state, "control", None)
+    environment = getattr(control, "environment", None) if control else None
+    return str(environment or "paper").lower()
+
+
 def _check_blockers(state) -> str | None:
+    mode = _resolve_mode(state)
     autopilot = state.autopilot
     if str(autopilot.target_mode or "").upper() != "RUN":
         return "previous_mode_not_run"
@@ -56,14 +63,28 @@ def _check_blockers(state) -> str | None:
             try:
                 if not runtime.client.ping():
                     LOGGER.warning(
-                        "autopilot ping failed",
-                        extra={"venue": venue_id, "error": "ping_false"},
+                        "autopilot.ping_failed",
+                        extra={
+                            "log_module": __name__,
+                            "log_function": "_check_blockers",
+                            "operation": "client.ping",
+                            "venue": venue_id,
+                            "mode": mode,
+                            "error": "ping_false",
+                        },
                     )
                     return f"exchange_unreachable:{venue_id}"
             except Exception as exc:
                 LOGGER.warning(
-                    "autopilot ping error",
-                    extra={"venue": venue_id, "error": str(exc)},
+                    "autopilot.ping_error",
+                    extra={
+                        "log_module": __name__,
+                        "log_function": "_check_blockers",
+                        "operation": "client.ping",
+                        "venue": venue_id,
+                        "mode": mode,
+                        "error": str(exc),
+                    },
                     exc_info=True,
                 )
                 return f"exchange_unreachable:{venue_id}"
@@ -81,6 +102,7 @@ def _check_blockers(state) -> str | None:
 
 async def evaluate_startup() -> None:
     state = get_state()
+    mode = _resolve_mode(state)
     autopilot = get_autopilot_state()
     if not autopilot.enabled:
         LOGGER.info("autopilot disabled; startup resume skipped")
@@ -89,7 +111,16 @@ async def evaluate_startup() -> None:
         return
     blocker = _check_blockers(state)
     if blocker:
-        LOGGER.warning("autopilot refused to arm: %s", blocker)
+        LOGGER.warning(
+            "autopilot.resume_refused",
+            extra={
+                "log_module": __name__,
+                "log_function": "evaluate_startup",
+                "operation": "autopilot.resume",
+                "mode": mode,
+                "reason": blocker,
+            },
+        )
         autopilot_mark_action("refused", blocker, armed=False)
         decision_code = (
             "blocked_by_risk"
@@ -106,12 +137,19 @@ async def evaluate_startup() -> None:
             emit_alert(
                 "autopilot_refused",
                 f"AUTOPILOT refused to arm (reason={blocker})",
-                {"reason": blocker},
+                extra={"reason": blocker},
             )
         except Exception as exc:
-            LOGGER.debug(
-                "failed to emit autopilot refusal alert",
-                extra={"error": str(exc)},
+            LOGGER.warning(
+                "autopilot.alert_emit_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "evaluate_startup",
+                    "operation": "emit_alert",
+                    "mode": mode,
+                    "reason": blocker,
+                    "error": str(exc),
+                },
                 exc_info=True,
             )
         return
@@ -133,18 +171,34 @@ async def evaluate_startup() -> None:
         emit_alert(
             "autopilot_resumed",
             f"AUTOPILOT: resumed trading after restart (reason={resume_reason})",
-            {"reason": resume_reason},
+            extra={"reason": resume_reason},
         )
     except Exception as exc:
-        LOGGER.debug(
-            "failed to emit autopilot resume alert",
-            extra={"error": str(exc)},
+        LOGGER.warning(
+            "autopilot.alert_emit_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "evaluate_startup",
+                "operation": "emit_alert",
+                "mode": mode,
+                "reason": resume_reason,
+                "error": str(exc),
+            },
             exc_info=True,
         )
     try:
         await resume_loop()
     except Exception as exc:
-        LOGGER.exception("autopilot resume loop failed", extra={"error": str(exc)})
+        LOGGER.exception(
+            "autopilot.resume_loop_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "evaluate_startup",
+                "operation": "resume_loop",
+                "mode": mode,
+                "error": str(exc),
+            },
+        )
 
 
 def setup_autopilot(app: FastAPI) -> None:

@@ -31,7 +31,7 @@ def _make_service_fixture(
     monkeypatch.setattr(
         service,
         "_load_funding_events",
-        lambda limit=200: [dict(event) for event in funding_events],
+        lambda *, limit=200, mode="paper": [dict(event) for event in funding_events],
     )
 
     class DummyTracker:

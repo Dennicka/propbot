@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
+import sqlite3
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +24,12 @@ from .positions_view import build_positions_snapshot
 LOGGER = logging.getLogger(__name__)
 
 
+def _resolve_mode(state) -> str:
+    control = getattr(state, "control", None)
+    environment = getattr(control, "environment", None) if control else None
+    return str(environment or "paper").lower()
+
+
 def _env_flag(name: str, default: bool = True) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -36,10 +43,16 @@ def _env_flag(name: str, default: bool = True) -> bool:
 def _exclude_simulated() -> bool:
     try:
         return FeatureFlags.exclude_dry_run_from_pnl()
-    except Exception as exc:
-        LOGGER.debug(
-            "failed to resolve feature flag for dry run exclusion",
-            extra={"error": str(exc)},
+    except (RuntimeError, ValueError, OSError) as exc:
+        LOGGER.warning(
+            "pnl_attribution.exclude_simulated_flag_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "_exclude_simulated",
+                "operation": "feature_flag_lookup",
+                "error": str(exc),
+            },
+            exc_info=True,
         )
         return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
 
@@ -122,11 +135,22 @@ def _build_trade_events(positions: Iterable[Mapping[str, Any]]) -> list[dict[str
     return events
 
 
-def _load_funding_events(limit: int = 200) -> list[dict[str, Any]]:
+def _load_funding_events(*, limit: int = 200, mode: str) -> list[dict[str, Any]]:
     try:
         events = fetch_events(limit=limit, order="desc")
-    except Exception as exc:
-        LOGGER.debug("failed to fetch funding events", extra={"error": str(exc)}, exc_info=True)
+    except (sqlite3.Error, ValueError) as exc:
+        LOGGER.warning(
+            "pnl_attribution.funding_events_fetch_failed",
+            extra={
+                "log_module": __name__,
+                "log_function": "_load_funding_events",
+                "operation": "ledger.fetch_events",
+                "mode": mode,
+                "limit": limit,
+                "error": str(exc),
+            },
+            exc_info=True,
+        )
         return []
     funding_rows: list[dict[str, Any]] = []
     for event in events:
@@ -174,6 +198,7 @@ async def build_pnl_attribution() -> dict[str, Any]:
     """Collect trade, fee, rebate and funding data to build a PnL attribution snapshot."""
 
     state = runtime.get_state()
+    mode = _resolve_mode(state)
     positions = list_positions()
     positions_snapshot = await build_positions_snapshot(state, positions)
     trades_raw = _build_trade_events(positions_snapshot.get("positions", []))
@@ -234,7 +259,7 @@ async def build_pnl_attribution() -> dict[str, Any]:
 
     fees_raw: list[dict[str, Any]] = []
     rebates_raw: list[dict[str, Any]] = []
-    funding_raw = _load_funding_events()
+    funding_raw = _load_funding_events(mode=mode)
 
     fees_events = _filtered_items(fees_raw, exclude_simulated=exclude_sim)
     rebates_events = _filtered_items(rebates_raw, exclude_simulated=exclude_sim)
