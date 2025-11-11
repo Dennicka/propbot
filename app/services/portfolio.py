@@ -50,9 +50,7 @@ def _load_funding_events(limit: int = 200) -> List[dict[str, Any]]:
     try:
         events = ledger.fetch_events(limit=limit, order="desc")
     except Exception as exc:
-        LOGGER.debug(
-            "failed to fetch funding events", extra={"error": str(exc)}, exc_info=True
-        )
+        LOGGER.debug("failed to fetch funding events", extra={"error": str(exc)}, exc_info=True)
         return []
     funding_rows: List[dict[str, Any]] = []
     for event in events:

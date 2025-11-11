@@ -553,9 +553,7 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     try:
         recent_operator_actions = list_recent_operator_actions(limit=5)
     except Exception as exc:
-        logger.exception(
-            "failed to load recent operator actions", extra={"error": str(exc)}
-        )
+        logger.exception("failed to load recent operator actions", extra={"error": str(exc)})
         recent_operator_actions = []
     recent_ops_incidents = list_recent_events(limit=10)
 

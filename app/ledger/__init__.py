@@ -34,9 +34,7 @@ def _attach_fencing_meta(payload: Mapping[str, object]) -> Dict[str, object]:
     try:
         return leader_lock.attach_fencing_meta(payload)
     except Exception as exc:
-        LOGGER.debug(
-            "failed to attach fencing metadata", extra={"error": str(exc)}
-        )
+        LOGGER.debug("failed to attach fencing metadata", extra={"error": str(exc)})
         return dict(payload)
 
 

@@ -2080,8 +2080,6 @@ async def audit_export(
     try:
         events = list_recent_operator_actions(limit=limit)
     except Exception as exc:
-        LOGGER.exception(
-            "failed to export operator actions", extra={"error": str(exc)}
-        )
+        LOGGER.exception("failed to export operator actions", extra={"error": str(exc)})
         events = []
     return JSONResponse({"events": events})

@@ -144,9 +144,7 @@ async def evaluate_startup() -> None:
     try:
         await resume_loop()
     except Exception as exc:
-        LOGGER.exception(
-            "autopilot resume loop failed", extra={"error": str(exc)}
-        )
+        LOGGER.exception("autopilot resume loop failed", extra={"error": str(exc)})
 
 
 def setup_autopilot(app: FastAPI) -> None:
