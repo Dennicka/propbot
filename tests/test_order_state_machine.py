@@ -76,3 +76,20 @@ def test_duplicate_updates_are_idempotent() -> None:
     assert final.status == OrderStatus.FILLED
     assert final.cum_filled == 4.0
     assert final.last_event is None
+
+
+def test_remaining_qty_updates_progress_state() -> None:
+    state = OrderState(status=OrderStatus.ACK, qty=5.0)
+
+    partial = apply_exchange_update(state, {"leavesQty": 2.0})
+    assert partial.status == OrderStatus.PARTIAL
+    assert partial.cum_filled == 3.0
+
+    filled = apply_exchange_update(partial, {"leavesQty": 0.0})
+    assert filled.status == OrderStatus.FILLED
+    assert filled.cum_filled == 5.0
+
+    duplicate = apply_exchange_update(filled, {"leavesQty": 0.0})
+    assert duplicate.status == OrderStatus.FILLED
+    assert duplicate.cum_filled == 5.0
+    assert duplicate.last_event == "duplicate_fill_ignored"
