@@ -15,14 +15,16 @@ from ..runtime import leader_lock
 
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
-SAFE_RESET_TABLES = frozenset({
-    "orders",
-    "fills",
-    "positions",
-    "balances",
-    "events",
-    "order_journal",
-})
+SAFE_RESET_TABLES = frozenset(
+    {
+        "orders",
+        "fills",
+        "positions",
+        "balances",
+        "events",
+        "order_journal",
+    }
+)
 
 
 def _attach_fencing_meta(payload: Mapping[str, object]) -> Dict[str, object]:
