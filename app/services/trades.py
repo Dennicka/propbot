@@ -148,8 +148,11 @@ async def close_all_trades(*, dry_run: bool) -> Dict[str, List[Dict[str, object]
         for trade in trades:
             try:
                 result = await _perform_close(trade)
-            except Exception:
-                LOGGER.exception("failed to close trade", extra=trade.as_dict())
+            except Exception as exc:
+                LOGGER.exception(
+                    "failed to close trade",
+                    extra={**trade.as_dict(), "error": str(exc)},
+                )
                 raise
             closed.append(result)
         setattr(state, "_close_all_tracker", {"fingerprint": fingerprint})

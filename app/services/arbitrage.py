@@ -639,8 +639,12 @@ async def execute_plan_async(plan: Plan, *, allow_safe_mode: bool = False) -> Ex
             )
             _record_golden_report(plan, hold_report, reason=exc.reason, hold=True)
             raise
-        except Exception:
+        except Exception as exc:
             accounting_record_fill(strategy_name, plan.notional, 0.0, simulated=simulated)
+            logger.exception(
+                "arbitrage plan execution failed",
+                extra={"symbol": plan.symbol, "strategy": strategy_name, "error": str(exc)},
+            )
             raise
 
         pnl_summary = result.get("pnl", {}) if isinstance(result, dict) else {}

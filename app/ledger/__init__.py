@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -12,6 +13,8 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 from .pnl_sources import build_ledger_from_history
 
 from ..runtime import leader_lock
+
+LOGGER = logging.getLogger(__name__)
 
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
@@ -30,7 +33,10 @@ SAFE_RESET_TABLES = frozenset(
 def _attach_fencing_meta(payload: Mapping[str, object]) -> Dict[str, object]:
     try:
         return leader_lock.attach_fencing_meta(payload)
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug(
+            "failed to attach fencing metadata", extra={"error": str(exc)}
+        )
         return dict(payload)
 
 
@@ -265,13 +271,10 @@ def _apply_position(
             total_cost = avg_price * base_qty + price * qty
             avg_price = total_cost / new_qty if new_qty else 0.0
         else:
-            if new_qty < 0:
-                # still short, keep average entry
-                pass
-            elif new_qty > 0:
+            if new_qty > 0:
                 # flipped from short to long
                 avg_price = price
-            else:
+            elif new_qty == 0:
                 avg_price = 0.0
         base_qty = new_qty
     else:
@@ -286,12 +289,9 @@ def _apply_position(
             else:
                 avg_price = 0.0
         else:
-            if new_qty > 0:
-                # reducing existing long keeps entry price
-                pass
-            elif new_qty < 0:
+            if new_qty < 0:
                 avg_price = price
-            else:
+            elif new_qty == 0:
                 avg_price = 0.0
         base_qty = new_qty
     if abs(base_qty) <= 1e-12:

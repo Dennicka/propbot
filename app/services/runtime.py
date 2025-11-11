@@ -2572,7 +2572,7 @@ def _restore_on_start_enabled(cfg: LoadedConfig) -> bool:
         return candidate.strip().lower() in {"1", "true", "yes", "on"}
     try:
         return bool(candidate)
-    except Exception:
+    except TypeError:
         return True
 
 
@@ -2657,15 +2657,21 @@ def _restore_runtime_snapshot(state: RuntimeState) -> bool:
                 append_record as _append_position,
                 reset_store as _reset_positions_store,
             )
-        except Exception:
-            LOGGER.exception("failed to import positions store for snapshot restore")
+        except Exception as exc:
+            LOGGER.exception(
+                "failed to import positions store for snapshot restore",
+                extra={"error": str(exc)},
+            )
         else:
             try:
                 _reset_positions_store()
                 for entry in positions_snapshot:
                     _append_position(entry)
-            except Exception:
-                LOGGER.exception("failed to restore hedge positions store from snapshot")
+            except Exception as exc:
+                LOGGER.exception(
+                    "failed to restore hedge positions store from snapshot",
+                    extra={"error": str(exc)},
+                )
 
     if restored:
         _persist_runtime_payload(
@@ -3279,8 +3285,11 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
                 safety=pre_shutdown_safety,
                 positions=pre_shutdown_positions,
             )
-        except Exception:
-            LOGGER.exception("failed to persist runtime snapshot on shutdown")
+        except Exception as exc:
+            LOGGER.exception(
+                "failed to persist runtime snapshot on shutdown",
+                extra={"error": str(exc)},
+            )
 
         _LAST_SHUTDOWN_RESULT = dict(summary)
         return summary

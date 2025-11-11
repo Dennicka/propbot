@@ -294,12 +294,25 @@ class PartialHedgeRebalancer:
                     last_error=str(exc),
                     status="error",
                 )
+                LOGGER.exception(
+                    "rebalancer client factory failed",
+                    extra={"position_id": position_id, "venue": venue, "error": str(exc)},
+                )
                 update_position(position_id, updates={"rebalancer": meta})
                 return
             try:
                 mark = client.get_mark_price(symbol)
                 mark_price = float(mark.get("mark_price") or mark.get("price") or 0.0)
-            except Exception:
+            except Exception as exc:
+                LOGGER.warning(
+                    "rebalancer mark price fetch failed",
+                    extra={
+                        "position_id": position_id,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "error": str(exc),
+                    },
+                )
                 mark_price = float(
                     (long_leg if side == "long" else short_leg or {}).get("entry_price")
                     or entry_long

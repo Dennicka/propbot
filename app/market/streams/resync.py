@@ -49,7 +49,7 @@ class BaseOrderBookStream:
     def _parse_snapshot(
         self, symbol: str, snapshot: Mapping[str, object]
     ) -> tuple[Iterable[tuple[float, float]], Iterable[tuple[float, float]], int, int | None]:
-        raise NotImplementedError
+        raise NotImplementedError("_parse_snapshot must be implemented by subclasses")
 
     def _validate_diff(self, symbol: str, event: DiffEvent) -> bool:
         return True
@@ -114,10 +114,15 @@ class BaseOrderBookStream:
         self._connector.mark_resync(symbol)
         try:
             snapshot = self._snapshot_fetcher(symbol)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "orderbook.resync.snapshot_failed",
-                extra={"venue": self.venue, "symbol": symbol, "reason": reason},
+                extra={
+                    "venue": self.venue,
+                    "symbol": symbol,
+                    "reason": reason,
+                    "error": str(exc),
+                },
             )
             self._connector.reconnect_now(reason)
             return

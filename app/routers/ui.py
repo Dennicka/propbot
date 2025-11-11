@@ -2062,7 +2062,8 @@ async def ops_alerts(
     require_token(request)
     try:
         from ..opsbot.notifier import get_recent_alerts
-    except Exception:
+    except Exception as exc:
+        LOGGER.exception("failed to load ops alerts", extra={"error": str(exc)})
         return {"alerts": []}
     alerts = get_recent_alerts(limit=limit, since=since)
     return {"alerts": alerts}
@@ -2078,6 +2079,9 @@ async def audit_export(
     require_token(request)
     try:
         events = list_recent_operator_actions(limit=limit)
-    except Exception:
+    except Exception as exc:
+        LOGGER.exception(
+            "failed to export operator actions", extra={"error": str(exc)}
+        )
         events = []
     return JSONResponse({"events": events})

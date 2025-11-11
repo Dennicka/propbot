@@ -115,8 +115,9 @@ class OpportunityScanner:
                 status = "blocked_by_risk"
             set_last_opportunity_state(candidate if spread_value > 0 else None, status)
             return {"candidate": candidate, "status": status}
-        except Exception:
+        except Exception as exc:
             failure = True
+            logger.exception("opportunity scan failed", extra={"error": str(exc)})
             raise
         finally:
             duration_ms = (time.perf_counter() - start) * 1000.0

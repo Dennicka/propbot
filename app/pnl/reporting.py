@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict
 
 from .ledger import PnLLedger
@@ -14,7 +14,7 @@ def _to_string(value: Any) -> str:
         return format(value, "f")
     try:
         return format(Decimal(value), "f")
-    except Exception:
+    except (InvalidOperation, TypeError, ValueError):
         return str(value)
 
 

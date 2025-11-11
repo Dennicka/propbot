@@ -40,8 +40,10 @@ def _extract_bearer_token(request: Request) -> str:
 def _load_secrets_store() -> Optional[SecretsStore]:
     try:
         return SecretsStore()
-    except Exception:
-        LOGGER.error("failed to load secrets store", exc_info=True)
+    except Exception as exc:
+        LOGGER.error(
+            "failed to load secrets store", extra={"error": str(exc)}, exc_info=True
+        )
         return None
 
 

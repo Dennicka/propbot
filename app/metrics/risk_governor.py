@@ -59,7 +59,7 @@ def set_success_rate(value: float) -> None:
 
     try:
         _SUCCESS_RATE_GAUGE.set(float(value))
-    except Exception:
+    except (TypeError, ValueError):
         _SUCCESS_RATE_GAUGE.set(0.0)
 
 
@@ -68,7 +68,7 @@ def set_error_rate(value: float) -> None:
 
     try:
         _ERROR_RATE_GAUGE.set(float(value))
-    except Exception:
+    except (TypeError, ValueError):
         _ERROR_RATE_GAUGE.set(0.0)
 
 
@@ -106,7 +106,7 @@ def set_velocity(kind: str, value: float) -> None:
     label = (kind or "unknown").strip().lower() or "unknown"
     try:
         _VELOCITY_GAUGE.labels(kind=label).set(float(value))
-    except Exception:
+    except (TypeError, ValueError):
         _VELOCITY_GAUGE.labels(kind=label).set(0.0)
 
 

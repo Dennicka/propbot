@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping, Sequence
 
 from app.pnl.ledger import FundingEvent, PnLLedger, TradeFill
@@ -61,7 +61,7 @@ def _coerce_decimal(value: object) -> Decimal:
     if isinstance(value, str):
         try:
             return Decimal(value)
-        except Exception:
+        except (InvalidOperation, ValueError):
             return Decimal("0")
     return Decimal("0")
 
@@ -178,7 +178,7 @@ def build_ledger_from_history(
         if isinstance(payload, str):
             try:
                 payload = json.loads(payload)
-            except Exception:
+            except json.JSONDecodeError:
                 payload = {}
         amount = _coerce_decimal(
             payload.get("amount") or payload.get("pnl") or event.get("amount") or event.get("pnl")
