@@ -97,7 +97,11 @@ def test_execute_hedge_partial_failure(monkeypatch):
     logs: list[dict] = []
     monkeypatch.setattr(module, "append_entry", lambda entry: logs.append(entry))
     hold_triggered = {}
-    monkeypatch.setattr(module, "engage_safety_hold", lambda reason, source=None: hold_triggered.update({"reason": reason, "source": source}))
+    monkeypatch.setattr(
+        module,
+        "engage_safety_hold",
+        lambda reason, source=None: hold_triggered.update({"reason": reason, "source": source}),
+    )
 
     result = module.execute_hedged_trade("BTCUSDT", 1_000.0, 2.0, 1.0)
 

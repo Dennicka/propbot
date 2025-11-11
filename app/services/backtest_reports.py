@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable
+
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_REPORTS_DIR = Path("data/reports")
 REPORTS_DIR_ENV = "BACKTEST_REPORTS_DIR"
@@ -44,7 +48,10 @@ def load_latest_summary() -> BacktestReport | None:
         try:
             with path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except Exception:
+        except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning(
+                "backtest_reports: failed to load report", extra={"path": str(path)}, exc_info=exc
+            )
             continue
         if not isinstance(payload, dict):
             continue
@@ -62,4 +69,3 @@ def load_latest_summary() -> BacktestReport | None:
 
 
 __all__ = ["BacktestReport", "load_latest_summary"]
-

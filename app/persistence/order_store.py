@@ -86,9 +86,7 @@ class OrderIntent(Base):
     remaining_qty = Column(Float, nullable=True)
     avg_fill_price = Column(Float, nullable=True)
     strategy = Column(String(64), nullable=True)
-    state = Column(
-        SAEnum(OrderIntentState), nullable=False, default=OrderIntentState.NEW
-    )
+    state = Column(SAEnum(OrderIntentState), nullable=False, default=OrderIntentState.NEW)
     broker_order_id = Column(String(128), nullable=True, index=True)
     replaced_by = Column(String(64), nullable=True)
     created_ts = Column(DateTime(timezone=True), nullable=False, default=_now)
@@ -129,9 +127,7 @@ class OrderRequestLedger(Base):
     created_ts = Column(DateTime(timezone=True), nullable=False, default=_now)
     updated_ts = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
-    __table_args__ = (
-        UniqueConstraint("intent_id", "request_id", name="uq_order_request_intent"),
-    )
+    __table_args__ = (UniqueConstraint("intent_id", "request_id", name="uq_order_request_intent"),)
 
 
 EngineFactory = sessionmaker
@@ -144,6 +140,7 @@ def _configure_engine(url: str) -> Engine:
     engine = create_engine(url, future=True)
 
     if url.startswith("sqlite"):
+
         @event.listens_for(engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):  # pragma: no cover - wiring
             cursor = dbapi_connection.cursor()
@@ -165,14 +162,14 @@ def _ensure_initialised() -> None:
 
 def get_engine() -> Engine:
     _ensure_initialised()
-    assert _ENGINE is not None
+    assert _ENGINE is not None  # nosec B101  # initialised via configure_engine
     return _ENGINE
 
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
     _ensure_initialised()
-    assert _SESSION_FACTORY is not None
+    assert _SESSION_FACTORY is not None  # nosec B101  # initialised via configure_engine
     session: Session = _SESSION_FACTORY()
     try:
         yield session
@@ -433,9 +430,7 @@ def _validate_state_transition(
             f"intent {intent.intent_id} remaining negative: {remaining_qty}"
         )
     if new_state == OrderIntentState.ACKED and not broker_order_id:
-        raise OrderStateTransitionError(
-            f"intent {intent.intent_id} ACKED without broker order id"
-        )
+        raise OrderStateTransitionError(f"intent {intent.intent_id} ACKED without broker order id")
     if new_state == OrderIntentState.PARTIAL:
         if filled_qty <= 0 or filled_qty >= qty - 1e-9:
             raise OrderStateTransitionError(
@@ -446,7 +441,11 @@ def _validate_state_transition(
             raise OrderStateTransitionError(
                 f"intent {intent.intent_id} FILLED but qty mismatch ({filled_qty}!={qty})"
             )
-    if new_state in (OrderIntentState.CANCELED, OrderIntentState.REJECTED, OrderIntentState.EXPIRED):
+    if new_state in (
+        OrderIntentState.CANCELED,
+        OrderIntentState.REJECTED,
+        OrderIntentState.EXPIRED,
+    ):
         if filled_qty > qty + 1e-9:
             raise OrderStateTransitionError(
                 f"intent {intent.intent_id} terminal {new_state} with overfill"
@@ -562,9 +561,7 @@ def inflight_intents(session: Session) -> Iterable[OrderIntent]:
 def open_intent_count(session: Session) -> int:
     return int(
         session.execute(
-            select(func.count(OrderIntent.id)).where(
-                OrderIntent.state.notin_(TERMINAL_STATES)
-            )
+            select(func.count(OrderIntent.id)).where(OrderIntent.state.notin_(TERMINAL_STATES))
         ).scalar()
         or 0
     )
@@ -682,4 +679,3 @@ __all__ = [
     "update_cancel_state",
     "update_intent_state",
 ]
-

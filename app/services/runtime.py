@@ -117,24 +117,18 @@ def _env_optional_float(name: str) -> float | None:
         return None
 
 
-def send_notifier_alert(
-    kind: str, text: str, extra: Mapping[str, object] | None = None
-) -> None:
+def send_notifier_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     """Send an ops notifier alert while swallowing notifier errors."""
 
     try:
         from ..opsbot.notifier import emit_alert
     except Exception as exc:
-        LOGGER.warning(
-            "ops notifier import failed kind=%s error=%s", kind, exc
-        )
+        LOGGER.warning("ops notifier import failed kind=%s error=%s", kind, exc)
         return
     try:
         emit_alert(kind=kind, text=text, extra=extra or None)
     except Exception as exc:
-        LOGGER.warning(
-            "ops notifier emit failed kind=%s error=%s", kind, exc
-        )
+        LOGGER.warning("ops notifier emit failed kind=%s error=%s", kind, exc)
 
 
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
@@ -148,9 +142,7 @@ def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
         try:
             mapping["__default__"] = float(base)
         except ValueError as exc:
-            LOGGER.debug(
-                "invalid default limit value name=%s value=%s error=%s", name, base, exc
-            )
+            LOGGER.debug("invalid default limit value name=%s value=%s error=%s", name, base, exc)
     prefix = f"{name}__"
     for key, value in os.environ.items():
         if not key.startswith(prefix):
@@ -230,15 +222,17 @@ class ControlState:
 
 @dataclass
 class MetricsState:
-    slo: Dict[str, float] = field(default_factory=lambda: {
-        "ws_gap_ms_p95": 120.0,
-        "order_cycle_ms_p95": 180.0,
-        "reject_rate": 0.0,
-        "cancel_fail_rate": 0.0,
-        "recon_mismatch": 0.0,
-        "max_day_drawdown_bps": 0.0,
-        "budget_remaining": 1_000_000.0,
-    })
+    slo: Dict[str, float] = field(
+        default_factory=lambda: {
+            "ws_gap_ms_p95": 120.0,
+            "order_cycle_ms_p95": 180.0,
+            "reject_rate": 0.0,
+            "cancel_fail_rate": 0.0,
+            "recon_mismatch": 0.0,
+            "max_day_drawdown_bps": 0.0,
+            "budget_remaining": 1_000_000.0,
+        }
+    )
     counters: Dict[str, float] = field(default_factory=dict)
     latency_samples_ms: List[float] = field(default_factory=list)
     slo_breach_started_at: Dict[str, str] = field(default_factory=dict)
@@ -695,7 +689,9 @@ class SafetyState:
         payload["reconciliation"] = snapshot
         payload["runaway_guard"] = self.runaway_guard.as_dict()
         risk_snapshot = self.risk_snapshot if isinstance(self.risk_snapshot, Mapping) else {}
-        governor_snapshot = risk_snapshot.get("governor") if isinstance(risk_snapshot, Mapping) else None
+        governor_snapshot = (
+            risk_snapshot.get("governor") if isinstance(risk_snapshot, Mapping) else None
+        )
         payload["risk"] = {
             "throttled": self.risk_throttled,
             "reason": self.risk_throttle_reason,
@@ -769,7 +765,9 @@ def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
     guards_cfg: GuardsConfig | None = cfg.data.guards
     defaults = {
         "cancel_on_disconnect": GuardState(enabled=True, summary="connection stable"),
-        "rate_limit": GuardState(enabled=True, summary="within limits", metrics={"place_per_min": 0, "cancel_per_min": 0}),
+        "rate_limit": GuardState(
+            enabled=True, summary="within limits", metrics={"place_per_min": 0, "cancel_per_min": 0}
+        ),
         "clock_skew": GuardState(enabled=True, summary="synced"),
         "snapshot_diff": GuardState(enabled=True, summary="in sync"),
         "kill_caps": GuardState(enabled=True, summary="caps respected"),
@@ -792,7 +790,9 @@ def _init_guards(cfg: LoadedConfig) -> Dict[str, GuardState]:
         "place_per_min": 0,
         "cancel_per_min": 0,
     }
-    defaults["maintenance_calendar"].summary = "no window active" if not guards_cfg.maintenance_calendar else "window configured"
+    defaults["maintenance_calendar"].summary = (
+        "no window active" if not guards_cfg.maintenance_calendar else "window configured"
+    )
     return defaults
 
 
@@ -845,7 +845,9 @@ def _bootstrap_runtime() -> RuntimeState:
         or os.environ.get("ENV")
         or "paper"
     ).lower()
-    environment = os.environ.get("MODE") or os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
+    environment = (
+        os.environ.get("MODE") or os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
+    )
     loop_pair_env = os.environ.get("LOOP_PAIR")
     loop_venues_env = os.environ.get("LOOP_VENUES")
     loop_venues = []
@@ -917,11 +919,15 @@ def _bootstrap_runtime() -> RuntimeState:
     )
     position_limits_env = {
         key.upper(): value
-        for key, value in _env_limit_map("MAX_POSITION_USDT", normaliser=lambda entry: str(entry).upper()).items()
+        for key, value in _env_limit_map(
+            "MAX_POSITION_USDT", normaliser=lambda entry: str(entry).upper()
+        ).items()
     }
     open_order_limits_env = {
         key.lower(): int(value)
-        for key, value in _env_limit_map("MAX_OPEN_ORDERS", normaliser=lambda entry: str(entry).lower()).items()
+        for key, value in _env_limit_map(
+            "MAX_OPEN_ORDERS", normaliser=lambda entry: str(entry).lower()
+        ).items()
     }
     risk_state = RiskState(
         limits=RiskLimitsState(
@@ -953,7 +959,9 @@ def _bootstrap_runtime() -> RuntimeState:
             try:
                 governor_payload = governor_cfg.model_dump()
             except AttributeError:
-                governor_payload = governor_cfg.__dict__ if hasattr(governor_cfg, "__dict__") else None
+                governor_payload = (
+                    governor_cfg.__dict__ if hasattr(governor_cfg, "__dict__") else None
+                )
     else:
         governor_payload = None
     configure_risk_governor(clock=time.time, config=governor_payload)
@@ -990,8 +998,6 @@ def _bootstrap_runtime() -> RuntimeState:
     state.execution.stuck_resolver.configure(_stuck_config_payload(resolver_cfg))
     _sync_loop_from_control(state)
     return state
-
-
 
 
 def get_state() -> RuntimeState:
@@ -1612,10 +1618,14 @@ def get_liquidity_status() -> Dict[str, object]:
     with _STATE_LOCK:
         safety = _STATE.safety
         snapshot = {
-            str(venue): {str(k): v for k, v in payload.items()} if isinstance(payload, Mapping) else payload
+            str(venue): (
+                {str(k): v for k, v in payload.items()} if isinstance(payload, Mapping) else payload
+            )
             for venue, payload in safety.liquidity_snapshot.items()
         }
-        reason = safety.liquidity_reason or ("liquidity_blocked" if safety.liquidity_blocked else "ok")
+        reason = safety.liquidity_reason or (
+            "liquidity_blocked" if safety.liquidity_blocked else "ok"
+        )
         return {
             "liquidity_blocked": bool(safety.liquidity_blocked),
             "reason": reason,
@@ -1669,9 +1679,7 @@ def update_reconciliation_status(
         for key, value in metadata.items():
             key_text = str(key)
             if key_text == "issues_last_sample" and isinstance(value, Sequence):
-                snapshot[key_text] = [
-                    dict(item) for item in value if isinstance(item, Mapping)
-                ]
+                snapshot[key_text] = [dict(item) for item in value if isinstance(item, Mapping)]
                 continue
             snapshot[key_text] = value
 
@@ -1794,7 +1802,9 @@ def clear_stuck_resolver_error(intent_id: str) -> None:
         _STATE.execution.stuck_resolver.errors.pop(intent_id, None)
 
 
-def update_guard(name: str, status: str, summary: str, metrics: Dict[str, float] | None = None) -> GuardState:
+def update_guard(
+    name: str, status: str, summary: str, metrics: Dict[str, float] | None = None
+) -> GuardState:
     guard = _STATE.guards.setdefault(name, GuardState())
     guard.status = status
     guard.summary = summary
@@ -2116,7 +2126,9 @@ def get_last_opportunity_state() -> tuple[Dict[str, Any] | None, str]:
     )
 
 
-def set_last_opportunity_state(opportunity: Mapping[str, Any] | None, status: str) -> Dict[str, Any]:
+def set_last_opportunity_state(
+    opportunity: Mapping[str, Any] | None, status: str
+) -> Dict[str, Any]:
     snapshot: Dict[str, Any | None]
     with _STATE_LOCK:
         state_payload: Dict[str, Any | None] = {
@@ -2228,7 +2240,10 @@ def apply_control_snapshot(payload: Mapping[str, object]) -> Dict[str, object]:
                 control.reduce_only = _coerce_bool("reduce_only", payload.get("reduce_only"))
             if "order_notional_usdt" in payload:
                 control.order_notional_usdt = _coerce_float(
-                    "order_notional_usdt", payload.get("order_notional_usdt"), minimum=1.0, maximum=1_000_000.0
+                    "order_notional_usdt",
+                    payload.get("order_notional_usdt"),
+                    minimum=1.0,
+                    maximum=1_000_000.0,
                 )
             if "max_slippage_bps" in payload:
                 control.max_slippage_bps = _coerce_int(
@@ -2239,14 +2254,19 @@ def apply_control_snapshot(payload: Mapping[str, object]) -> Dict[str, object]:
                     "min_spread_bps", payload.get("min_spread_bps"), minimum=0.0, maximum=100.0
                 )
             if "poll_interval_sec" in payload:
-                control.poll_interval_sec = _coerce_int("poll_interval_sec", payload.get("poll_interval_sec"), minimum=1)
+                control.poll_interval_sec = _coerce_int(
+                    "poll_interval_sec", payload.get("poll_interval_sec"), minimum=1
+                )
             if "loop_pair" in payload:
                 control.loop_pair = _coerce_loop_pair(payload.get("loop_pair"))
             if "loop_venues" in payload:
                 control.loop_venues = _coerce_loop_venues(payload.get("loop_venues"))
             if "taker_fee_bps_binance" in payload:
                 control.taker_fee_bps_binance = _coerce_int(
-                    "taker_fee_bps_binance", payload.get("taker_fee_bps_binance"), minimum=0, maximum=10_000
+                    "taker_fee_bps_binance",
+                    payload.get("taker_fee_bps_binance"),
+                    minimum=0,
+                    maximum=10_000,
                 )
             if "taker_fee_bps_okx" in payload:
                 control.taker_fee_bps_okx = _coerce_int(
@@ -2261,7 +2281,9 @@ def apply_control_snapshot(payload: Mapping[str, object]) -> Dict[str, object]:
             control.approvals = {str(actor): str(ts) for actor, ts in approvals_payload.items()}
         if "preflight_passed" in payload:
             try:
-                control.preflight_passed = _coerce_bool("preflight_passed", payload.get("preflight_passed"))
+                control.preflight_passed = _coerce_bool(
+                    "preflight_passed", payload.get("preflight_passed")
+                )
             except ValueError:
                 control.preflight_passed = bool(payload.get("preflight_passed"))
         if "last_preflight_ts" in payload:
@@ -2346,26 +2368,28 @@ def _normalise_control_patch(patch: Mapping[str, object]) -> Dict[str, object]:
         "loop_venues",
     }
     normalised: Dict[str, object] = {}
-    for field, value in patch.items():
-        if field not in allowed_fields or value is None:
+    for field_name, value in patch.items():
+        if field_name not in allowed_fields or value is None:
             continue
-        if field in {"safe_mode", "dry_run_only", "two_man_rule", "auto_loop"}:
-            normalised[field] = _coerce_bool(field, value)
+        if field_name in {"safe_mode", "dry_run_only", "two_man_rule", "auto_loop"}:
+            normalised[field_name] = _coerce_bool(field_name, value)
             continue
-        if field == "max_slippage_bps":
-            normalised[field] = _coerce_int(field, value, minimum=0, maximum=50)
+        if field_name == "max_slippage_bps":
+            normalised[field_name] = _coerce_int(field_name, value, minimum=0, maximum=50)
             continue
-        if field == "min_spread_bps":
-            normalised[field] = _coerce_float(field, value, minimum=0.0, maximum=100.0)
+        if field_name == "min_spread_bps":
+            normalised[field_name] = _coerce_float(field_name, value, minimum=0.0, maximum=100.0)
             continue
-        if field == "order_notional_usdt":
-            normalised[field] = _coerce_float(field, value, minimum=1.0, maximum=1_000_000.0)
+        if field_name == "order_notional_usdt":
+            normalised[field_name] = _coerce_float(
+                field_name, value, minimum=1.0, maximum=1_000_000.0
+            )
             continue
-        if field == "loop_pair":
-            normalised[field] = _coerce_loop_pair(value)
+        if field_name == "loop_pair":
+            normalised[field_name] = _coerce_loop_pair(value)
             continue
-        if field == "loop_venues":
-            normalised[field] = _coerce_loop_venues(value)
+        if field_name == "loop_venues":
+            normalised[field_name] = _coerce_loop_venues(value)
             continue
     return normalised
 
@@ -2385,7 +2409,9 @@ def _coerce_bool(field: str, value: object) -> bool:
     raise ValueError(f"invalid value for {field}")
 
 
-def _coerce_float(field: str, value: object, *, minimum: float | None = None, maximum: float | None = None) -> float:
+def _coerce_float(
+    field: str, value: object, *, minimum: float | None = None, maximum: float | None = None
+) -> float:
     numeric: float
     if isinstance(value, bool):
         raise ValueError(f"invalid value for {field}")
@@ -2408,8 +2434,15 @@ def _coerce_float(field: str, value: object, *, minimum: float | None = None, ma
     return numeric
 
 
-def _coerce_int(field: str, value: object, *, minimum: int | None = None, maximum: int | None = None) -> int:
-    numeric = _coerce_float(field, value, minimum=float(minimum) if minimum is not None else None, maximum=float(maximum) if maximum is not None else None)
+def _coerce_int(
+    field: str, value: object, *, minimum: int | None = None, maximum: int | None = None
+) -> int:
+    numeric = _coerce_float(
+        field,
+        value,
+        minimum=float(minimum) if minimum is not None else None,
+        maximum=float(maximum) if maximum is not None else None,
+    )
     if abs(numeric - round(numeric)) > 1e-9:
         raise ValueError(f"{field} must be an integer")
     integer = int(round(numeric))
@@ -2440,14 +2473,16 @@ def _coerce_loop_venues(value: object) -> List[str]:
     return venues
 
 
-def _apply_control_updates(control: ControlState, updates: Mapping[str, object]) -> Dict[str, object]:
+def _apply_control_updates(
+    control: ControlState, updates: Mapping[str, object]
+) -> Dict[str, object]:
     changes: Dict[str, object] = {}
-    for field, value in updates.items():
-        target_field = "dry_run" if field == "dry_run_only" else field
+    for field_name, value in updates.items():
+        target_field = "dry_run" if field_name == "dry_run_only" else field_name
         current = getattr(control, target_field, None)
         if current != value:
             setattr(control, target_field, value)
-            changes[field] = value
+            changes[field_name] = value
     return changes
 
 
@@ -2464,7 +2499,9 @@ def _runtime_status_snapshot() -> Dict[str, Any]:
         safety = _STATE.safety
         auto = _STATE.auto_hedge
         resume_request = safety.resume_request
-        resume_pending = bool(resume_request and getattr(resume_request, "approved_ts", None) is None)
+        resume_pending = bool(
+            resume_request and getattr(resume_request, "approved_ts", None) is None
+        )
         status: Dict[str, Any] = {
             "mode": control.mode,
             "safe_mode": control.safe_mode,
@@ -2489,7 +2526,9 @@ def _runtime_status_snapshot() -> Dict[str, Any]:
         status["risk_throttled"] = bool(safety.risk_throttled)
         status["risk_throttle_reason"] = safety.risk_throttle_reason
         risk_snapshot = safety.risk_snapshot if isinstance(safety.risk_snapshot, Mapping) else {}
-        governor_snapshot = risk_snapshot.get("governor") if isinstance(risk_snapshot, Mapping) else None
+        governor_snapshot = (
+            risk_snapshot.get("governor") if isinstance(risk_snapshot, Mapping) else None
+        )
         success_rate = None
         if isinstance(governor_snapshot, Mapping):
             success_rate_value = governor_snapshot.get("success_rate_1h")
@@ -2614,7 +2653,10 @@ def _restore_runtime_snapshot(state: RuntimeState) -> bool:
 
     if positions_snapshot:
         try:
-            from positions_store import append_record as _append_position, reset_store as _reset_positions_store
+            from positions_store import (
+                append_record as _append_position,
+                reset_store as _reset_positions_store,
+            )
         except Exception:
             LOGGER.exception("failed to import positions store for snapshot restore")
         else:
@@ -2759,7 +2801,9 @@ def _load_persisted_state(state: RuntimeState) -> None:
     autopilot_state.target_safe_mode = state.control.safe_mode
     positions_payload = payload.get("positions")
     if isinstance(positions_payload, list):
-        state.hedge_positions = [dict(entry) for entry in positions_payload if isinstance(entry, Mapping)]
+        state.hedge_positions = [
+            dict(entry) for entry in positions_payload if isinstance(entry, Mapping)
+        ]
     opportunity_payload = payload.get("last_opportunity")
     if isinstance(opportunity_payload, Mapping):
         opportunity = opportunity_payload.get("opportunity")
@@ -2802,9 +2846,7 @@ def _load_persisted_state(state: RuntimeState) -> None:
         last_decision = autopilot_payload.get("last_decision")
         if last_decision is not None:
             autopilot_state.last_decision = str(last_decision)
-        autopilot_state.last_decision_reason = (
-            autopilot_payload.get("last_decision_reason") or None
-        )
+        autopilot_state.last_decision_reason = autopilot_payload.get("last_decision_reason") or None
         decision_ts = autopilot_payload.get("last_decision_ts")
         autopilot_state.last_decision_ts = str(decision_ts) if decision_ts else None
     safety_payload = payload.get("safety")
@@ -2854,9 +2896,7 @@ def _load_persisted_state(state: RuntimeState) -> None:
         if isinstance(counters_payload, Mapping):
             orders_counter = counters_payload.get("orders_placed_last_min")
             try:
-                safety.counters.orders_placed_last_min = max(
-                    0, int(float(orders_counter))
-                )
+                safety.counters.orders_placed_last_min = max(0, int(float(orders_counter)))
             except (TypeError, ValueError) as exc:
                 LOGGER.debug(
                     "invalid safety counter field=orders_placed_last_min value=%s error=%s",
@@ -2884,7 +2924,9 @@ def _load_persisted_state(state: RuntimeState) -> None:
         safety.desync_detected = bool(safety_payload.get("desync_detected"))
         reconciliation_payload = safety_payload.get("reconciliation")
         if isinstance(reconciliation_payload, Mapping):
-            snapshot: Dict[str, Any] = {str(key): value for key, value in reconciliation_payload.items()}
+            snapshot: Dict[str, Any] = {
+                str(key): value for key, value in reconciliation_payload.items()
+            }
             issues_payload = snapshot.get("issues")
             if isinstance(issues_payload, list):
                 snapshot["issues"] = [
@@ -2916,8 +2958,12 @@ def _load_persisted_state(state: RuntimeState) -> None:
         if isinstance(resume_payload, Mapping):
             reason = resume_payload.get("reason")
             if reason:
-                request = ResumeRequestState(reason=str(reason), requested_by=resume_payload.get("requested_by"))
-                requested_at = resume_payload.get("requested_at") or resume_payload.get("requested_ts")
+                request = ResumeRequestState(
+                    reason=str(reason), requested_by=resume_payload.get("requested_by")
+                )
+                requested_at = resume_payload.get("requested_at") or resume_payload.get(
+                    "requested_ts"
+                )
                 if requested_at:
                     request.requested_ts = str(requested_at)
                 request_id = resume_payload.get("id") or resume_payload.get("request_id")
@@ -2965,7 +3011,7 @@ def _load_persisted_state(state: RuntimeState) -> None:
             except (TypeError, ValueError) as exc:
                 LOGGER.debug(
                     "invalid reconciliation snapshot field=%s error=%s",
-                    key,
+                    "max_daily_loss_usdt",
                     exc,
                 )
 
@@ -2993,11 +3039,15 @@ _sync_loop_from_control(_STATE)
 _enforce_safe_start(_STATE)
 _restore_runtime_snapshot(_STATE)
 _sync_loop_from_control(_STATE)
-_persist_runtime_payload({
-    "control": asdict(_STATE.control),
-    "safety": _STATE.safety.as_dict(),
-    "autopilot": _STATE.autopilot.as_dict(),
-})
+_persist_runtime_payload(
+    {
+        "control": asdict(_STATE.control),
+        "safety": _STATE.safety.as_dict(),
+        "autopilot": _STATE.autopilot.as_dict(),
+    }
+)
+
+
 class HoldActiveError(RuntimeError):
     """Raised when execution should stop due to the global hold flag."""
 
@@ -3208,7 +3258,12 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
                     )
                 except Exception as exc:  # pragma: no cover - defensive logging
                     LOGGER.exception("cancel-all failed", extra={"venue": venue_key})
-                    result = {"venue": venue_key, "cancelled": 0, "failed": len(venue_orders), "error": str(exc)}
+                    result = {
+                        "venue": venue_key,
+                        "cancelled": 0,
+                        "failed": len(venue_orders),
+                        "error": str(exc),
+                    }
                 cancel_summary["cancelled"] += int(result.get("cancelled", 0) or 0)
                 cancel_summary["failed"] += int(result.get("failed", 0) or 0)
                 cancel_summary["venues"].append(result)
@@ -3229,4 +3284,3 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
 
         _LAST_SHUTDOWN_RESULT = dict(summary)
         return summary
-

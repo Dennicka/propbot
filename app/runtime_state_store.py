@@ -50,7 +50,9 @@ def write_runtime_payload(payload: Mapping[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        LOGGER.warning("runtime_state_store parent creation failed path=%s error=%s", path.parent, exc)
+        LOGGER.warning(
+            "runtime_state_store parent creation failed path=%s error=%s", path.parent, exc
+        )
     serialisable = dict(payload)
     try:
         with path.open("w", encoding="utf-8") as handle:

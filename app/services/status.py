@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -20,6 +21,9 @@ from ..risk.freeze import get_freeze_registry
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
 _DEFAULT_HOLD_MINUTES = 5
 _SEVERITY_RANK = {"OK": 0, "WARN": 1, "ERROR": 2, "HOLD": 3}
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _coerce_metric_value(value: object) -> object:
@@ -137,7 +141,13 @@ def _evaluate_clock_skew(state: RuntimeState) -> float | None:
             continue
         try:
             server_time_raw = client.server_time()
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001
+            venue_label = getattr(runtime, "venue", None) or getattr(runtime, "name", "unknown")
+            LOGGER.warning(
+                "status: failed to fetch server_time",
+                extra={"venue": venue_label},
+                exc_info=exc,
+            )
             continue
         try:
             numeric = float(server_time_raw)
@@ -190,7 +200,11 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
             title="Leader/Fencing",
             group="P0",
             status="OK" if split_brain_events == 0 else "ERROR",
-            summary="split-brain=0" if split_brain_events == 0 else f"split-brain events: {split_brain_events}",
+            summary=(
+                "split-brain=0"
+                if split_brain_events == 0
+                else f"split-brain events: {split_brain_events}"
+            ),
             metrics={"split_brain_events": split_brain_events},
             links=[{"title": "High-Availability", "href": "/docs/VPS_HANDBOOK_ru.md"}],
         )
@@ -228,9 +242,7 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
     partial_error = partial_snapshot.get("last_error")
     partial_enabled = bool(partial_snapshot.get("enabled"))
     partial_status = "OK" if partial_enabled else "WARN"
-    partial_summary = (
-        f"orders={partial_orders}, notional={partial_notional:.2f}"
-    )
+    partial_summary = f"orders={partial_orders}, notional={partial_notional:.2f}"
     if partial_error:
         partial_status = "ERROR"
         partial_summary = f"error={partial_error}"
@@ -405,7 +417,9 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
                     summary="connected" if connected else "unreachable",
                     metrics={
                         "symbols": len(runtime.config.symbols),
-                        "hedge_mode": int(getattr(runtime.client, "position_mode", "hedge") == "hedge"),
+                        "hedge_mode": int(
+                            getattr(runtime.client, "position_mode", "hedge") == "hedge"
+                        ),
                     },
                     links=[{"title": "Venue", "href": f"/api/deriv/{venue_id}"}],
                 )
@@ -459,9 +473,11 @@ def _build_components(state: RuntimeState) -> List[Dict[str, object]]:
             status="OK",
             summary="loaded",
             metrics={
-                "symbols": sum(len(v.config.symbols) for v in state.derivatives.venues.values())
-                if state.derivatives
-                else 0
+                "symbols": (
+                    sum(len(v.config.symbols) for v in state.derivatives.venues.values())
+                    if state.derivatives
+                    else 0
+                )
             },
             links=[{"title": "Universe", "href": "/api/ui/universe"}],
         )
@@ -634,7 +650,8 @@ def _build_pnl_overview(state: RuntimeState, now: datetime) -> Dict[str, float]:
     default = {"today_net_usd": 0.0, "last_7d_net_usd": 0.0, "realized_total_usd": 0.0}
     try:
         ledger_obj = build_ledger_from_history(ctx, None)
-    except Exception:  # pragma: no cover - defensive
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("status: failed to build ledger snapshot", exc_info=exc)
         return default
     try:
         snapshots = ledger_obj.daily_snapshots()
@@ -738,7 +755,9 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     snapshot["risk_throttle_reason"] = safety_snapshot.get("risk_throttle_reason")
     risk_payload = safety_snapshot.get("risk")
     if isinstance(risk_payload, Mapping):
-        governor_snapshot = risk_payload.get("governor") if isinstance(risk_payload, Mapping) else None
+        governor_snapshot = (
+            risk_payload.get("governor") if isinstance(risk_payload, Mapping) else None
+        )
         success_rate = None
         if isinstance(governor_snapshot, Mapping):
             try:
@@ -779,7 +798,8 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     if resolver_state and bool(getattr(resolver_state, "enabled", False)):
         try:
             snapshot["stuck_resolver"] = resolver_state.snapshot()
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("status: stuck resolver snapshot unavailable", exc_info=exc)
             snapshot["stuck_resolver"] = {"enabled": True}
     return redact_sensitive_data(snapshot)
 
@@ -842,9 +862,7 @@ def _recon_overview(safety_snapshot: Mapping[str, object]) -> Dict[str, object]:
         payload = {}
     status = str(payload.get("status") or payload.get("state") or "UNKNOWN").upper()
     last_ts = _coerce_last_ts(
-        payload.get("last_run_ts")
-        or payload.get("last_ts")
-        or payload.get("last_checked")
+        payload.get("last_run_ts") or payload.get("last_ts") or payload.get("last_checked")
     )
     auto_hold = bool(payload.get("auto_hold"))
     if safety_snapshot.get("hold_active"):
@@ -900,4 +918,3 @@ def _coerce_last_ts(raw: object) -> float | None:
     if isinstance(raw, datetime):
         return raw.timestamp()
     return None
-

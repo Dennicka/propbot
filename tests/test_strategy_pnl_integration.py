@@ -12,7 +12,12 @@ from app.strategy_risk import get_strategy_risk_manager, reset_strategy_risk_man
 
 class _Autopilot:
     def as_dict(self) -> dict[str, object]:
-        return {"enabled": False, "last_action": "idle", "target_mode": "HOLD", "target_safe_mode": True}
+        return {
+            "enabled": False,
+            "last_action": "idle",
+            "target_mode": "HOLD",
+            "target_safe_mode": True,
+        }
 
 
 class _Safety:
@@ -67,7 +72,9 @@ def test_strategy_pnl_and_ops_report(monkeypatch, tmp_path, client) -> None:
     async def _fake_positions_snapshot(_state, _positions):
         return {"positions": [], "exposure": {}, "totals": {}}
 
-    monkeypatch.setattr("app.services.ops_report.build_positions_snapshot", _fake_positions_snapshot)
+    monkeypatch.setattr(
+        "app.services.ops_report.build_positions_snapshot", _fake_positions_snapshot
+    )
     monkeypatch.setattr("app.services.ops_report.build_pnl_snapshot", lambda _snapshot: {})
     monkeypatch.setattr(
         "app.services.ops_report.get_strategy_budget_manager",

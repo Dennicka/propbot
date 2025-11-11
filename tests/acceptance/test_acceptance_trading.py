@@ -99,9 +99,7 @@ def test_acceptance_trading_flow(monkeypatch, tmp_path):
         assert watchdog.overall_ok() is True
 
         risk_accounting.record_fill("paper", 0.0, 25.0, simulated=False)
-        _, intent_result = risk_accounting.record_intent(
-            "paper", TRADE_NOTIONAL, simulated=False
-        )
+        _, intent_result = risk_accounting.record_intent("paper", TRADE_NOTIONAL, simulated=False)
         assert intent_result["ok"] is True
         assert intent_result["state"] == "RECORDED"
         assert intent_result.get("reason") is None

@@ -61,4 +61,3 @@ def test_chaos_profile_defaults(monkeypatch):
     assert settings.order_delay_ms == 150
 
     chaos.configure(None)
-

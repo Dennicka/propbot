@@ -81,9 +81,7 @@ def reset_log() -> None:
             with path.open("w", encoding="utf-8") as handle:
                 json.dump([], handle)
         except OSError as rewrite_exc:
-            LOGGER.error(
-                "hedge_log reset failed path=%s error=%s", path, rewrite_exc
-            )
+            LOGGER.error("hedge_log reset failed path=%s error=%s", path, rewrite_exc)
 
 
 __all__ = ["append_entry", "read_entries", "reset_log"]

@@ -29,9 +29,12 @@ LOGGER = logging.getLogger(__name__)
 SNAPSHOT_LIMIT = 50
 SNAPSHOT_VERSION = 1
 SNAPSHOT_DIR = Path(__file__).resolve().parents[2] / "data" / "snapshots"
-INCIDENT_MODE_ENABLED = (
-    os.getenv("INCIDENT_MODE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-)
+INCIDENT_MODE_ENABLED = os.getenv("INCIDENT_MODE_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 CRITICAL_ACTION_INCIDENT_ROLLBACK = "incident_rollback"
 
 
@@ -156,7 +159,9 @@ def _resolve_snapshot_path() -> Path:
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        LOGGER.warning("incident snapshot directory creation failed path=%s error=%s", directory, exc)
+        LOGGER.warning(
+            "incident snapshot directory creation failed path=%s error=%s", directory, exc
+        )
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     unique = uuid.uuid4().hex[:8]
     return directory / f"incident_{ts}_{unique}.json"
@@ -176,8 +181,7 @@ def save_snapshot(*, note: str | None = None, token: str | None = None) -> Path:
     state = get_state()
     control_dict = asdict(state.control)
     control_payload = {
-        key: control_dict.get(key)
-        for key in ControlSnapshotModel.model_fields.keys()
+        key: control_dict.get(key) for key in ControlSnapshotModel.model_fields.keys()
     }
     control_payload["mode"] = state.control.mode
     control_payload["loop_venues"] = list(state.control.loop_venues)

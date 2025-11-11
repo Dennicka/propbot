@@ -358,9 +358,7 @@ def record_intent(
         state = get_state()
         control = getattr(state, "control", None)
         dry_run = (
-            bool(getattr(control, "dry_run", False))
-            or FeatureFlags.dry_run_mode()
-            or simulated
+            bool(getattr(control, "dry_run", False)) or FeatureFlags.dry_run_mode() or simulated
         )
         runtime_dry_run_mode = bool(getattr(control, "dry_run_mode", False))
         budgets_enabled = (
@@ -518,7 +516,9 @@ def record_fill(strategy: str, notional: float, pnl_delta: float, *, simulated: 
             entry.simulated_open_notional = max(entry.simulated_open_notional - notional_value, 0.0)
             entry.simulated_open_positions = max(entry.simulated_open_positions - 1, 0)
             entry.simulated_realised_pnl_today += pnl_value
-            _TOTALS.simulated_open_notional = max(_TOTALS.simulated_open_notional - notional_value, 0.0)
+            _TOTALS.simulated_open_notional = max(
+                _TOTALS.simulated_open_notional - notional_value, 0.0
+            )
             _TOTALS.simulated_open_positions = max(_TOTALS.simulated_open_positions - 1, 0)
             _TOTALS.simulated_realised_pnl_today += pnl_value
             _record_strategy_pnl(strategy, pnl_value, simulated=True)

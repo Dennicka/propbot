@@ -30,4 +30,3 @@ def test_duplicate_fill_does_not_increase_totals() -> None:
     assert second_fill.cum_filled == 3.0
     assert second_fill.status == OrderStatus.FILLED
     assert second_fill.last_event is None
-

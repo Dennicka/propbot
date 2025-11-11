@@ -34,7 +34,9 @@ class FillReconciler:
         self.router = router or ExecutionRouter()
         self._last_fill_ts: datetime | None = None
 
-    async def _record_fill(self, venue: str, payload: Dict[str, object]) -> Tuple[int, Dict[str, object]]:
+    async def _record_fill(
+        self, venue: str, payload: Dict[str, object]
+    ) -> Tuple[int, Dict[str, object]]:
         symbol = str(payload.get("symbol") or "")
         side = str(payload.get("side") or "buy").lower()
         qty = float(payload.get("qty", 0.0))
@@ -113,4 +115,3 @@ class FillReconciler:
 
 
 __all__ = ["FillReconciler"]
-

@@ -119,12 +119,8 @@ class StrategyBudgetManager:
                 continue
             max_notional = _coerce_float_or_none(raw_entry.get("max_notional_usdt"))
             max_positions = _coerce_int_or_none(raw_entry.get("max_open_positions"))
-            current_notional = max(
-                _coerce_float(raw_entry.get("current_notional_usdt")), 0.0
-            )
-            current_positions = max(
-                _coerce_int(raw_entry.get("current_open_positions")), 0
-            )
+            current_notional = max(_coerce_float(raw_entry.get("current_notional_usdt")), 0.0)
+            current_positions = max(_coerce_int(raw_entry.get("current_open_positions")), 0)
             budgets[strategy] = {
                 "max_notional_usdt": max_notional,
                 "max_open_positions": max_positions,
@@ -212,9 +208,13 @@ class StrategyBudgetManager:
             delta_notional = max(_coerce_float(notional), 0.0)
             delta_positions = max(_coerce_int(positions), 0)
             if delta_notional:
-                entry["current_notional_usdt"] = entry.get("current_notional_usdt", 0.0) + delta_notional
+                entry["current_notional_usdt"] = (
+                    entry.get("current_notional_usdt", 0.0) + delta_notional
+                )
             if delta_positions:
-                entry["current_open_positions"] = entry.get("current_open_positions", 0) + delta_positions
+                entry["current_open_positions"] = (
+                    entry.get("current_open_positions", 0) + delta_positions
+                )
             self._persist_unlocked()
 
     def release(

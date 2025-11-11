@@ -8,7 +8,9 @@ from app import ledger
 
 
 def _record(level: str, code: str, venue: str, symbol: str, message: str) -> None:
-    ledger.record_event(level=level, code=code, payload={"venue": venue, "symbol": symbol, "message": message})
+    ledger.record_event(
+        level=level, code=code, payload={"venue": venue, "symbol": symbol, "message": message}
+    )
 
 
 @pytest.mark.parametrize("order", ["asc", "desc"])

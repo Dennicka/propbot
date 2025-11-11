@@ -1,4 +1,5 @@
 """Utilities for tracking and enforcing the bot-wide daily loss cap."""
+
 from __future__ import annotations
 
 import os
@@ -192,7 +193,7 @@ class DailyLossCap:
             slo.set_daily_loss_breached(False)
             set_daily_loss_breach(False)
             self._breach_active = False
-            
+
 
 _SINGLETON: DailyLossCap | None = None
 _SINGLETON_LOCK = threading.RLock()

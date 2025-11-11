@@ -1,9 +1,11 @@
 from __future__ import annotations
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ..services.status import get_status_overview
-import asyncio, json
+import asyncio
+import json
 
 router = APIRouter()
+
 
 @router.websocket("/stream")
 async def stream(ws: WebSocket):

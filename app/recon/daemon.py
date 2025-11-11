@@ -33,6 +33,7 @@ from .reconciler import Reconciler
 
 LOGGER = logging.getLogger(__name__)
 
+
 @dataclass(slots=True)
 class DaemonConfig:
     enabled: bool = True
@@ -268,6 +269,7 @@ class ReconDaemon:
             return []
         return [dict(row) for row in payload if isinstance(row, Mapping)]
 
+
 def _ctx_fetch(ctx, name: str, default):
     if ctx is None:
         return default() if callable(default) else default
@@ -481,16 +483,18 @@ def _resolve_daemon_config(cfg: object | None = None) -> DaemonConfig:
         epsilon_position=_extract("epsilon_position", config.epsilon_position),
         epsilon_balance=_extract("epsilon_balance", config.epsilon_balance),
         epsilon_notional=_extract("epsilon_notional", config.epsilon_notional),
-        auto_hold_on_critical=bool(auto_hold_raw)
-        if auto_hold_raw is not None
-        else config.auto_hold_on_critical,
+        auto_hold_on_critical=(
+            bool(auto_hold_raw) if auto_hold_raw is not None else config.auto_hold_on_critical
+        ),
         balance_warn_usd=balance_warn,
         balance_critical_usd=balance_critical,
         position_size_warn=position_warn,
         position_size_critical=position_critical,
-        order_critical_missing=bool(order_missing_raw)
-        if order_missing_raw is not None
-        else config.order_critical_missing,
+        order_critical_missing=(
+            bool(order_missing_raw)
+            if order_missing_raw is not None
+            else config.order_critical_missing
+        ),
     )
 
 

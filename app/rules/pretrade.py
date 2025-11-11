@@ -145,8 +145,8 @@ def _to_zoneinfo(value: str | None, default: ZoneInfo) -> ZoneInfo:
     if value:
         try:
             return ZoneInfo(value)
-        except Exception:  # pragma: no cover - invalid tz falls back
-            pass
+        except Exception as exc:  # pragma: no cover - invalid tz falls back  # noqa: BLE001
+            LOGGER.warning("invalid timezone override", extra={"value": value}, exc_info=exc)
     return default
 
 
@@ -229,9 +229,14 @@ class PretradeValidator:
             try:
                 start_time = _parse_time(start_raw)
                 end_time = _parse_time(end_raw)
-            except Exception:
+            except (TypeError, ValueError) as exc:
+                LOGGER.warning(
+                    "pretrade: invalid trade window entry", extra={"entry": entry}, exc_info=exc
+                )
                 continue
-            tz_value = _to_zoneinfo(entry.get("tz") if isinstance(entry.get("tz"), str) else None, default_tz)
+            tz_value = _to_zoneinfo(
+                entry.get("tz") if isinstance(entry.get("tz"), str) else None, default_tz
+            )
             windows.append(
                 TimeWindow(
                     start=start_time,
@@ -289,26 +294,48 @@ class PretradeValidator:
             if callable(getter):
                 try:
                     filters = getter(exchange_symbol)
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning(
+                        "pretrade: failed to fetch symbol specs",
+                        extra={"venue": venue, "symbol": exchange_symbol},
+                        exc_info=exc,
+                    )
                     try:
                         filters = getter(symbol)
-                    except Exception:
+                    except Exception as retry_exc:  # noqa: BLE001
+                        LOGGER.warning(
+                            "pretrade: retry to fetch symbol specs failed",
+                            extra={"venue": venue, "symbol": symbol},
+                            exc_info=retry_exc,
+                        )
                         filters = None
             else:
                 getter = getattr(client, "get_filters", None)
                 if callable(getter):
                     try:
                         filters = getter(exchange_symbol)
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning(
+                            "pretrade: failed to fetch filters",
+                            extra={"venue": venue, "symbol": exchange_symbol},
+                            exc_info=exc,
+                        )
                         try:
                             filters = getter(symbol)
-                        except Exception:
+                        except Exception as retry_exc:  # noqa: BLE001
+                            LOGGER.warning(
+                                "pretrade: retry to fetch filters failed",
+                                extra={"venue": venue, "symbol": symbol},
+                                exc_info=retry_exc,
+                            )
                             filters = None
         if isinstance(filters, Mapping):
             tick = _coerce_positive_float(filters.get("tick_size")) if math.isnan(tick) else tick
             lot = _coerce_positive_float(filters.get("step_size")) if math.isnan(lot) else lot
             min_notional = (
-                _coerce_positive_float(filters.get("min_notional")) if math.isnan(min_notional) else min_notional
+                _coerce_positive_float(filters.get("min_notional"))
+                if math.isnan(min_notional)
+                else min_notional
             )
         if math.isnan(tick):
             tick = 0.0
@@ -330,7 +357,9 @@ class PretradeValidator:
         return specs
 
     # ------------------------------------------------------------------
-    def validate(self, order: Mapping[str, Any]) -> tuple[bool, str | None, Mapping[str, Any] | None]:
+    def validate(
+        self, order: Mapping[str, Any]
+    ) -> tuple[bool, str | None, Mapping[str, Any] | None]:
         state = get_state()
         pretrade_cfg = getattr(state.config.data, "pretrade", None)
         allow_autofix = bool(getattr(pretrade_cfg, "allow_autofix", True))
@@ -343,7 +372,9 @@ class PretradeValidator:
         price_value = order.get("price")
         price_float = _coerce_float(price_value) if price_value is not None else float("nan")
         notional_value = order.get("notional")
-        notional_float = _coerce_float(notional_value) if notional_value is not None else float("nan")
+        notional_float = (
+            _coerce_float(notional_value) if notional_value is not None else float("nan")
+        )
 
         if not symbol:
             PRETRADE_CHECKS_TOTAL.labels(result="blocked", reason="missing_symbol").inc()
@@ -351,7 +382,9 @@ class PretradeValidator:
             record_pretrade_block(symbol, "missing_symbol", qty=float("nan"), price=float("nan"))
             return False, "missing_symbol", None
 
-        environment = str(state.control.environment or state.control.deployment_mode or "paper").lower()
+        environment = str(
+            state.control.environment or state.control.deployment_mode or "paper"
+        ).lower()
         guardrails_cfg = getattr(state.config.data, "guardrails", None)
         resume_required = environment == "live" and bool(state.control.two_man_rule)
         if resume_required:
@@ -397,7 +430,9 @@ class PretradeValidator:
             PRETRADE_CHECKS_TOTAL.labels(result="blocked", reason="qty").inc()
             reason = "qty_invalid"
             record_pretrade_block(symbol, reason, qty=qty_value, price=price_float)
-            LOGGER.warning("pretrade_blocked", extra={"symbol": symbol, "venue": venue, "reason": reason})
+            LOGGER.warning(
+                "pretrade_blocked", extra={"symbol": symbol, "venue": venue, "reason": reason}
+            )
             return False, reason, None
 
         if not math.isnan(mutable_price) and specs.tick > 0:
@@ -420,7 +455,8 @@ class PretradeValidator:
                     reason = "price_tick"
                     record_pretrade_block(symbol, reason, qty=qty_value, price=price_float)
                     LOGGER.warning(
-                        "pretrade_blocked", extra={"symbol": symbol, "venue": venue, "reason": reason}
+                        "pretrade_blocked",
+                        extra={"symbol": symbol, "venue": venue, "reason": reason},
                     )
                     return False, reason, None
 
@@ -444,7 +480,8 @@ class PretradeValidator:
                     reason = "qty_step"
                     record_pretrade_block(symbol, reason, qty=qty_value, price=price_float)
                     LOGGER.warning(
-                        "pretrade_blocked", extra={"symbol": symbol, "venue": venue, "reason": reason}
+                        "pretrade_blocked",
+                        extra={"symbol": symbol, "venue": venue, "reason": reason},
                     )
                     return False, reason, None
 
@@ -453,10 +490,16 @@ class PretradeValidator:
             price_for_notional = _coerce_float(order.get("price"))
         if math.isnan(price_for_notional):
             price_for_notional = float("nan")
-        notional_calculated = mutable_qty * price_for_notional if not math.isnan(price_for_notional) else float("nan")
+        notional_calculated = (
+            mutable_qty * price_for_notional if not math.isnan(price_for_notional) else float("nan")
+        )
         if math.isnan(notional_float):
             notional_float = notional_calculated
-        if specs.min_notional > 0 and not math.isnan(notional_float) and notional_float + 1e-9 < specs.min_notional:
+        if (
+            specs.min_notional > 0
+            and not math.isnan(notional_float)
+            and notional_float + 1e-9 < specs.min_notional
+        ):
             PRETRADE_CHECKS_TOTAL.labels(result="blocked", reason="notional").inc()
             reason = "min_notional"
             record_pretrade_block(symbol, reason, qty=mutable_qty, price=mutable_price)

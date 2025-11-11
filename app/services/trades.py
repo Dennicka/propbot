@@ -134,7 +134,9 @@ async def close_all_trades(*, dry_run: bool) -> Dict[str, List[Dict[str, object]
         tracker: MutableMapping[str, object] | None = getattr(state, "_close_all_tracker", None)
         fingerprint = _fingerprint(trades)
         if tracker and tracker.get("fingerprint") == fingerprint and fingerprint:
-            LOGGER.info("close-all trades request ignored: already processed", extra={"count": len(trades)})
+            LOGGER.info(
+                "close-all trades request ignored: already processed", extra={"count": len(trades)}
+            )
             return {"closed": [], "positions": []}
         if not trades:
             setattr(state, "_close_all_tracker", {"fingerprint": fingerprint})

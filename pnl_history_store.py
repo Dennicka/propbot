@@ -88,7 +88,9 @@ def _write_entries(path: Path, entries: Iterable[Mapping[str, Any]]) -> None:
         )
 
 
-def append_snapshot(snapshot: Mapping[str, Any], *, max_entries: int | None = 288) -> dict[str, Any]:
+def append_snapshot(
+    snapshot: Mapping[str, Any], *, max_entries: int | None = 288
+) -> dict[str, Any]:
     """Append ``snapshot`` to the on-disk history, enforcing ``max_entries``."""
 
     payload = dict(snapshot)

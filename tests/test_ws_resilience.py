@@ -35,9 +35,13 @@ def _clock_factory() -> tuple[callable, callable[[float], None]]:
 
 def _make_connector(venue: str, now) -> tuple[WsConnector, List[str]]:
     heartbeat = HeartbeatMonitor(timeout=5.0, clock=now)
-    backoff = BackoffPolicy(base=0.25, maximum=30.0, stable_window=60.0, jitter=lambda a, b: a, clock=now)
+    backoff = BackoffPolicy(
+        base=0.25, maximum=30.0, stable_window=60.0, jitter=lambda a, b: a, clock=now
+    )
     reasons: List[str] = []
-    connector = WsConnector(venue=venue, heartbeat=heartbeat, backoff=backoff, reconnect=reasons.append)
+    connector = WsConnector(
+        venue=venue, heartbeat=heartbeat, backoff=backoff, reconnect=reasons.append
+    )
     return connector, reasons
 
 
@@ -168,7 +172,9 @@ def test_heartbeat_timeout_reconnects() -> None:
 
 def test_backoff_grows_and_resets_after_stability() -> None:
     now, advance = _clock_factory()
-    policy = BackoffPolicy(base=0.25, maximum=5.0, stable_window=60.0, jitter=lambda a, b: a, clock=now)
+    policy = BackoffPolicy(
+        base=0.25, maximum=5.0, stable_window=60.0, jitter=lambda a, b: a, clock=now
+    )
     delays = [policy.next_delay(), policy.next_delay(), policy.next_delay()]
     assert delays == [0.25, 0.5, 1.0]
     advance(100.0)

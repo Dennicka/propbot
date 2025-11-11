@@ -111,7 +111,9 @@ def _summarise_positions() -> dict[str, Any]:
     }
 
 
-async def record_snapshot(*, reason: str | None = None, max_entries: int | None = None) -> dict[str, Any]:
+async def record_snapshot(
+    *, reason: str | None = None, max_entries: int | None = None
+) -> dict[str, Any]:
     """Capture the current exposure and PnL snapshot and persist it."""
 
     if max_entries is None:
@@ -129,7 +131,8 @@ async def record_snapshot(*, reason: str | None = None, max_entries: int | None 
         "total_exposure_usd_total": summary["real"]["total"],
         "open_positions": summary["real"]["open_positions"],
         "partial_positions": summary["real"]["partial_positions"],
-        "open_positions_total": summary["real"]["open_positions"] + summary["real"]["partial_positions"],
+        "open_positions_total": summary["real"]["open_positions"]
+        + summary["real"]["partial_positions"],
         "simulated": summary["simulated"],
     }
     append_snapshot(snapshot_payload, max_entries=max_entries)

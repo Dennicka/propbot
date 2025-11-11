@@ -88,7 +88,9 @@ async def test_binance_broker_fetches_recently_closed_symbols(monkeypatch):
         ts=ts_open,
     )
 
-    broker = BinanceTestnetBroker(safe_mode=False, dry_run=False, credentials=_Credentials("k", "s"))
+    broker = BinanceTestnetBroker(
+        safe_mode=False, dry_run=False, credentials=_Credentials("k", "s")
+    )
 
     async def fake_active_symbols():
         return []
@@ -149,7 +151,9 @@ async def test_fill_reconciler_accounts_for_closed_positions(monkeypatch):
         ts=ts_open,
     )
 
-    broker = BinanceTestnetBroker(safe_mode=False, dry_run=False, credentials=_Credentials("k", "s"))
+    broker = BinanceTestnetBroker(
+        safe_mode=False, dry_run=False, credentials=_Credentials("k", "s")
+    )
 
     async def fake_active_symbols():
         return []

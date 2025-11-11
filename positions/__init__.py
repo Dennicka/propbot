@@ -72,12 +72,8 @@ def create_position(
         "notional_usdt": float(notional_usdt),
         "entry_spread_bps": float(entry_spread_bps),
         "leverage": float(leverage),
-        "entry_long_price": float(entry_long_price)
-        if entry_long_price is not None
-        else None,
-        "entry_short_price": float(entry_short_price)
-        if entry_short_price is not None
-        else None,
+        "entry_long_price": float(entry_long_price) if entry_long_price is not None else None,
+        "entry_short_price": float(entry_short_price) if entry_short_price is not None else None,
     }
     strategy_name = str(strategy or "").strip()
     if strategy_name:
@@ -183,6 +179,6 @@ def validate_record_structure(entries: Iterable[Dict[str, Any]]) -> None:
             missing_leg = required_leg - set(leg)
             if missing_leg:
                 raise ValueError(f"position leg missing fields: {', '.join(sorted(missing_leg))}")
+
+
 LOGGER = logging.getLogger(__name__)
-
-

@@ -1,4 +1,5 @@
 """Runaway cancel guard with per-venue/per-symbol counters."""
+
 from __future__ import annotations
 
 import os
@@ -43,7 +44,9 @@ class RunawayGuard:
         self._cooldown_sec = 0
         self._enabled = False
         self._lock = threading.Lock()
-        self._per_venue: Dict[str, Dict[str, Deque[float]]] = defaultdict(lambda: defaultdict(deque))
+        self._per_venue: Dict[str, Dict[str, Deque[float]]] = defaultdict(
+            lambda: defaultdict(deque)
+        )
         self._last_trigger_ts: float | None = None
         self._last_block: _BlockDetails | None = None
 
@@ -64,7 +67,9 @@ class RunawayGuard:
             self._last_trigger_ts = None
             self._last_block = None
 
-    def allow_cancel(self, venue: str, symbol: str, *, planned: int = 1, now: float | None = None) -> bool:
+    def allow_cancel(
+        self, venue: str, symbol: str, *, planned: int = 1, now: float | None = None
+    ) -> bool:
         if not self.feature_enabled():
             return True
         with self._lock:
@@ -103,7 +108,9 @@ class RunawayGuard:
                 return False
             return True
 
-    def register_cancel(self, venue: str, symbol: str, *, count: int = 1, now: float | None = None) -> None:
+    def register_cancel(
+        self, venue: str, symbol: str, *, count: int = 1, now: float | None = None
+    ) -> None:
         if not self.feature_enabled():
             return
         if count <= 0:
@@ -132,7 +139,9 @@ class RunawayGuard:
                     per_venue[venue] = symbol_counts
             last_trigger_iso = None
             if self._last_trigger_ts:
-                last_trigger_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(self._last_trigger_ts))
+                last_trigger_iso = time.strftime(
+                    "%Y-%m-%dT%H:%M:%S", time.gmtime(self._last_trigger_ts)
+                )
             payload: Dict[str, object] = {
                 "enabled": self._enabled and self.feature_enabled(),
                 "max_cancels_per_min": self._max_cancels_per_min,

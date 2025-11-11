@@ -249,11 +249,7 @@ def resolve_caps(cfg: Any, symbol: Any, side: Any, venue: Any) -> Dict[str, floa
         }
     default_entry = _caps_entry(_model_to_mapping(root).get("default"))
     global_cap = default_entry.get("max_abs_usdt")
-    side_cap = (
-        default_entry.get("per_side_max_abs_usdt", {}).get(side_key)
-        if side_key
-        else None
-    )
+    side_cap = default_entry.get("per_side_max_abs_usdt", {}).get(side_key) if side_key else None
     venue_cap: float | None = None
 
     for candidate, payload in _iter_mapping_items(_model_to_mapping(root).get("per_symbol")):
@@ -329,13 +325,9 @@ def project_exposure(
     current_total = _coerce_float(entry.get("total_abs"))
     current_global = _coerce_float(snapshot.by_symbol.get(symbol_key))
     current_side_total = (
-        _coerce_float(snapshot.by_symbol_side.get((symbol_key, side_key)))
-        if side_key
-        else 0.0
+        _coerce_float(snapshot.by_symbol_side.get((symbol_key, side_key))) if side_key else 0.0
     )
-    current_side_contribution = (
-        _coerce_float(entry.get(side_key)) if side_key else 0.0
-    )
+    current_side_contribution = _coerce_float(entry.get(side_key)) if side_key else 0.0
     projected_side_abs = max(_coerce_float(new_abs_position), 0.0) if side_key else 0.0
     projected_total = projected_side_abs if side_key else 0.0
     projected_global = current_global - current_total + projected_total
@@ -534,7 +526,9 @@ def build_status_payload(
         venue_section[symbol_label] = {
             "current_abs": _coerce_float(entry.get("total_abs")),
             "side": entry.get("side") or "FLAT",
-            "cap": resolve_caps(cfg, symbol_label, entry.get("side"), venue_label).get("venue_max_abs"),
+            "cap": resolve_caps(cfg, symbol_label, entry.get("side"), venue_label).get(
+                "venue_max_abs"
+            ),
         }
     if root:
         per_venue_cfg = _model_to_mapping(root).get("per_venue")
@@ -548,7 +542,9 @@ def build_status_payload(
                     {
                         "current_abs": 0.0,
                         "side": "FLAT",
-                        "cap": resolve_caps(cfg, symbol_label, "LONG", venue_label).get("venue_max_abs"),
+                        "cap": resolve_caps(cfg, symbol_label, "LONG", venue_label).get(
+                            "venue_max_abs"
+                        ),
                     },
                 )
     payload["by_venue"] = per_venue

@@ -191,7 +191,9 @@ def test_daily_loss_auto_hold_engages_hold(monkeypatch):
     assert state_after.safety.hold_reason == auto_hold.AUTO_HOLD_REASON
 
     assert any(event["action"] == auto_hold.AUTO_HOLD_ACTION for event in audit_events)
-    recorded = next(event for event in audit_events if event["action"] == auto_hold.AUTO_HOLD_ACTION)
+    recorded = next(
+        event for event in audit_events if event["action"] == auto_hold.AUTO_HOLD_ACTION
+    )
     assert recorded["details"].get("reason") == auto_hold.AUTO_HOLD_AUDIT_REASON
     assert alerts and alerts[0]["kind"] == auto_hold.AUTO_HOLD_ALERT_KIND
 
@@ -251,7 +253,9 @@ def test_daily_loss_auto_hold_skipped_in_dry_run(monkeypatch):
     state.control.dry_run_mode = False
 
     alerts: list[str] = []
-    monkeypatch.setattr(auto_hold, "send_notifier_alert", lambda *args, **kwargs: alerts.append(args[0]))
+    monkeypatch.setattr(
+        auto_hold, "send_notifier_alert", lambda *args, **kwargs: alerts.append(args[0])
+    )
 
     risk_accounting.record_fill("unit_test", 0.0, -150.0, simulated=False)
 

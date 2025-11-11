@@ -313,8 +313,6 @@ class StatusThresholds(BaseModel):
     status: Dict[str, float] = Field(default_factory=dict)
 
 
-
-
 class MarketRetryPolicy(BaseModel):
     max_attempts: int = Field(3, ge=1)
     backoff_s: float = Field(1.0, ge=0.0)
@@ -374,9 +372,7 @@ class HealthConfig(BaseModel):
         if self.margin_ratio_critical < self.margin_ratio_warn:
             raise ValueError("margin_ratio_critical must be >= margin_ratio_warn")
         if self.free_collateral_critical_usd > self.free_collateral_warn_usd:
-            raise ValueError(
-                "free_collateral_critical_usd must be <= free_collateral_warn_usd"
-            )
+            raise ValueError("free_collateral_critical_usd must be <= free_collateral_warn_usd")
         return self
 
 

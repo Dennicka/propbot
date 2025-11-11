@@ -46,6 +46,20 @@
    uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
    ```
    Сервер пишет лог `PropBot starting...` и остаётся в HOLD/SAFE_MODE.
+
+### Unified runtime profiles
+
+* Сценарии запуска сведены в `scripts/run_profile.py`. Скрипт принимает флаг
+  `--profile=paper|testnet|live`, подтягивает конфигурацию из
+  `app.config.profiles` и стартует `uvicorn` с безопасными настройками.
+* Для быстрого старта добавлены цели `make run_paper`, `make run_testnet` и
+  `make run_live`. По умолчанию выполняется paper-профиль и все guard'ы остаются
+  включёнными.
+* Запуск live-профиля потребует эксплицитного подтверждения
+  `LIVE_CONFIRM=I_KNOW_WHAT_I_AM_DOING` и заданных лимитов
+  (`MAX_TOTAL_NOTIONAL_USDT`, `MAX_OPEN_POSITIONS`, `DAILY_LOSS_CAP_USDT`). Если
+  переменные не выставлены или равны нулю, скрипт завершается с ошибкой и бот не
+  начнёт торговать.
 10. Откройте `http://127.0.0.1:8000/ui/dashboard` в браузере: дэшборд покажет
     бейджи `safe_mode`, `hold_active`, `dry_run_mode` и фиктивные данные из
     paper-профиля. Остановить сервер можно `Ctrl+C` в терминале.

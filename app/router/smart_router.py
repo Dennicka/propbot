@@ -93,7 +93,12 @@ def _tier_table_from_config(config) -> TierTable | None:
                 else:
                     try:
                         tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
-                    except Exception:  # pragma: no cover - defensive
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning(
+                            "smart_router: failed to serialise tier entry",
+                            extra={"venue": str(venue)},
+                            exc_info=exc,
+                        )
                         continue
         if tier_entries:
             mapping[str(venue)] = tier_entries
@@ -215,10 +220,12 @@ class SmartRouter:
             if canonical not in venues:
                 venues.append(canonical)
         if not venues:
-            venues = sorted({
-                VENUE_ALIASES.get("binance", "binance-um"),
-                VENUE_ALIASES.get("okx", "okx-perp"),
-            })
+            venues = sorted(
+                {
+                    VENUE_ALIASES.get("binance", "binance-um"),
+                    VENUE_ALIASES.get("okx", "okx-perp"),
+                }
+            )
         return venues
 
     def score(
@@ -263,7 +270,9 @@ class SmartRouter:
                 "vip_rebate_bps": fee_info.vip_rebate_bps,
             },
         }
-        maker_possible = bool(self._prefer_maker or getattr(self._state.control, "post_only", False))
+        maker_possible = bool(
+            self._prefer_maker or getattr(self._state.control, "post_only", False)
+        )
 
         try:
             cost_payload = effective_cost(
@@ -352,7 +361,9 @@ class SmartRouter:
                 side=side,
                 qty=qty,
                 symbol=symbol,
-                book_liq_usdt=(book_liquidity_usdt or {}).get(canonical) if book_liquidity_usdt else None,
+                book_liq_usdt=(
+                    (book_liquidity_usdt or {}).get(canonical) if book_liquidity_usdt else None
+                ),
                 rest_latency_ms=(rest_latency_ms or {}).get(canonical) if rest_latency_ms else None,
                 ws_latency_ms=(ws_latency_ms or {}).get(canonical) if ws_latency_ms else None,
             )
@@ -360,7 +371,9 @@ class SmartRouter:
             score_value = float(result.get("score", math.inf))
             if best is None or score_value < best.score:
                 best = _ScoreResult(canonical, score_value, result)
-            elif best is not None and math.isclose(score_value, best.score, rel_tol=1e-9, abs_tol=1e-9):
+            elif best is not None and math.isclose(
+                score_value, best.score, rel_tol=1e-9, abs_tol=1e-9
+            ):
                 if canonical < best.venue:
                     best = _ScoreResult(canonical, score_value, result)
         logger = get_golden_logger()
@@ -459,7 +472,9 @@ class SmartRouter:
             info = FeeInfo(maker_bps=float(taker), taker_bps=float(taker), vip_rebate_bps=0.0)
         return info
 
-    def _latency_penalty(self, rest_ms: float, ws_ms: float, notional: float) -> tuple[float, float]:
+    def _latency_penalty(
+        self, rest_ms: float, ws_ms: float, notional: float
+    ) -> tuple[float, float]:
         rest_value = max(rest_ms, 0.0)
         ws_value = max(ws_ms, 0.0)
         over_rest = max(rest_value - self._latency_target_ms, 0.0)

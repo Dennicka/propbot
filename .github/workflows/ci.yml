@@ -14,8 +14,25 @@ jobs:
       - name: Secret scan
         run: python scripts/ci_secret_scan.py
 
-  test:
+  lint:
     needs: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Ruff lint
+        run: ruff check .
+      - name: Black check
+        run: black --check .
+      - name: Mypy
+        run: mypy --config-file mypy.ini app
+
+  test:
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +48,26 @@ jobs:
       - name: Golden replay check
         if: hashFiles('data/golden/baseline.jsonl') != ''
         run: make golden-check
+
+  security-sweep:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install bandit pip-audit
+      - name: Bandit static analysis
+        run: bandit -q -r app services
+      - name: Dependency audit
+        run: |
+          pip-audit -r requirements.txt \
+            --ignore-vuln GHSA-f96h-pmfr-66vw \
+            --ignore-vuln GHSA-2c2j-9gv5-cj73
+
   acceptance:
-    needs: test
+    needs: [test, security-sweep]
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:

@@ -71,8 +71,20 @@ def test_save_and_load_snapshot_round_trip(monkeypatch, tmp_path, incident_modul
     watchdog = get_exchange_watchdog()
     original_watchdog = watchdog.get_state()
     snapshot_watchdog = {
-        "binance": {"ok": True, "status": "OK", "auto_hold": False, "last_check_ts": 1.0, "reason": ""},
-        "okx": {"ok": False, "status": "DEGRADED", "auto_hold": False, "last_check_ts": 2.0, "reason": "degraded"},
+        "binance": {
+            "ok": True,
+            "status": "OK",
+            "auto_hold": False,
+            "last_check_ts": 1.0,
+            "reason": "",
+        },
+        "okx": {
+            "ok": False,
+            "status": "DEGRADED",
+            "auto_hold": False,
+            "last_check_ts": 2.0,
+            "reason": "degraded",
+        },
     }
     watchdog.restore_snapshot(snapshot_watchdog)
     try:

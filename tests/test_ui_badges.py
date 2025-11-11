@@ -105,9 +105,7 @@ def test_runtime_badges_endpoint_failure_modes(client, monkeypatch):
     )
 
     watchdog = get_exchange_watchdog()
-    watchdog.check_once(
-        lambda: {"binance": {"ok": False, "reason": "maintenance"}}
-    )
+    watchdog.check_once(lambda: {"binance": {"ok": False, "reason": "maintenance"}})
 
     daily_loss_state["breached"] = True
 

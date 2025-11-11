@@ -83,7 +83,9 @@ def test_snapshot_endpoint_generates_payload_and_file(monkeypatch, client, tmp_p
         }
     )
 
-    execution_stats_sample = [{"symbol": "ETHUSDT", "slippage_bps": 0.42, "ts": "2024-01-01T00:00:00Z"}]
+    execution_stats_sample = [
+        {"symbol": "ETHUSDT", "slippage_bps": 0.42, "ts": "2024-01-01T00:00:00Z"}
+    ]
     monkeypatch.setattr(
         "services.execution_stats_store.list_recent", lambda limit=250: execution_stats_sample
     )

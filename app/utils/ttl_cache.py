@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import logging
 import os
 import threading
 import time
@@ -15,6 +16,18 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from ..metrics.cache import record_cache_observation
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _make_etag(body: bytes) -> str:
+    """Create a deterministic, collision-resistant ETag for cached content."""
+    try:
+        digest = hashlib.blake2b(body, digest_size=16)
+    except TypeError:  # pragma: no cover - legacy Python without keyword-only args
+        digest = hashlib.blake2b(body, 16)  # type: ignore[arg-type]
+    return digest.hexdigest()
 
 
 CacheVary = Callable[[Request, tuple[Any, ...], dict[str, Any]], Any]
@@ -100,8 +113,12 @@ def _extend_key_with_vary(
 def _record_hit(endpoint: str) -> None:
     try:
         record_cache_observation(endpoint, True)
-    except Exception:  # pragma: no cover - defensive
-        pass
+    except Exception as exc:  # pragma: no cover - defensive  # noqa: BLE001
+        LOGGER.debug(
+            "failed to record cache hit",
+            extra={"endpoint": endpoint},
+            exc_info=exc,
+        )
 
 
 def _conditional_headers(entry: _CacheEntry) -> dict[str, str]:
@@ -118,13 +135,15 @@ def _conditional_headers(entry: _CacheEntry) -> dict[str, str]:
 def _clock() -> float:
     try:
         from ..services import cache as data_cache
-    except Exception:  # pragma: no cover - fallback when cache not available
+    except Exception as exc:  # pragma: no cover - fallback when cache not available  # noqa: BLE001
+        LOGGER.debug("cache service unavailable, using monotonic clock", exc_info=exc)
         return time.monotonic()
     monotonic_fn = getattr(data_cache, "_monotonic", None)
     if callable(monotonic_fn):
         try:
             return float(monotonic_fn())
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # pragma: no cover - defensive  # noqa: BLE001
+            LOGGER.debug("cache monotonic provider failed", exc_info=exc)
             return time.monotonic()
     return time.monotonic()
 
@@ -249,17 +268,17 @@ def cache_response(
             else:
                 try:
                     record_cache_observation(request.url.path, False)
-                except Exception:  # pragma: no cover - defensive
-                    pass
+                except Exception as exc:  # pragma: no cover - defensive  # noqa: BLE001
+                    LOGGER.debug(
+                        "failed to record cache miss",
+                        extra={"endpoint": request.url.path},
+                        exc_info=exc,
+                    )
 
             result = await fn(*args, **kwargs)
             response = await _ensure_response(result)
             body = await _read_response_body(response)
-            try:
-                digest = hashlib.md5(body, usedforsecurity=False)
-            except TypeError:  # pragma: no cover - Python without usedforsecurity
-                digest = hashlib.md5(body)
-            etag = digest.hexdigest()
+            etag = _make_etag(body)
             headers = dict(response.headers)
             cache_control_value = None
             for key, value in list(headers.items()):
@@ -285,9 +304,7 @@ def cache_response(
                 media_type=response.media_type,
             )
             _set_entry(cache_key, entry)
-            if _matches_if_none_match(request, entry) or _matches_if_modified_since(
-                request, entry
-            ):
+            if _matches_if_none_match(request, entry) or _matches_if_modified_since(request, entry):
                 return Response(status_code=304, headers=_conditional_headers(entry))
             return Response(
                 status_code=response.status_code,

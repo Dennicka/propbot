@@ -1,4 +1,5 @@
 """Journal helpers and feature flag detection."""
+
 from __future__ import annotations
 
 import os

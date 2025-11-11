@@ -69,10 +69,7 @@ def auto_hold_on_daily_loss_breach(
 
     realised_text = f"{realized:.2f}" if realized is not None else "unknown"
     cap_text = f"{cap_value:.2f}" if cap_value is not None else "unknown"
-    message = (
-        "AUTO-HOLD by Daily Loss Cap "
-        f"(realized_pnl_today={realised_text}, cap={cap_text})"
-    )
+    message = "AUTO-HOLD by Daily Loss Cap " f"(realized_pnl_today={realised_text}, cap={cap_text})"
     send_notifier_alert(
         AUTO_HOLD_ALERT_KIND,
         message,

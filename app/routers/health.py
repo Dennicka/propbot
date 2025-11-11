@@ -7,6 +7,7 @@ from ..services.health_state import evaluate_health
 
 router = APIRouter()
 
+
 class HealthOut(BaseModel):
     ok: bool
     journal_ok: bool

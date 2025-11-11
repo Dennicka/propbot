@@ -116,9 +116,7 @@ class TierTable:
                 table.per_venue[str(venue)] = tier_entries
         return table
 
-    def pick_tier(
-        self, venue: str, rolling_30d_notional: float | None
-    ) -> TierInfo | None:
+    def pick_tier(self, venue: str, rolling_30d_notional: float | None) -> TierInfo | None:
         tiers = self.per_venue.get(str(venue))
         if not tiers or rolling_30d_notional is None:
             return None

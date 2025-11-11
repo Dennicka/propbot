@@ -71,14 +71,16 @@ def enforce_pre_trade(
     ok, reason = governor.check_and_account(None, order)
     if not ok:
         LOGGER.warning(
-            "pre-trade governor blocked order", extra={"reason": reason or "RISK_THROTTLED", "venue": venue}
+            "pre-trade governor blocked order",
+            extra={"reason": reason or "RISK_THROTTLED", "venue": venue},
         )
         raise PreTradeThrottled(reason or "RISK_THROTTLED")
 
     decision = evaluate_pre_trade(venue=venue)
     if decision.auto_hold_reason:
         LOGGER.warning(
-            "risk governor triggered auto-hold", extra={"reason": decision.auto_hold_reason, "venue": venue}
+            "risk governor triggered auto-hold",
+            extra={"reason": decision.auto_hold_reason, "venue": venue},
         )
     if decision.throttled:
         LOGGER.warning(

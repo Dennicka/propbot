@@ -81,7 +81,9 @@ async def test_partial_rebalancer_places_additional_leg(monkeypatch):
     stub = _StubClient()
     monkeypatch.setattr("app.hedge.rebalancer._client_for", lambda venue: stub)
     recorded: list[dict[str, object]] = []
-    monkeypatch.setattr("app.hedge.rebalancer.record_order", lambda **kwargs: recorded.append(kwargs) or 1)
+    monkeypatch.setattr(
+        "app.hedge.rebalancer.record_order", lambda **kwargs: recorded.append(kwargs) or 1
+    )
 
     rebalancer = PartialHedgeRebalancer(
         interval=0.1,

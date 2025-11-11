@@ -33,7 +33,9 @@ async def test_startup_waits_until_green_then_runs(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "live")
     monkeypatch.setenv("WAIT_FOR_LIVE_READINESS_ON_START", "true")
 
-    monkeypatch.setattr(app_main.runtime_service, "setup_signal_handlers", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        app_main.runtime_service, "setup_signal_handlers", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(app_main, "validate_startup", lambda: None)
     monkeypatch.setattr(app_main, "perform_startup_resume", lambda: (True, {}))
     monkeypatch.setattr(app_main, "setup_telegram_bot", lambda *_args, **_kwargs: None)
@@ -90,7 +92,9 @@ async def test_startup_waits_until_green_then_runs(monkeypatch):
         control.mode = "HOLD"
         return True
 
-    monkeypatch.setattr(app_main.runtime_service, "autopilot_apply_resume", fake_autopilot_apply_resume)
+    monkeypatch.setattr(
+        app_main.runtime_service, "autopilot_apply_resume", fake_autopilot_apply_resume
+    )
     monkeypatch.setattr(runtime, "autopilot_apply_resume", fake_autopilot_apply_resume)
     monkeypatch.setattr(app_main.runtime_service, "engage_safety_hold", fake_engage_safety_hold)
     monkeypatch.setattr(runtime, "engage_safety_hold", fake_engage_safety_hold)

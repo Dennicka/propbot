@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 
-async def build_positions_snapshot(
-    state, positions: Iterable[Mapping[str, Any]]
-) -> Dict[str, Any]:
+LOGGER = logging.getLogger(__name__)
+
+
+async def build_positions_snapshot(state, positions: Iterable[Mapping[str, Any]]) -> Dict[str, Any]:
     marks = await _resolve_position_marks(state, positions)
     exposure_totals: Dict[str, Dict[str, float]] = defaultdict(
         lambda: {"long_notional": 0.0, "short_notional": 0.0, "net_usdt": 0.0}
@@ -208,7 +210,12 @@ def _fetch_mark_price(client, symbol: str) -> float | None:
     for candidate in _symbol_candidates(symbol):
         try:
             data = client.get_mark_price(candidate)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "positions_view: failed to fetch mark price",
+                extra={"symbol": candidate},
+                exc_info=exc,
+            )
             continue
         price: float | None = None
         if isinstance(data, Mapping):
@@ -234,4 +241,3 @@ def _symbol_candidates(symbol: str) -> List[str]:
 
 
 __all__ = ["build_positions_snapshot"]
-

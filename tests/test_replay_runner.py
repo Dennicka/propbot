@@ -67,4 +67,3 @@ def test_run_backtest_creates_summary(tmp_path, monkeypatch):
     assert summary.fills == 2
     outputs = sorted(reports_dir.glob("backtest_*.json"))
     assert outputs, "report json should be generated"
-

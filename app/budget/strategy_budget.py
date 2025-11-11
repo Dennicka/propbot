@@ -1,4 +1,5 @@
 """In-memory strategy budget manager for the risk scaffold."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

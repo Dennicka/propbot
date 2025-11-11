@@ -10,9 +10,7 @@ def test_exchange_watchdog_tracks_transitions() -> None:
     watchdog = ExchangeWatchdog()
 
     watchdog.check_once(lambda: {"binance": {"ok": True}})
-    result = watchdog.check_once(
-        lambda: {"binance": {"ok": False, "reason": "timeout"}}
-    )
+    result = watchdog.check_once(lambda: {"binance": {"ok": False, "reason": "timeout"}})
 
     assert "binance" in result.transitions
     transition = result.transitions["binance"]

@@ -56,7 +56,10 @@ class UniverseManager:
             "spread_bps": None,
             "mark_price": None,
             "index_price": None,
-            "depth": {"bid_qty": None, "ask_qty": None},  # depth data propagated only when venues expose snapshots
+            "depth": {
+                "bid_qty": None,
+                "ask_qty": None,
+            },  # depth data propagated only when venues expose snapshots
             "filters": {
                 "min_qty": None,
                 "max_qty": None,
@@ -253,15 +256,14 @@ class UniverseManager:
         ranked = []
         for symbol, data in aggregated.items():
             score = self.score_pair(data)
-            venues_payload = {
-                self._display_name(venue): metrics
-                for venue, metrics in data.items()
-            }
-            ranked.append({
-                "symbol": symbol,
-                "score": round(float(score), 6),
-                "venues": venues_payload,
-            })
+            venues_payload = {self._display_name(venue): metrics for venue, metrics in data.items()}
+            ranked.append(
+                {
+                    "symbol": symbol,
+                    "score": round(float(score), 6),
+                    "venues": venues_payload,
+                }
+            )
         ranked.sort(key=lambda item: item["score"], reverse=True)
         return ranked[: max(0, int(n))]
 

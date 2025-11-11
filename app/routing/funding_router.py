@@ -169,8 +169,12 @@ def _build_adjustments(
                 long_fee = float(long_cost.get("bps", 0.0))
                 short_fee = float(short_cost.get("bps", 0.0))
                 total = long_fee + short_fee
-                long_breakdown = long_cost.get("breakdown") if isinstance(long_cost, Mapping) else None
-                short_breakdown = short_cost.get("breakdown") if isinstance(short_cost, Mapping) else None
+                long_breakdown = (
+                    long_cost.get("breakdown") if isinstance(long_cost, Mapping) else None
+                )
+                short_breakdown = (
+                    short_cost.get("breakdown") if isinstance(short_cost, Mapping) else None
+                )
             else:
                 long_fee = compute_effective_cost(
                     taker_fee_bps=long_quote.taker_fee_bps,
@@ -228,7 +232,9 @@ def choose_best_pair(
             next_funding_ts=next_ts,
         )
     current_ts = now if now is not None else time.time()
-    adjustments = _build_adjustments(quotes, include_next_window=include_next_window, now=current_ts)
+    adjustments = _build_adjustments(
+        quotes, include_next_window=include_next_window, now=current_ts
+    )
     if not adjustments:
         return None
     best = min(adjustments, key=lambda adj: adj.total_fee_bps)
@@ -247,16 +253,12 @@ def choose_best_pair(
                     "short_fee_bps": round(adj.short_fee_bps, 6),
                     "total_fee_bps": round(adj.total_fee_bps, 6),
                     "long_mode": (
-                        (adj.long_breakdown or {})
-                        .get("execution", {})
-                        .get("mode")
+                        (adj.long_breakdown or {}).get("execution", {}).get("mode")
                         if tca_used
                         else None
                     ),
                     "short_mode": (
-                        (adj.short_breakdown or {})
-                        .get("execution", {})
-                        .get("mode")
+                        (adj.short_breakdown or {}).get("execution", {}).get("mode")
                         if tca_used
                         else None
                     ),
@@ -323,7 +325,12 @@ def extract_funding_inputs(
         resolved_symbol = resolve_venue_symbol(config, venue_id=venue_id, symbol=symbol) or symbol
         try:
             funding_info = client.get_funding_info(resolved_symbol)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "funding_router: failed to fetch funding info",
+                extra={"venue": str(alias), "symbol": resolved_symbol},
+                exc_info=exc,
+            )
             continue
         rate = float(funding_info.get("rate", 0.0)) if isinstance(funding_info, Mapping) else 0.0
         next_ts = (
@@ -334,13 +341,14 @@ def extract_funding_inputs(
         manual_entry = manual_fees.get(str(venue_id), {})
         try:
             fee_info = client.get_fees(resolved_symbol)
-            taker_bps = float(
-                fee_info.get("taker_bps", manual_entry.get("taker_bps", 0.0))
+            taker_bps = float(fee_info.get("taker_bps", manual_entry.get("taker_bps", 0.0)))
+            maker_bps = float(fee_info.get("maker_bps", manual_entry.get("maker_bps", 0.0)))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "funding_router: failed to fetch fee info",
+                extra={"venue": str(alias), "symbol": resolved_symbol},
+                exc_info=exc,
             )
-            maker_bps = float(
-                fee_info.get("maker_bps", manual_entry.get("maker_bps", 0.0))
-            )
-        except Exception:
             taker_bps = float(manual_entry.get("taker_bps", 0.0))
             maker_bps = float(manual_entry.get("maker_bps", 0.0))
         vip_rebate_bps = float(manual_entry.get("vip_rebate_bps", 0.0))
@@ -356,22 +364,22 @@ def extract_funding_inputs(
     if quotes:
         LOGGER.debug(
             "funding_router collected inputs",
-                extra={
-                    "symbol": symbol_norm,
-                    "venues": {
-                        name: {
-                            "taker_fee_bps": round(quote.taker_fee_bps, 6),
-                            "maker_fee_bps": round(quote.maker_fee_bps, 6),
-                            "vip_rebate_bps": round(quote.vip_rebate_bps, 6),
-                            "maker_possible": quote.maker_possible,
-                            "funding_rate": round(quote.funding_rate, 8),
-                            "next_funding_ts": quote.next_funding_ts,
-                        }
-                        for name, quote in quotes.items()
-                    },
-                    "include_next_window": include_next_window,
+            extra={
+                "symbol": symbol_norm,
+                "venues": {
+                    name: {
+                        "taker_fee_bps": round(quote.taker_fee_bps, 6),
+                        "maker_fee_bps": round(quote.maker_fee_bps, 6),
+                        "vip_rebate_bps": round(quote.vip_rebate_bps, 6),
+                        "maker_possible": quote.maker_possible,
+                        "funding_rate": round(quote.funding_rate, 8),
+                        "next_funding_ts": quote.next_funding_ts,
+                    }
+                    for name, quote in quotes.items()
                 },
-            )
+                "include_next_window": include_next_window,
+            },
+        )
     return quotes
 
 
@@ -383,4 +391,3 @@ __all__ = [
     "effective_fee_for_quote",
     "extract_funding_inputs",
 ]
-

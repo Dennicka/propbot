@@ -85,7 +85,9 @@ class ExecutionRouter:
         self.dry_run_only = state.control.dry_run
         self.two_man_rule = state.control.two_man_rule
         self.market_data = get_market_data()
-        environment = str(state.control.environment or state.control.deployment_mode or "paper").lower()
+        environment = str(
+            state.control.environment or state.control.deployment_mode or "paper"
+        ).lower()
         if environment == "testnet":
             binance_broker = BinanceTestnetBroker(
                 venue="binance-um",
@@ -108,7 +110,11 @@ class ExecutionRouter:
                 "okx-perp",
                 "okx_perp",
                 safe_mode=self.safe_mode or self.dry_run_only,
-                required_env=("OKX_API_KEY_TESTNET", "OKX_API_SECRET_TESTNET", "OKX_API_PASSPHRASE_TESTNET"),
+                required_env=(
+                    "OKX_API_KEY_TESTNET",
+                    "OKX_API_SECRET_TESTNET",
+                    "OKX_API_PASSPHRASE_TESTNET",
+                ),
             ),
         }
         self._watchdog = get_broker_watchdog()
@@ -143,9 +149,7 @@ class ExecutionRouter:
         if orders is None:
             fetched = await asyncio.to_thread(ledger.fetch_open_orders)
             venue_orders = [
-                order
-                for order in fetched
-                if str(order.get("venue") or "").lower() == canonical
+                order for order in fetched if str(order.get("venue") or "").lower() == canonical
             ]
         else:
             venue_orders = [dict(order) for order in orders]
@@ -190,12 +194,15 @@ class ExecutionRouter:
                 except Exception as exc:  # pragma: no cover - defensive logging
                     failed += 1
                     LOGGER.debug(
-                        "cancel failed", extra={"venue": canonical, "order_id": order_id, "error": str(exc)}
+                        "cancel failed",
+                        extra={"venue": canonical, "order_id": order_id, "error": str(exc)},
                     )
         if cancelled:
             await asyncio.gather(
                 *(
-                    asyncio.to_thread(ledger.update_order_status, int(order.get("id", 0)), "cancelled")
+                    asyncio.to_thread(
+                        ledger.update_order_status, int(order.get("id", 0)), "cancelled"
+                    )
                     for order in venue_orders
                 )
             )
@@ -206,9 +213,7 @@ class ExecutionRouter:
             "failed": failed,
         }
 
-    def _nudge_price(
-        self, *, venue: str, symbol: str, side: str, original: float
-    ) -> float:
+    def _nudge_price(self, *, venue: str, symbol: str, side: str, original: float) -> float:
         try:
             book = self.market_data.top_of_book(venue, symbol)
         except Exception:  # pragma: no cover - fallback to original
@@ -337,7 +342,9 @@ class ExecutionRouter:
         set_open_orders(orders)
         return orders
 
-    async def execute_plan(self, plan: "Plan", *, allow_safe_mode: bool = False) -> Dict[str, object]:
+    async def execute_plan(
+        self, plan: "Plan", *, allow_safe_mode: bool = False
+    ) -> Dict[str, object]:
         state = get_state()
         if state.control.safe_mode:
             if allow_safe_mode:
@@ -361,12 +368,19 @@ class ExecutionRouter:
     async def _dispatch_plan(self, plan: "Plan", simulate: bool = False) -> Dict[str, object]:
         orders: List[Dict[str, object]] = []
         plan_payload = plan.as_dict()
-        plan_key = hashlib.sha256(json.dumps(plan_payload, sort_keys=True).encode("utf-8")).hexdigest()
+        plan_key = hashlib.sha256(
+            json.dumps(plan_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         state = get_state()
         post_only = bool(state.control.post_only)
         reduce_only = bool(state.control.reduce_only)
         shadow_mode = golden_replay_enabled()
-        if not simulate and not self.dry_run_only and not state.control.safe_mode and is_hold_active():
+        if (
+            not simulate
+            and not self.dry_run_only
+            and not state.control.safe_mode
+            and is_hold_active()
+        ):
             safety = get_safety_status()
             raise HoldActiveError(safety.get("hold_reason") or "hold_active")
         if simulate or self.dry_run_only or state.control.safe_mode or shadow_mode:

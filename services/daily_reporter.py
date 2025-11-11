@@ -164,7 +164,9 @@ def load_latest_report(*, path: Path | None = None) -> dict[str, Any] | None:
     return dict(entries[-1])
 
 
-def append_report(report: Mapping[str, Any], *, path: Path | None = None, max_records: int = _MAX_RECORDS) -> dict[str, Any]:
+def append_report(
+    report: Mapping[str, Any], *, path: Path | None = None, max_records: int = _MAX_RECORDS
+) -> dict[str, Any]:
     payload = dict(report)
     payload.setdefault("timestamp", _now().isoformat())
     target = path or _reports_path()
@@ -227,7 +229,9 @@ def build_daily_report(
     unrealized_samples: list[float] = []
     exposure_samples: list[float] = []
     for snapshot in snapshot_values:
-        totals = snapshot.get("pnl_totals") if isinstance(snapshot.get("pnl_totals"), Mapping) else {}
+        totals = (
+            snapshot.get("pnl_totals") if isinstance(snapshot.get("pnl_totals"), Mapping) else {}
+        )
         if "unrealized" in totals:
             unrealized_samples.append(_coerce_float(totals.get("unrealized")))
         else:

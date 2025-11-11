@@ -229,7 +229,8 @@ class StuckOrderResolver:
         if self.running:
             return
         self._logger.info(
-            "stuck resolver starting", extra={"timeout": config.pending_timeout, "max_retries": config.max_retries}
+            "stuck resolver starting",
+            extra={"timeout": config.pending_timeout, "max_retries": config.max_retries},
         )
         self._stop.clear()
         self._task = asyncio.create_task(self._run_loop())
@@ -242,7 +243,7 @@ class StuckOrderResolver:
         try:
             await self._task
         except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-            pass
+            self._logger.debug("stuck resolver task cancelled during stop")
         finally:
             self._task = None
 
@@ -295,7 +296,9 @@ class StuckOrderResolver:
         max_retries = int(getattr(state, "max_retries", 0) or 0)
         backoff_raw = getattr(state, "backoff_sec", []) or []
         if isinstance(backoff_raw, (list, tuple)):
-            backoff = [max(_as_float(entry), 0.0) for entry in backoff_raw if _as_float(entry) >= 0.0]
+            backoff = [
+                max(_as_float(entry), 0.0) for entry in backoff_raw if _as_float(entry) >= 0.0
+            ]
         else:
             backoff = []
         return _ResolverConfig(enabled, timeout, grace, max_retries, backoff or [0.0])
@@ -498,11 +501,17 @@ class StuckOrderResolver:
                 current = await asyncio.to_thread(self._ledger.get_order, ledger_order_id)
             except Exception:
                 current = None
-            status = _normalise_status(current.get("status")) if isinstance(current, Mapping) else ""
+            status = (
+                _normalise_status(current.get("status")) if isinstance(current, Mapping) else ""
+            )
             if status in _TERMINAL_LEDGER_STATUSES:
                 self._logger.info(
                     "stuck resolver cancel resolved order",
-                    extra={"intent_id": intent_id, "ledger_order_id": ledger_order_id, "status": status},
+                    extra={
+                        "intent_id": intent_id,
+                        "ledger_order_id": ledger_order_id,
+                        "status": status,
+                    },
                 )
                 return
         new_request_id = generate_request_id()
@@ -602,4 +611,3 @@ def setup_stuck_resolver(app) -> None:
 
 
 __all__ = ["StuckOrderResolver", "get_resolver", "setup_stuck_resolver"]
-

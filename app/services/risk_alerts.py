@@ -112,7 +112,9 @@ def _resolve_alert(alert_id: str, *, now: datetime) -> None:
     )
 
 
-def _partial_hedge_alerts(now: datetime, *, threshold: float) -> Iterable[tuple[str, str, str, Dict[str, object]]]:
+def _partial_hedge_alerts(
+    now: datetime, *, threshold: float
+) -> Iterable[tuple[str, str, str, Dict[str, object]]]:
     if threshold <= 0:
         return []
     alerts: list[tuple[str, str, str, Dict[str, object]]] = []
@@ -203,7 +205,9 @@ def _runaway_alerts(state, now: datetime) -> Iterable[tuple[str, str, str, Dict[
     return alerts
 
 
-def _auto_hedge_alerts(now: datetime, *, enabled: bool) -> Iterable[tuple[str, str, str, Dict[str, object]]]:
+def _auto_hedge_alerts(
+    now: datetime, *, enabled: bool
+) -> Iterable[tuple[str, str, str, Dict[str, object]]]:
     alerts: list[tuple[str, str, str, Dict[str, object]]] = []
     if not enabled:
         return alerts
@@ -317,7 +321,12 @@ def evaluate_alerts(*, now: datetime | None = None) -> List[Dict[str, object]]:
 
 
 def get_active_alerts() -> List[Dict[str, object]]:
-    return [state.as_payload() for state in sorted(_ACTIVE_ALERTS.values(), key=lambda entry: entry.active_since, reverse=True)]
+    return [
+        state.as_payload()
+        for state in sorted(
+            _ACTIVE_ALERTS.values(), key=lambda entry: entry.active_since, reverse=True
+        )
+    ]
 
 
 def reset_for_tests() -> None:

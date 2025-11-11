@@ -1,4 +1,5 @@
 """Utilities for loading secrets from a JSON secrets store."""
+
 from __future__ import annotations
 
 import base64
@@ -6,11 +7,15 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+import logging
 from typing import Dict, Optional, Tuple
 
 _VALID_OPERATOR_ROLES = {"viewer", "auditor", "operator"}
 
 _SECRETS_STORE_SINGLETON: "SecretsStore" | None = None
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SecretsStore:
@@ -101,7 +106,8 @@ class SecretsStore:
 
         try:
             payload = base64.b64decode(value)
-        except Exception:
+        except Exception as exc:  # pragma: no cover - defensive
+            _LOGGER.warning("secrets_store.decrypt_failed", extra={"reason": str(exc)})
             return None
 
         key_bytes = self._encryption_key.encode("utf-8")
@@ -113,7 +119,8 @@ class SecretsStore:
         )
         try:
             return decrypted.decode("utf-8")
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as exc:  # pragma: no cover - defensive
+            _LOGGER.warning("secrets_store.decrypt_utf8_failed", extra={"reason": str(exc)})
             return None
 
     def get_approve_token(self) -> Optional[str]:

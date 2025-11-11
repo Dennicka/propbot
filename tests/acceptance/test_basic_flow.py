@@ -8,7 +8,13 @@ from app.watchdog.exchange_watchdog import get_exchange_watchdog, reset_exchange
 
 @pytest.mark.acceptance
 def test_basic_flow(client, monkeypatch):
-    for name in ("FEATURE_CHAOS", "CHAOS_PROFILE", "CHAOS_WS_DROP_P", "CHAOS_REST_TIMEOUT_P", "CHAOS_ORDER_DELAY_MS"):
+    for name in (
+        "FEATURE_CHAOS",
+        "CHAOS_PROFILE",
+        "CHAOS_WS_DROP_P",
+        "CHAOS_REST_TIMEOUT_P",
+        "CHAOS_ORDER_DELAY_MS",
+    ):
         monkeypatch.delenv(name, raising=False)
     reset_exchange_watchdog_for_tests()
     runtime.reset_for_tests()

@@ -32,9 +32,7 @@ def reset_accounting(monkeypatch):
     monkeypatch.setattr(
         risk_accounting,
         "get_state",
-        lambda: SimpleNamespace(
-            control=SimpleNamespace(dry_run=False, dry_run_mode=False)
-        ),
+        lambda: SimpleNamespace(control=SimpleNamespace(dry_run=False, dry_run_mode=False)),
     )
     risk_accounting.reset_risk_accounting_for_tests()
     risk_core.reset_risk_governor_for_tests()
@@ -79,7 +77,10 @@ def test_caps_enforced_when_flags_enabled(monkeypatch):
     assert result_second["ok"] is False
     assert result_second["reason"] == "caps_exceeded"
     assert snapshot_after.get("last_denial", {}).get("reason") == "caps_exceeded"
-    assert snapshot_after.get("last_denial", {}).get("details", {}).get("breach") == "max_total_notional_usdt"
+    assert (
+        snapshot_after.get("last_denial", {}).get("details", {}).get("breach")
+        == "max_total_notional_usdt"
+    )
 
 
 def test_budget_blocks_only_when_enforced(monkeypatch):
@@ -107,9 +108,7 @@ def test_budget_blocks_only_when_enforced(monkeypatch):
     monkeypatch.setenv("RISK_ENFORCE_BUDGETS", "1")
     risk_core.reset_risk_governor_for_tests()
 
-    snapshot_after, result_again = risk_accounting.record_intent(
-        STRATEGY, 5.0, simulated=False
-    )
+    snapshot_after, result_again = risk_accounting.record_intent(STRATEGY, 5.0, simulated=False)
     assert result_again["ok"] is False
     assert result_again["reason"] == "budget_exceeded"
     strategy_row = snapshot_after["per_strategy"][STRATEGY]
@@ -173,7 +172,9 @@ def test_budget_auto_resets_at_new_utc_day(monkeypatch):
     risk_accounting.set_strategy_budget_cap(STRATEGY, 100.0)
     risk_accounting.record_fill(STRATEGY, 0.0, -60.0, simulated=False)
     snapshot_before = risk_accounting.get_risk_snapshot()
-    assert snapshot_before["per_strategy"][STRATEGY]["budget"]["used_today_usdt"] == pytest.approx(60.0)
+    assert snapshot_before["per_strategy"][STRATEGY]["budget"]["used_today_usdt"] == pytest.approx(
+        60.0
+    )
 
     monkeypatch.setattr(strategy_budget_module, "_utc_now", lambda: next_day)
     monkeypatch.setenv("RISK_CHECKS_ENABLED", "1")
@@ -197,9 +198,7 @@ def test_budget_not_blocked_in_runtime_dry_run_mode(monkeypatch):
     monkeypatch.setattr(
         risk_accounting,
         "get_state",
-        lambda: SimpleNamespace(
-            control=SimpleNamespace(dry_run=False, dry_run_mode=True)
-        ),
+        lambda: SimpleNamespace(control=SimpleNamespace(dry_run=False, dry_run_mode=True)),
     )
 
     snapshot, result = risk_accounting.record_intent(STRATEGY, 1.0, simulated=False)
@@ -287,9 +286,7 @@ def test_daily_loss_cap_not_enforced_when_disabled(monkeypatch, scenario):
         monkeypatch.setattr(
             risk_accounting,
             "get_state",
-            lambda: SimpleNamespace(
-                control=SimpleNamespace(dry_run=True, dry_run_mode=False)
-            ),
+            lambda: SimpleNamespace(control=SimpleNamespace(dry_run=True, dry_run_mode=False)),
         )
 
     risk_core.reset_risk_governor_for_tests()

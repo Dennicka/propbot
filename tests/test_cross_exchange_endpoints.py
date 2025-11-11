@@ -151,9 +151,7 @@ def test_runaway_breaker_triggers_hold(client, monkeypatch):
         }
 
     monkeypatch.setattr("services.cross_exchange_arb.choose_venue", fake_choose_venue)
-    monkeypatch.setattr(
-        "services.cross_exchange_arb._record_execution_stat", lambda **_: None
-    )
+    monkeypatch.setattr("services.cross_exchange_arb._record_execution_stat", lambda **_: None)
 
     payload = {
         "symbol": "ETHUSDT",

@@ -180,7 +180,9 @@ class ProfileConfig:
         profile_name = _as_str(payload.get("profile"), context="profile")
         description = _as_str(payload.get("description"), context="description")
         dry_run = _as_bool(payload.get("dry_run"), context="dry_run")
-        requires_secrets = _as_bool(payload.get("requires_secrets", False), context="requires_secrets")
+        requires_secrets = _as_bool(
+            payload.get("requires_secrets", False), context="requires_secrets"
+        )
         broker_payload = _ensure_mapping(payload.get("broker"), context="broker")
         broker = BrokerConfig.from_mapping(broker_payload, context="broker")
         risk_payload = _ensure_mapping(payload.get("risk_limits"), context="risk_limits")
@@ -193,9 +195,7 @@ class ProfileConfig:
         secrets = []
         for index, entry in enumerate(secrets_payload):
             entry_mapping = _ensure_mapping(entry, context=f"secrets[{index}]")
-            secrets.append(
-                ProfileSecret.from_mapping(entry_mapping, context=f"secrets[{index}]")
-            )
+            secrets.append(ProfileSecret.from_mapping(entry_mapping, context=f"secrets[{index}]"))
         return cls(
             name=profile_name,
             description=description,

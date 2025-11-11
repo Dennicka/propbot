@@ -76,4 +76,3 @@ def test_duplicate_updates_are_idempotent() -> None:
     assert final.status == OrderStatus.FILLED
     assert final.cum_filled == 4.0
     assert final.last_event is None
-

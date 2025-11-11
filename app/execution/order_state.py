@@ -235,9 +235,10 @@ def _coerce_state(local_state: OrderState | Mapping[str, Any]) -> OrderState:
     if isinstance(local_state, OrderState):
         return local_state
     if isinstance(local_state, Mapping):
-        status = _normalise_status(
-            local_state.get("status") or local_state.get("state")
-        ) or OrderStatus.NEW
+        status = (
+            _normalise_status(local_state.get("status") or local_state.get("state"))
+            or OrderStatus.NEW
+        )
         qty = _coerce_float(local_state.get("qty"), 0.0) or 0.0
         cum_filled = _coerce_float(local_state.get("cum_filled"), 0.0) or 0.0
         avg_price = _coerce_float(local_state.get("avg_price"))
@@ -343,4 +344,3 @@ def apply_exchange_update(
 
 
 __all__ = ["OrderState", "OrderStatus", "apply_exchange_update"]
-

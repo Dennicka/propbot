@@ -107,9 +107,7 @@ class TestnetBroker(Broker):
                 return
             except Exception as exc:  # pragma: no cover - defensive logging
                 last_error = exc
-                LOGGER.warning(
-                    "testnet call failed", extra={"attempt": attempt, "error": str(exc)}
-                )
+                LOGGER.warning("testnet call failed", extra={"attempt": attempt, "error": str(exc)})
                 if attempt >= self._max_retries:
                     break
                 await asyncio.sleep(self._retry_backoff * attempt)
@@ -296,7 +294,9 @@ class TestnetBroker(Broker):
             if str(order.get("venue") or "").lower() == str(target_venue).lower()
         ]
         for order in affected:
-            await asyncio.to_thread(ledger.update_order_status, int(order.get("id", 0)), "cancelled")
+            await asyncio.to_thread(
+                ledger.update_order_status, int(order.get("id", 0)), "cancelled"
+            )
         return {"cancelled": len(affected), "failed": 0, "batch_id": batch_id}
 
     async def positions(self, *, venue: str) -> Dict[str, object]:
@@ -326,7 +326,9 @@ class TestnetBroker(Broker):
         try:
             rows = await asyncio.to_thread(client.positions)
         except Exception as exc:  # pragma: no cover - defensive logging
-            LOGGER.warning("failed to fetch testnet positions", extra={"venue": self.venue, "error": str(exc)})
+            LOGGER.warning(
+                "failed to fetch testnet positions", extra={"venue": self.venue, "error": str(exc)}
+            )
             return await self._paper.get_positions()
         exposures: List[Dict[str, object]] = []
         for row in rows:
@@ -376,7 +378,9 @@ class TestnetBroker(Broker):
         try:
             rows = await asyncio.to_thread(client.recent_fills, symbol=None, since=since_ms)
         except Exception as exc:  # pragma: no cover - defensive logging
-            LOGGER.warning("failed to fetch testnet fills", extra={"venue": self.venue, "error": str(exc)})
+            LOGGER.warning(
+                "failed to fetch testnet fills", extra={"venue": self.venue, "error": str(exc)}
+            )
             return await self._paper.get_fills(since=since)
         fills: List[Dict[str, object]] = []
         for row in rows:

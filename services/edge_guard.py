@@ -101,7 +101,9 @@ def _avg_slippage(symbol: str | None) -> Tuple[float | None, float | None]:
     ]
     avg_slippage = mean(slippages) if len(slippages) >= _SLIPPAGE_MIN_SAMPLES else None
     total = len(relevant[:_FAILURE_RATE_LOOKBACK])
-    failures = sum(1 for entry in relevant[:_FAILURE_RATE_LOOKBACK] if not bool(entry.get("success")))
+    failures = sum(
+        1 for entry in relevant[:_FAILURE_RATE_LOOKBACK] if not bool(entry.get("success"))
+    )
     failure_rate = (failures / total) if total else None
     return avg_slippage, failure_rate
 

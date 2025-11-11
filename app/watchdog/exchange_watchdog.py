@@ -99,7 +99,9 @@ class ExchangeWatchdog:
                 ok, reason = self._normalise_payload(payload)
                 current = self._state.get(exchange)
                 previous_status = self._status_from_entry(current)
-                previous_auto_hold = bool(current.get("auto_hold")) if isinstance(current, Mapping) else False
+                previous_auto_hold = (
+                    bool(current.get("auto_hold")) if isinstance(current, Mapping) else False
+                )
                 auto_hold = previous_auto_hold if not ok else False
                 status = "OK" if ok else ("AUTO_HOLD" if auto_hold else "DEGRADED")
                 entry = {
@@ -128,7 +130,9 @@ class ExchangeWatchdog:
             snapshot = {name: dict(entry) for name, entry in self._state.items()}
         return WatchdogCheckResult(snapshot=snapshot, transitions=transitions)
 
-    def mark_auto_hold(self, exchange: str, *, reason: str | None = None) -> WatchdogStateTransition | None:
+    def mark_auto_hold(
+        self, exchange: str, *, reason: str | None = None
+    ) -> WatchdogStateTransition | None:
         """Mark ``exchange`` as being under AUTO_HOLD and record the transition."""
 
         reason_text = _coerce_reason(reason or "")
@@ -166,7 +170,9 @@ class ExchangeWatchdog:
                 record_risk_breach("watchdog")
             return transition
 
-    def restore_snapshot(self, snapshot: Mapping[str, Mapping[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def restore_snapshot(
+        self, snapshot: Mapping[str, Mapping[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
         """Replace the watchdog state with ``snapshot``."""
 
         if not isinstance(snapshot, Mapping):
@@ -195,7 +201,9 @@ class ExchangeWatchdog:
         with self._lock:
             return {name: dict(entry) for name, entry in self._state.items()}
 
-    def get_recent_transitions(self, *, window_minutes: int = RECENT_TRANSITION_LIMIT) -> list[dict[str, Any]]:
+    def get_recent_transitions(
+        self, *, window_minutes: int = RECENT_TRANSITION_LIMIT
+    ) -> list[dict[str, Any]]:
         """Return recent transitions within ``window_minutes``."""
 
         cutoff = time.time() - max(window_minutes, 0) * 60

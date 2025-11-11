@@ -294,7 +294,12 @@ class AccountHealthGuard:
             "OK": "account health normal",
         }
         try:
-            updater("account_health", worst_state, summary_map.get(worst_state, "account health status"), metrics)
+            updater(
+                "account_health",
+                worst_state,
+                summary_map.get(worst_state, "account health status"),
+                metrics,
+            )
         except Exception:  # pragma: no cover - defensive
             LOGGER.debug("health guard failed to update guard snapshot", exc_info=True)
 

@@ -1,4 +1,5 @@
 """Audit logging helpers with in-memory snapshot support."""
+
 from __future__ import annotations
 
 import json
@@ -32,8 +33,7 @@ def _sanitize_mapping(details: Mapping[str, Any]) -> Dict[str, Any]:
             sanitized[key_str] = _sanitize_mapping(value)
         elif isinstance(value, list):
             sanitized[key_str] = [
-                _sanitize_mapping(item) if isinstance(item, Mapping) else item
-                for item in value
+                _sanitize_mapping(item) if isinstance(item, Mapping) else item for item in value
             ]
         else:
             sanitized[key_str] = value

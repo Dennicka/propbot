@@ -103,4 +103,3 @@ async def test_retry_keeps_same_intent_id():
     assert recovered.request_id == "retry-2"
     assert recovered.broker_order_id == "BRK-77"
     assert recovered.state == order_store.OrderIntentState.ACKED
-

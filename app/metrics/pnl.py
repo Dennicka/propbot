@@ -224,7 +224,12 @@ def publish_daily_snapshots(snapshots: Iterable[object]) -> None:
             seen_dates[_DAILY_FUNDING].add((date_str,))
             net_value = _safe_value(net)
             if net is None and realized is not None:
-                net_value = _safe_value(realized) - _safe_value(fees) + _safe_value(funding) + _safe_value(rebates)
+                net_value = (
+                    _safe_value(realized)
+                    - _safe_value(fees)
+                    + _safe_value(funding)
+                    + _safe_value(rebates)
+                )
             _DAILY_NET.labels(date=date_str).set(net_value)
             seen_dates[_DAILY_NET].add((date_str,))
 

@@ -53,9 +53,7 @@ class BinanceFuturesClient(FuturesExchangeClient):
 
         self.api_key = api_key or store_key or env_key
         self.api_secret = api_secret or store_secret or env_secret
-        self.api_url = api_url or os.getenv(
-            "BINANCE_FUTURES_API_URL", "https://fapi.binance.com"
-        )
+        self.api_url = api_url or os.getenv("BINANCE_FUTURES_API_URL", "https://fapi.binance.com")
         self._session = session or requests.Session()
 
     # ------------------------------------------------------------------
@@ -74,9 +72,7 @@ class BinanceFuturesClient(FuturesExchangeClient):
         payload.setdefault("recvWindow", _DEFAULT_RECV_WINDOW)
         # Binance requires parameters sorted alphabetically when computing the signature.
         encoded = "&".join(
-            f"{key}={value}"
-            for key, value in sorted(payload.items())
-            if value is not None
+            f"{key}={value}" for key, value in sorted(payload.items()) if value is not None
         )
         signature = hmac.new(
             (self.api_secret or "").encode("utf-8"),
@@ -192,7 +188,9 @@ class BinanceFuturesClient(FuturesExchangeClient):
             "raw": entry,
         }
 
-    def place_order(self, symbol: str, side: str, notional_usdt: float, leverage: float) -> Dict[str, Any]:
+    def place_order(
+        self, symbol: str, side: str, notional_usdt: float, leverage: float
+    ) -> Dict[str, Any]:
         apply_order_delay()
         normalized = self._normalise_symbol(symbol)
         side_lower = str(side).lower()
@@ -223,10 +221,7 @@ class BinanceFuturesClient(FuturesExchangeClient):
             signed=True,
         )
         avg_price = float(
-            order_response.get("avgPrice")
-            or order_response.get("price")
-            or mark_price
-            or 0.0
+            order_response.get("avgPrice") or order_response.get("price") or mark_price or 0.0
         )
         filled_qty = float(order_response.get("executedQty") or quantity)
         status = str(order_response.get("status") or "FILLED").lower()

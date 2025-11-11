@@ -151,8 +151,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     columns = {
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info('leader_lock')").fetchall()
+        str(row["name"]) for row in conn.execute("PRAGMA table_info('leader_lock')").fetchall()
     }
     if "fencing_id" not in columns:
         conn.execute("ALTER TABLE leader_lock ADD COLUMN fencing_id TEXT")
@@ -404,7 +403,9 @@ def release() -> bool:
             row_owner = str(row["owner"] or "")
             if row_owner != owner:
                 conn.rollback()
-                _record_local_state(owner=row_owner, expires_at=0.0, acquired=False, fencing_id=None)
+                _record_local_state(
+                    owner=row_owner, expires_at=0.0, acquired=False, fencing_id=None
+                )
                 return False
             conn.execute("DELETE FROM leader_lock WHERE id = 1")
             conn.commit()

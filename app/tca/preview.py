@@ -69,7 +69,10 @@ def _tier_table_from_config(config) -> TierTable | None:
                 else:
                     try:
                         tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
-                    except Exception:  # pragma: no cover - defensive
+                    except (AttributeError, TypeError, ValueError) as exc:
+                        LOGGER.warning(
+                            "TCA preview: failed to serialize tier entry %r", entry, exc_info=exc
+                        )
                         continue
         if tier_entries:
             mapping[str(venue)] = tier_entries
@@ -156,11 +159,15 @@ def compute_tca_preview(
             short_leg = entry.short
             long_symbol_norm = normalise_symbol(long_leg.symbol)
             short_symbol_norm = normalise_symbol(short_leg.symbol)
-        except AttributeError:  # pragma: no cover - defensive
-            continue
-        if target_norm in {long_symbol_norm, short_symbol_norm}:
-            selected = entry
-            break
+        except AttributeError as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "tca preview: skipping arbitrage pair entry missing attributes",
+                exc_info=exc,
+            )
+        else:
+            if target_norm in {long_symbol_norm, short_symbol_norm}:
+                selected = entry
+                break
     if selected is None:
         raise ValueError(f"pair {pair} not configured for arbitrage")
 
@@ -209,7 +216,11 @@ def compute_tca_preview(
 
     qty_value = float(qty) if qty is not None else 0.0
     if qty_value <= 0.0:
-        reference_notional = float(notional) if notional else float(getattr(state.control, "order_notional_usdt", 0.0))
+        reference_notional = (
+            float(notional)
+            if notional
+            else float(getattr(state.control, "order_notional_usdt", 0.0))
+        )
         mid_prices = []
         for book in orderbooks.values():
             bid = float(book.get("bid", 0.0))
@@ -252,8 +263,12 @@ def compute_tca_preview(
         short_venue = short_meta["venue"]
         long_book = orderbooks.get(long_venue, {})
         short_book = orderbooks.get(short_venue, {})
-        long_symbol_raw, long_symbol_norm = _resolve_leg_symbol(config, long_venue, long_meta["symbol"], symbol_norm)
-        short_symbol_raw, short_symbol_norm = _resolve_leg_symbol(config, short_venue, short_meta["symbol"], symbol_norm)
+        long_symbol_raw, long_symbol_norm = _resolve_leg_symbol(
+            config, long_venue, long_meta["symbol"], symbol_norm
+        )
+        short_symbol_raw, short_symbol_norm = _resolve_leg_symbol(
+            config, short_venue, short_meta["symbol"], symbol_norm
+        )
 
         long_price = float(long_book.get("ask", 0.0))
         short_price = float(short_book.get("bid", 0.0))
@@ -357,7 +372,9 @@ def compute_tca_preview(
             }
         )
 
-    best_route = min(evaluated_routes, key=lambda item: item["total_bps"]) if evaluated_routes else None
+    best_route = (
+        min(evaluated_routes, key=lambda item: item["total_bps"]) if evaluated_routes else None
+    )
 
     LOGGER.debug(
         "tca preview evaluated routes",

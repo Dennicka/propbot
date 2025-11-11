@@ -83,7 +83,9 @@ async def test_watchdog_notifications_on_status_changes(monkeypatch) -> None:
 
     emitted: list[dict[str, Any]] = []
 
-    def _emit(kind: str, text: str, *, extra: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+    def _emit(
+        kind: str, text: str, *, extra: dict[str, Any] | None = None, **_: Any
+    ) -> dict[str, Any]:
         record = {"kind": kind, "text": text, "extra": dict(extra or {})}
         emitted.append(record)
         return record
@@ -127,7 +129,9 @@ async def test_watchdog_auto_hold_transition_alert(monkeypatch) -> None:
 
     emitted: list[dict[str, Any]] = []
 
-    def _emit(kind: str, text: str, *, extra: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+    def _emit(
+        kind: str, text: str, *, extra: dict[str, Any] | None = None, **_: Any
+    ) -> dict[str, Any]:
         record = {"kind": kind, "text": text, "extra": dict(extra or {})}
         emitted.append(record)
         return record

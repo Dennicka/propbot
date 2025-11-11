@@ -198,9 +198,7 @@ def compute_summary(records: Iterable[Mapping[str, Any]], *, input_file: str) ->
 
     hit_ratio = fills / attempts if attempts else 0.0
     net_pnl = gross_pnl - fees_total
-    avg_slippage_bps = (
-        slippage_bps_numerator / total_notional if total_notional else 0.0
-    )
+    avg_slippage_bps = slippage_bps_numerator / total_notional if total_notional else 0.0
     generated_at = datetime.now(timezone.utc).isoformat()
     return ReplaySummary(
         input_file=str(input_file),
@@ -278,9 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     summary = compute_summary(records, input_file=str(file_path))
     try:
-        json_path, csv_path = save_summary(
-            summary, output_dir=Path(args.outdir)
-        )
+        json_path, csv_path = save_summary(summary, output_dir=Path(args.outdir))
     except Exception as exc:  # pragma: no cover - filesystem guard
         print(f"Failed to write report: {exc}", file=sys.stderr)
         return 1
@@ -294,4 +290,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     raise SystemExit(main())
-

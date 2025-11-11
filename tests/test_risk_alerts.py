@@ -35,19 +35,23 @@ def test_partial_hedge_alert_activation(monkeypatch, tmp_path: Path) -> None:
         auto_hedge = _DummyAuto()
 
     monkeypatch.setattr(risk_alerts, "get_state", lambda: _DummyState())
-    monkeypatch.setattr(risk_alerts, "list_position_records", lambda: [
-        {
-            "id": "abc123",
-            "symbol": "BTCUSDT",
-            "status": "partial",
-            "timestamp": stale_ts,
-            "notional_usdt": 5000.0,
-            "legs": [
-                {"status": "filled"},
-                {"status": "open"},
-            ],
-        }
-    ])
+    monkeypatch.setattr(
+        risk_alerts,
+        "list_position_records",
+        lambda: [
+            {
+                "id": "abc123",
+                "symbol": "BTCUSDT",
+                "status": "partial",
+                "timestamp": stale_ts,
+                "notional_usdt": 5000.0,
+                "legs": [
+                    {"status": "filled"},
+                    {"status": "open"},
+                ],
+            }
+        ],
+    )
 
     active = risk_alerts.evaluate_alerts(now=now)
     assert any(alert["kind"] == "partial_hedge_stalled" for alert in active)

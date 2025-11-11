@@ -86,7 +86,9 @@ def _write_records(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
         )
 
 
-def _find_record(records: MutableSequence[Dict[str, Any]], request_id: str) -> Dict[str, Any] | None:
+def _find_record(
+    records: MutableSequence[Dict[str, Any]], request_id: str
+) -> Dict[str, Any] | None:
     for record in records:
         if str(record.get("id")) == str(request_id):
             return record

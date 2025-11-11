@@ -51,4 +51,3 @@ def test_risk_guard_force_hold_on_runaway_notional(monkeypatch, tmp_path) -> Non
     assert "risk_guard_force_hold" in kinds
     last = next(entry for entry in alerts if entry.get("kind") == "risk_guard_force_hold")
     assert last.get("extra", {}).get("reason") == risk_guard.REASON_RUNAWAY_NOTIONAL
-

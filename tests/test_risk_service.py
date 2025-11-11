@@ -135,6 +135,14 @@ def test_risk_state_metrics_shape_and_limits() -> None:
         ts=ts,
     )
     overview = risk.risk_overview()
-    assert set(overview.keys()) >= {"limits", "current", "breaches", "positions_usdt", "exposures", "exposure_totals", "limits_hit"}
+    assert set(overview.keys()) >= {
+        "limits",
+        "current",
+        "breaches",
+        "positions_usdt",
+        "exposures",
+        "exposure_totals",
+        "limits_hit",
+    }
     assert overview["positions_usdt"].get("BTCUSDT", 0.0) > 0
     assert any(entry["symbol"] == "BTCUSDT" for entry in overview["exposures"])

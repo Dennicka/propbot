@@ -243,8 +243,12 @@ def _record_execution_stat(
     }
     try:
         store_execution_stat(record)
-    except Exception:  # pragma: no cover - store must not break hedge flow
-        pass
+    except Exception as exc:  # pragma: no cover - store must not break hedge flow  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb execution stat persistence failed",
+            extra={"symbol": symbol, "side": side},
+            exc_info=exc,
+        )
 
 
 def _log_edge_guard_block(
@@ -275,8 +279,12 @@ def _log_edge_guard_block(
     }
     try:
         append_entry(entry)
-    except Exception:  # pragma: no cover - logging best effort
-        pass
+    except Exception as exc:  # pragma: no cover - logging best effort  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb hedge log append failed",
+            extra={"symbol": symbol, "reason": reason},
+            exc_info=exc,
+        )
     try:
         record_incident(
             "edge_guard_blocked",
@@ -286,8 +294,12 @@ def _log_edge_guard_block(
                 "spread_bps": float(spread_info.get("spread_bps", 0.0)),
             },
         )
-    except Exception:  # pragma: no cover - incident log best effort
-        pass
+    except Exception as exc:  # pragma: no cover - incident log best effort  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb incident record failed",
+            extra={"symbol": symbol, "reason": reason},
+            exc_info=exc,
+        )
 
 
 def check_spread(symbol: str) -> dict:
@@ -383,10 +395,7 @@ def _persist_partial_position(
     ) -> Dict[str, object]:
         if leg:
             entry_price = float(
-                leg.get("avg_price")
-                or leg.get("price")
-                or leg.get("entry_price")
-                or 0.0
+                leg.get("avg_price") or leg.get("price") or leg.get("entry_price") or 0.0
             )
             base_size = float(leg.get("base_size") or leg.get("filled_qty") or 0.0)
             notional_value = float(leg.get("notional_usdt") or notional_usdt)
@@ -421,19 +430,25 @@ def _persist_partial_position(
         entry_long_price = None
         entry_short_price = None
         if long_leg:
-            entry_long_price = float(
-                long_leg.get("avg_price")
-                or long_leg.get("price")
-                or long_leg.get("entry_price")
-                or 0.0
-            ) or None
+            entry_long_price = (
+                float(
+                    long_leg.get("avg_price")
+                    or long_leg.get("price")
+                    or long_leg.get("entry_price")
+                    or 0.0
+                )
+                or None
+            )
         if short_leg:
-            entry_short_price = float(
-                short_leg.get("avg_price")
-                or short_leg.get("price")
-                or short_leg.get("entry_price")
-                or 0.0
-            ) or None
+            entry_short_price = (
+                float(
+                    short_leg.get("avg_price")
+                    or short_leg.get("price")
+                    or short_leg.get("entry_price")
+                    or 0.0
+                )
+                or None
+            )
         legs = [
             _leg_payload(
                 long_leg,
@@ -479,10 +494,20 @@ def execute_hedged_trade(
     symbol: str, notion_usdt: float, leverage: float, min_spread: float
 ) -> dict:
     with slo.order_cycle_timer():
-    
+
         spread_info = check_spread(symbol)
         spread_value = float(spread_info["spread"])
-    
+        risk_manager = get_strategy_risk_manager()
+
+        def _record_failure(reason: str) -> None:
+            try:
+                risk_manager.record_failure(STRATEGY_NAME, reason)
+            except Exception:
+                LOGGER.exception(
+                    "failed to record strategy failure",
+                    extra={"strategy": STRATEGY_NAME, "reason": reason},
+                )
+
         if spread_value < float(min_spread):
             _record_failure("spread_below_threshold")
             return {
@@ -493,21 +518,20 @@ def execute_hedged_trade(
                 "reason": "spread_below_threshold",
                 "details": spread_info,
             }
-    
+
         notional = float(notion_usdt)
         leverage_value = float(leverage)
         cheap_price = _coerce_float(spread_info.get("cheap_mark"))
         expensive_price = _coerce_float(spread_info.get("expensive_mark"))
         long_size = notional / cheap_price if cheap_price > 0 else 0.0
         short_size = notional / expensive_price if expensive_price > 0 else 0.0
-    
+
         long_plan = dict(choose_venue("long", spread_info["symbol"], long_size) or {})
         short_plan = dict(choose_venue("short", spread_info["symbol"], short_size) or {})
-    
+
         dry_run_mode = is_dry_run_mode()
         budget_manager = get_strategy_budget_manager()
-        risk_manager = get_strategy_risk_manager()
-    
+
         if not risk_manager.is_enabled(STRATEGY_NAME):
             return {
                 "ok": False,
@@ -526,16 +550,7 @@ def execute_hedged_trade(
                 "reason": "strategy_frozen",
                 "strategy": STRATEGY_NAME,
             }
-    
-        def _record_failure(reason: str) -> None:
-            try:
-                risk_manager.record_failure(STRATEGY_NAME, reason)
-            except Exception:
-                LOGGER.exception(
-                    "failed to record strategy failure",
-                    extra={"strategy": STRATEGY_NAME, "reason": reason},
-                )
-    
+
         def _record_success() -> None:
             try:
                 risk_manager.record_success(STRATEGY_NAME)
@@ -544,7 +559,7 @@ def execute_hedged_trade(
                     "failed to record strategy success",
                     extra={"strategy": STRATEGY_NAME},
                 )
-    
+
         def _record_and_return(reason: str, *, record_failure: bool = True) -> dict:
             if record_failure:
                 _record_failure(reason)
@@ -576,7 +591,7 @@ def execute_hedged_trade(
                 "long_plan": long_plan,
                 "short_plan": short_plan,
             }
-    
+
         if not dry_run_mode and not budget_manager.can_allocate(
             STRATEGY_NAME, notional, requested_positions=1
         ):
@@ -591,23 +606,24 @@ def execute_hedged_trade(
                 }
             )
             return result
-    
+
         if not long_plan or not short_plan:
             return _record_and_return("routing_unavailable")
-    
-        if _coerce_float(long_plan.get("expected_fill_px")) <= 0.0 or _coerce_float(
-            short_plan.get("expected_fill_px")
-        ) <= 0.0:
+
+        if (
+            _coerce_float(long_plan.get("expected_fill_px")) <= 0.0
+            or _coerce_float(short_plan.get("expected_fill_px")) <= 0.0
+        ):
             return _record_and_return("quote_unavailable")
-    
+
         if not bool(long_plan.get("liquidity_ok", True)) or not bool(
             short_plan.get("liquidity_ok", True)
         ):
             return _record_and_return("insufficient_liquidity")
-    
+
         cheap_exchange = str(long_plan.get("venue") or spread_info["cheap"])
         expensive_exchange = str(short_plan.get("venue") or spread_info["expensive"])
-    
+
         guard_allowed, guard_reason = guard_allowed_to_trade(spread_info["symbol"])
         if not guard_allowed:
             guard_code = f"edge_guard:{guard_reason or 'blocked'}"
@@ -648,18 +664,18 @@ def execute_hedged_trade(
                 "short_plan": short_plan,
                 "edge_guard_reason": guard_reason,
             }
-    
+
         long_client = _client_for(cheap_exchange)
         short_client = _client_for(expensive_exchange)
-    
+
         long_price_hint = _coerce_float(long_plan.get("expected_fill_px")) or cheap_price
         short_price_hint = _coerce_float(short_plan.get("expected_fill_px")) or expensive_price
-    
+
         long_leg = None
         short_leg = None
         error_reason: str | None = None
         result: Dict[str, Any] | None = None
-    
+
         try:
             register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_long")
             if dry_run_mode:
@@ -687,7 +703,7 @@ def execute_hedged_trade(
                     leverage=leverage_value,
                     fallback_price=long_price_hint,
                 )
-    
+
             register_order_attempt(reason="runaway_orders_per_min", source="cross_exchange_short")
             if dry_run_mode:
                 short_leg = _simulate_leg(
@@ -823,7 +839,7 @@ def execute_hedged_trade(
                 dry_run=dry_run_mode,
                 failure_reason=None if short_success else error_reason,
             )
-    
+
         final_result = result or {
             "symbol": spread_info["symbol"],
             "min_spread": float(min_spread),

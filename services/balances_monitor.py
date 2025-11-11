@@ -109,7 +109,9 @@ def _mock_snapshot() -> Dict[str, Dict[str, Any]]:
 
 
 def _analyse_limits(venue: str, limits: Mapping[str, Any], min_hedge: float) -> Dict[str, Any]:
-    available = _float(limits.get("available_balance") or limits.get("free") or limits.get("available"))
+    available = _float(
+        limits.get("available_balance") or limits.get("free") or limits.get("available")
+    )
     total_keys = ("total_balance", "total_equity", "equity", "balance")
     total = 0.0
     for key in total_keys:
@@ -142,8 +144,12 @@ def _analyse_limits(venue: str, limits: Mapping[str, Any], min_hedge: float) -> 
             if current_leverage >= max_leverage:
                 risk_ok = False
                 reasons.append("max leverage reached")
-        except TypeError:  # pragma: no cover - defensive
-            pass
+        except TypeError as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "balance monitor leverage comparison failed",
+                extra={"venue": venue},
+                exc_info=exc,
+            )
     if not reasons:
         reasons.append("ok")
     reason = "; ".join(reasons)

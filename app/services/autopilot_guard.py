@@ -65,7 +65,7 @@ class AutopilotGuard:
         try:
             await self._task
         except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
-            pass
+            LOGGER.debug("autopilot guard loop cancelled during stop")
         finally:
             self._task = None
 

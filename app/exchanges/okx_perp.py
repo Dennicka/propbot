@@ -10,13 +10,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 import httpx
+
 try:  # pragma: no cover - shim used when requests is unavailable
     import requests
+
     RequestError = requests.RequestException
 except ImportError:  # pragma: no cover
+
     class _RequestsShim:
         @staticmethod
-        def get(url: str, params: Dict[str, str] | None = None, timeout: float | None = None) -> httpx.Response:
+        def get(
+            url: str, params: Dict[str, str] | None = None, timeout: float | None = None
+        ) -> httpx.Response:
             return httpx.get(url, params=params, timeout=timeout)
 
     requests = _RequestsShim()
@@ -87,7 +92,7 @@ class OKXPerpClient:
     def _ensure_http(self) -> httpx.Client:
         if self.safe_mode:
             raise RuntimeError("HTTP client not available in SAFE_MODE")
-        assert self._client is not None
+        assert self._client is not None  # nosec B101  # ensures client bound before use
         return self._client
 
     def _timestamp(self) -> str:
@@ -255,7 +260,11 @@ class OKXPerpClient:
         asks = entry.get("asks", [])
         if not bids or not asks:
             raise RuntimeError("orderbook empty")
-        return {"bid": float(bids[0][0]), "ask": float(asks[0][0]), "ts": float(entry.get("ts", 0.0))}
+        return {
+            "bid": float(bids[0][0]),
+            "ask": float(asks[0][0]),
+            "ts": float(entry.get("ts", 0.0)),
+        }
 
     def get_funding_info(self, symbol: str) -> Dict[str, float]:
         if self.safe_mode:
@@ -310,7 +319,9 @@ class OKXPerpClient:
         pos_side = kwargs.get("pos_side")
         if not pos_side:
             pos_side = "long" if side == "buy" else "short"
-        td_mode = kwargs.get("td_mode") or self.margin_type.get(kwargs["symbol"], self.config.margin_type)
+        td_mode = kwargs.get("td_mode") or self.margin_type.get(
+            kwargs["symbol"], self.config.margin_type
+        )
         ord_type = (kwargs.get("ord_type") or kwargs.get("type", "market")).lower()
         if kwargs.get("post_only"):
             ord_type = "post_only"
@@ -351,7 +362,9 @@ class OKXPerpClient:
         data = self._request("GET", "/api/v5/trade/orders-pending", params=params)
         return data  # type: ignore[return-value]
 
-    def recent_fills(self, symbol: str | None = None, since: float | None = None) -> list[Dict[str, Any]]:
+    def recent_fills(
+        self, symbol: str | None = None, since: float | None = None
+    ) -> list[Dict[str, Any]]:
         if self.safe_mode:
             return self._fallback.recent_fills(symbol, since)
         params: Dict[str, Any] = {"instType": "SWAP"}

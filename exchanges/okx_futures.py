@@ -168,7 +168,12 @@ class OKXFuturesClient(FuturesExchangeClient):
         )
         entry = data[0] if isinstance(data, list) and data else {}
         mark_price = float(entry.get("markPx", 0.0) or 0.0)
-        return {"symbol": symbol.upper(), "inst_id": inst_id, "mark_price": mark_price, "raw": entry}
+        return {
+            "symbol": symbol.upper(),
+            "inst_id": inst_id,
+            "mark_price": mark_price,
+            "raw": entry,
+        }
 
     def get_position(self, symbol: str) -> Dict[str, Any]:
         inst_id = self._instrument_id(symbol)
@@ -191,7 +196,9 @@ class OKXFuturesClient(FuturesExchangeClient):
             "raw": entry,
         }
 
-    def place_order(self, symbol: str, side: str, notional_usdt: float, leverage: float) -> Dict[str, Any]:
+    def place_order(
+        self, symbol: str, side: str, notional_usdt: float, leverage: float
+    ) -> Dict[str, Any]:
         apply_order_delay()
         inst_id = self._instrument_id(symbol)
         side_lower = str(side).lower()

@@ -1086,5 +1086,69 @@
       }
     ],
     "timestamp": "2025-11-10T16:25:36.588680+00:00"
+  },
+  {
+    "issue_count": 1,
+    "issues": [
+      {
+        "actual_size": 0.5,
+        "description": "Exchange shows exposure but store marks position closed.",
+        "expected_size": 0.0,
+        "kind": "unexpected_exchange_position",
+        "positions": [],
+        "side": "long",
+        "symbol": "BTCUSDT",
+        "venue": "binance-um"
+      }
+    ],
+    "timestamp": "2025-11-10T20:52:27.808242+00:00"
+  },
+  {
+    "issue_count": 1,
+    "issues": [
+      {
+        "actual_size": 0.1,
+        "description": "Exchange shows exposure but store marks position closed.",
+        "expected_size": 0.0,
+        "kind": "unexpected_exchange_position",
+        "positions": [],
+        "side": "long",
+        "symbol": "BTCUSDT",
+        "venue": "binance-um"
+      }
+    ],
+    "timestamp": "2025-11-10T20:52:31.313925+00:00"
+  },
+  {
+    "issue_count": 1,
+    "issues": [
+      {
+        "actual_size": 0.1,
+        "description": "Exchange shows exposure but store marks position closed.",
+        "expected_size": 0.0,
+        "kind": "unexpected_exchange_position",
+        "positions": [],
+        "side": "long",
+        "symbol": "BTCUSDT",
+        "venue": "binance-um"
+      }
+    ],
+    "timestamp": "2025-11-10T20:52:31.385733+00:00"
+  },
+  {
+    "issue_count": 1,
+    "issues": [
+      {
+        "actual_size": 1.0,
+        "description": "Exchange shows exposure but store marks position closed.",
+        "expected_size": 0.0,
+        "kind": "unexpected_exchange_position",
+        "positions": [],
+        "side": "long",
+        "symbol": "ETHUSDT",
+        "venue": "okx"
+      }
+    ],
+    "timestamp": "2025-11-10T20:52:31.491814+00:00"
   }
 ]

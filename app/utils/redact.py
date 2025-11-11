@@ -76,4 +76,3 @@ def redact_sensitive_data(payload: Any, *, extra_secrets: Iterable[str] | None =
     if not secrets:
         return payload
     return _redact_payload(payload, secrets)
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Dict, List, Literal, Mapping, Union
+import logging
 import os
 import secrets
 
@@ -27,6 +28,9 @@ from services.cross_exchange_arb import check_spread, execute_hedged_trade
 from services.risk_manager import can_open_new_position
 
 router = APIRouter()
+
+
+logger = logging.getLogger(__name__)
 
 
 STRATEGY_NAME = "cross_exchange_arb"
@@ -210,7 +214,9 @@ async def execute(plan_body: ExecutePayload) -> dict:
             detail={"error": "hold_active", "reason": safety.get("hold_reason")},
         )
     if state.control.safe_mode:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution"
+        )
     if isinstance(plan_body, CrossExecuteRequest):
         can_open, reason = can_open_new_position(
             plan_body.notion_usdt,
@@ -352,7 +358,9 @@ async def confirm(payload: ConfirmPayload) -> dict:
             detail={"error": "hold_active", "reason": safety.get("hold_reason")},
         )
     if state.control.safe_mode:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="SAFE_MODE blocks execution"
+        )
     expected_token = os.getenv("API_TOKEN")
     if not expected_token or not secrets.compare_digest(payload.token, expected_token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
@@ -371,7 +379,9 @@ async def confirm(payload: ConfirmPayload) -> dict:
         set_last_opportunity_state(opportunity, "blocked_by_risk")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
     if not state.control.dry_run:
-        venue = str(opportunity.get("cheap_exchange") or opportunity.get("venue") or "manual_confirm")
+        venue = str(
+            opportunity.get("cheap_exchange") or opportunity.get("venue") or "manual_confirm"
+        )
         side = str(opportunity.get("direction") or "multi-leg")
         intent = _build_manual_intent(
             symbol=str(opportunity.get("symbol")),

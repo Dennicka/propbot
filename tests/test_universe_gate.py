@@ -27,7 +27,12 @@ def test_universe_gate_allows_when_flag_disabled(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("app.routers.arb.check_pair_allowed", lambda _symbol: (False, "universe"))
     monkeypatch.setattr("app.routers.arb.risk_gate", fake_risk_gate)
 
-    intent = {"symbol": "DOGEUSDT", "strategy": "test", "intent_notional": 100.0, "intent_open_positions": 1}
+    intent = {
+        "symbol": "DOGEUSDT",
+        "strategy": "test",
+        "intent_notional": 100.0,
+        "intent_open_positions": 1,
+    }
     result = arb._maybe_skip_for_risk(intent)
 
     assert result is None
@@ -38,13 +43,17 @@ def test_universe_gate_allows_when_flag_disabled(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_universe_gate_blocks_unknown_pair(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENFORCE_UNIVERSE", "1")
-    monkeypatch.setattr("app.services.arbitrage.check_pair_allowed", lambda _symbol: (False, "universe"))
+    monkeypatch.setattr(
+        "app.services.arbitrage.check_pair_allowed", lambda _symbol: (False, "universe")
+    )
 
     def fail_risk_gate(_intent: Mapping[str, object]) -> Mapping[str, object]:
         raise AssertionError("risk_gate should not be evaluated when universe blocks")
 
     monkeypatch.setattr("app.services.arbitrage.risk_gate", fail_risk_gate)
-    monkeypatch.setattr("app.services.arbitrage.accounting_record_intent", lambda *_, **__: ({}, {"ok": True}))
+    monkeypatch.setattr(
+        "app.services.arbitrage.accounting_record_intent", lambda *_, **__: ({}, {"ok": True})
+    )
     monkeypatch.setattr("app.services.arbitrage.accounting_record_fill", lambda *_, **__: {})
     monkeypatch.setattr("app.services.arbitrage.get_risk_accounting_snapshot", lambda: {})
 
@@ -76,8 +85,11 @@ async def test_universe_gate_allows_known_pair(monkeypatch: pytest.MonkeyPatch) 
         return {"allowed": True}
 
     monkeypatch.setattr("app.services.arbitrage.risk_gate", fake_risk_gate)
-    monkeypatch.setattr("app.services.arbitrage.accounting_record_intent", lambda *_, **__: ({}, {"ok": True}))
+    monkeypatch.setattr(
+        "app.services.arbitrage.accounting_record_intent", lambda *_, **__: ({}, {"ok": True})
+    )
     monkeypatch.setattr("app.services.arbitrage.accounting_record_fill", lambda *_, **__: {})
+
     class DummyRouter:
         async def execute_plan(self, plan: Plan, *, allow_safe_mode: bool = False):
             calls["executed_plan"] = plan

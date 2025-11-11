@@ -30,7 +30,9 @@ class FakeRuntime:
             config=SimpleNamespace(data=SimpleNamespace(health=health_config)),
         )
 
-    def update_risk_throttle(self, active: bool, *, reason: str | None = None, source: str | None = None) -> None:
+    def update_risk_throttle(
+        self, active: bool, *, reason: str | None = None, source: str | None = None
+    ) -> None:
         self.throttle_calls.append((active, reason, source))
         self.state.safety.risk_throttled = bool(active)
         self.state.safety.risk_throttle_reason = reason if active else None
@@ -59,14 +61,18 @@ class FakeRuntime:
     def get_state(self):  # pragma: no cover - trivial accessor
         return self.state
 
-    def update_guard(self, name: str, status: str, summary: str, metrics: dict[str, object]) -> None:
+    def update_guard(
+        self, name: str, status: str, summary: str, metrics: dict[str, object]
+    ) -> None:
         self.guard_updates.append((name, status, summary, metrics))
 
     def get_pre_trade_gate(self) -> PreTradeGate:
         return self.pre_trade_gate
 
 
-def _make_snapshot(exchange: str, margin_ratio: float, *, collateral: float = 500.0) -> AccountHealthSnapshot:
+def _make_snapshot(
+    exchange: str, margin_ratio: float, *, collateral: float = 500.0
+) -> AccountHealthSnapshot:
     return AccountHealthSnapshot(
         exchange=exchange,
         equity_usdt=1000.0,
@@ -98,7 +104,9 @@ def health_config() -> HealthConfig:
     return HealthConfig(guard_enabled=True)
 
 
-def test_warn_throttles_risk_not_pretrade(monkeypatch: pytest.MonkeyPatch, health_config: HealthConfig) -> None:
+def test_warn_throttles_risk_not_pretrade(
+    monkeypatch: pytest.MonkeyPatch, health_config: HealthConfig
+) -> None:
     runtime = FakeRuntime(health_config)
     ctx = SimpleNamespace(runtime=runtime, config=SimpleNamespace(health=health_config))
 
@@ -119,13 +127,19 @@ def test_warn_throttles_risk_not_pretrade(monkeypatch: pytest.MonkeyPatch, healt
 
     assert worst == "WARN"
     assert states == {"binance": "WARN"}
-    assert runtime.throttle_calls[-1] == (True, AccountHealthGuard.WARN_CAUSE, AccountHealthGuard.HOLD_SOURCE)
+    assert runtime.throttle_calls[-1] == (
+        True,
+        AccountHealthGuard.WARN_CAUSE,
+        AccountHealthGuard.HOLD_SOURCE,
+    )
     assert runtime.pre_trade_gate.is_throttled is False
     assert runtime.hold_calls == []
     assert metrics_calls[-1] == (True, AccountHealthGuard.WARN_CAUSE)
 
 
-def test_critical_sets_hold_and_pretrade_gate(monkeypatch: pytest.MonkeyPatch, health_config: HealthConfig) -> None:
+def test_critical_sets_hold_and_pretrade_gate(
+    monkeypatch: pytest.MonkeyPatch, health_config: HealthConfig
+) -> None:
     runtime = FakeRuntime(health_config)
     ctx = SimpleNamespace(runtime=runtime, config=SimpleNamespace(health=health_config))
 

@@ -1,4 +1,9 @@
-"""Feature-flagged chaos helpers for exchange adapters."""
+"""Feature-flagged chaos helpers for exchange adapters.
+
+This module powers chaos and fault-injection utilities only; it intentionally
+uses Python's :mod:`random` for probabilistic triggers that are unrelated to
+security or cryptography.
+"""
 
 from __future__ import annotations
 
@@ -112,7 +117,9 @@ def _profile_defaults(name: str | None) -> dict[str, float | int]:
     return profiles.get(name.strip().lower(), {})
 
 
-def _extract_config_value(config: Mapping[str, Any] | Any, key: str, default: float | int = 0) -> Any:
+def _extract_config_value(
+    config: Mapping[str, Any] | Any, key: str, default: float | int = 0
+) -> Any:
     if config is None:
         return default
     if isinstance(config, Mapping):
@@ -135,9 +142,7 @@ def resolve_settings(config: Mapping[str, Any] | Any | None = None) -> ChaosSett
     )
     rest_default = _parse_float(
         profile_defaults.get("rest_timeout_p"),
-        _parse_float(
-            _extract_config_value(config, "rest_timeout_probability", 0.0), 0.0
-        ),
+        _parse_float(_extract_config_value(config, "rest_timeout_probability", 0.0), 0.0),
     )
     order_delay_default = _parse_int(
         profile_defaults.get("order_delay_ms"),
@@ -145,12 +150,8 @@ def resolve_settings(config: Mapping[str, Any] | Any | None = None) -> ChaosSett
     )
 
     ws_drop_p = _parse_float(os.getenv("CHAOS_WS_DROP_P"), ws_default)
-    rest_timeout_p = _parse_float(
-        os.getenv("CHAOS_REST_TIMEOUT_P"), rest_default
-    )
-    order_delay_ms = _parse_int(
-        os.getenv("CHAOS_ORDER_DELAY_MS"), order_delay_default
-    )
+    rest_timeout_p = _parse_float(os.getenv("CHAOS_REST_TIMEOUT_P"), rest_default)
+    order_delay_ms = _parse_int(os.getenv("CHAOS_ORDER_DELAY_MS"), order_delay_default)
 
     profile_label = str(profile_name or "custom").strip().lower() or "custom"
 
@@ -185,7 +186,8 @@ def should_drop_ws_update(settings: ChaosSettings | None = None) -> bool:
     payload = settings or get_settings()
     if not payload.enabled or payload.ws_drop_p <= 0.0:
         return False
-    return random.random() < payload.ws_drop_p
+    chaos_roll = random.random()  # nosec B311 - chaos probability trigger, not security sensitive
+    return chaos_roll < payload.ws_drop_p
 
 
 def maybe_raise_rest_timeout(
@@ -194,7 +196,8 @@ def maybe_raise_rest_timeout(
     payload = settings or get_settings()
     if not payload.enabled or payload.rest_timeout_p <= 0.0:
         return
-    if random.random() < payload.rest_timeout_p:
+    chaos_roll = random.random()  # nosec B311 - chaos probability trigger, not security sensitive
+    if chaos_roll < payload.rest_timeout_p:
         if context:
             raise RuntimeError(f"chaos: simulated REST timeout ({context})")
         raise RuntimeError("chaos: simulated REST timeout")
@@ -218,4 +221,3 @@ __all__ = [
     "resolve_settings",
     "should_drop_ws_update",
 ]
-

@@ -107,7 +107,9 @@ class AutoHedgeDaemon:
     ) -> None:
         self._scanner = get_scanner()
         self._interval = max(interval or _env_float("AUTO_HEDGE_SCAN_SECS", 2.0), 0.5)
-        self._max_failures = max_failures if max_failures is not None else _env_int("MAX_AUTO_FAILS_PER_MIN", 3)
+        self._max_failures = (
+            max_failures if max_failures is not None else _env_int("MAX_AUTO_FAILS_PER_MIN", 3)
+        )
         self._enabled_override = enabled
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -175,9 +177,15 @@ class AutoHedgeDaemon:
             return False, "runaway_guard_hold"
         counters = state.safety.counters
         limits = state.safety.limits
-        if limits.max_orders_per_min > 0 and counters.orders_placed_last_min >= limits.max_orders_per_min:
+        if (
+            limits.max_orders_per_min > 0
+            and counters.orders_placed_last_min >= limits.max_orders_per_min
+        ):
             return False, "runaway_orders_limit"
-        if limits.max_cancels_per_min > 0 and counters.cancels_last_min >= limits.max_cancels_per_min:
+        if (
+            limits.max_cancels_per_min > 0
+            and counters.cancels_last_min >= limits.max_cancels_per_min
+        ):
             return False, "runaway_cancels_limit"
         if state.risk.breaches:
             return False, "risk_breach_active"
@@ -242,7 +250,10 @@ class AutoHedgeDaemon:
         )
         append_entry(
             self._build_log_entry(
-                candidate=candidate, result=f"rejected: {reason}", timestamp=ts, trade_result=trade_result
+                candidate=candidate,
+                result=f"rejected: {reason}",
+                timestamp=ts,
+                trade_result=trade_result,
             )
         )
         if self._max_failures > 0 and failures > self._max_failures:
@@ -317,7 +328,9 @@ class AutoHedgeDaemon:
             spread_value = _coerce_float(candidate.get("spread"))
             min_spread = _coerce_float(candidate.get("min_spread", candidate.get("spread")))
             if spread_value <= 0 or spread_value < min_spread:
-                self._register_failure(reason="spread_below_threshold", candidate=candidate, timestamp=_ts())
+                self._register_failure(
+                    reason="spread_below_threshold", candidate=candidate, timestamp=_ts()
+                )
                 set_last_opportunity_state(candidate, "blocked_by_risk")
                 return
 
@@ -330,7 +343,9 @@ class AutoHedgeDaemon:
                 requested_positions=1,
             )
             if not allowed:
-                self._register_failure(reason=f"risk:{reason}", candidate=candidate, timestamp=_ts())
+                self._register_failure(
+                    reason=f"risk:{reason}", candidate=candidate, timestamp=_ts()
+                )
                 set_last_opportunity_state(candidate, "blocked_by_risk")
                 return
 
@@ -345,7 +360,9 @@ class AutoHedgeDaemon:
 
             if not trade_result.get("success"):
                 failure_reason = str(trade_result.get("reason") or "execution_failed")
-                self._register_failure(reason=failure_reason, candidate=candidate, trade_result=trade_result)
+                self._register_failure(
+                    reason=failure_reason, candidate=candidate, trade_result=trade_result
+                )
                 set_last_opportunity_state(candidate, "blocked_by_risk")
                 return
 
@@ -364,10 +381,16 @@ class AutoHedgeDaemon:
             )
             position = create_position(
                 symbol=symbol,
-                long_venue=str(trade_result.get("cheap_exchange") or candidate.get("long_venue") or ""),
-                short_venue=str(trade_result.get("expensive_exchange") or candidate.get("short_venue") or ""),
+                long_venue=str(
+                    trade_result.get("cheap_exchange") or candidate.get("long_venue") or ""
+                ),
+                short_venue=str(
+                    trade_result.get("expensive_exchange") or candidate.get("short_venue") or ""
+                ),
                 notional_usdt=notional,
-                entry_spread_bps=_coerce_float(trade_result.get("spread_bps", candidate.get("spread_bps"))),
+                entry_spread_bps=_coerce_float(
+                    trade_result.get("spread_bps", candidate.get("spread_bps"))
+                ),
                 leverage=leverage,
                 entry_long_price=long_price,
                 entry_short_price=short_price,

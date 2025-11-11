@@ -20,7 +20,9 @@ def _configure_secrets(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
 
 
-def test_daily_report_endpoint_operator_generates_snapshot(monkeypatch, client, tmp_path: Path) -> None:
+def test_daily_report_endpoint_operator_generates_snapshot(
+    monkeypatch, client, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("AUTH_ENABLED", "true")
     _configure_secrets(monkeypatch, tmp_path)
@@ -38,7 +40,9 @@ def test_daily_report_endpoint_operator_generates_snapshot(monkeypatch, client, 
         },
         "current_usage": {"alpha": {"open_notional": 3_000.0}},
     }
-    manager = CapitalManager(state_path=tmp_path / "custom_capital.json", initial_state=initial_state)
+    manager = CapitalManager(
+        state_path=tmp_path / "custom_capital.json", initial_state=initial_state
+    )
     reset_capital_manager(manager)
 
     create_position(

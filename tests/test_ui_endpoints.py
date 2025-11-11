@@ -82,7 +82,17 @@ def test_ui_state_and_controls(client, monkeypatch):
     assert portfolio_data["pnl_totals"].keys() >= {"realized", "unrealized", "total"}
     if portfolio_data["positions"]:
         first_pos = portfolio_data["positions"][0]
-        for field in ("venue", "venue_type", "symbol", "qty", "notional", "entry_px", "mark_px", "upnl", "rpnl"):
+        for field in (
+            "venue",
+            "venue_type",
+            "symbol",
+            "qty",
+            "notional",
+            "entry_px",
+            "mark_px",
+            "upnl",
+            "rpnl",
+        ):
             assert field in first_pos
     if portfolio_data["balances"]:
         first_balance = portfolio_data["balances"][0]
@@ -342,7 +352,10 @@ def test_ui_state_uses_binance_account_when_testnet(client, monkeypatch):
     payload = response.json()
 
     balances = payload["portfolio"]["balances"]
-    assert any(balance["asset"] == "USDT" and balance["total"] == pytest.approx(1000.0) for balance in balances)
+    assert any(
+        balance["asset"] == "USDT" and balance["total"] == pytest.approx(1000.0)
+        for balance in balances
+    )
     exposures = payload["exposures"]
     assert any(entry["symbol"].upper() == "BTCUSDT" for entry in exposures)
     assert any(entry.get("venue_type") == "binance-testnet" for entry in exposures)
@@ -439,7 +452,14 @@ def test_patch_control_applies_and_reflected_in_state(client):
     assert result["control"]["order_notional_usdt"] == pytest.approx(123.45)
     assert result["control"]["loop_pair"] == "ETHUSDT"
     assert result["control"]["dry_run"] is True
-    assert set(result["changes"].keys()) >= {"order_notional_usdt", "loop_pair", "loop_venues", "dry_run_only", "min_spread_bps", "max_slippage_bps"}
+    assert set(result["changes"].keys()) >= {
+        "order_notional_usdt",
+        "loop_pair",
+        "loop_venues",
+        "dry_run_only",
+        "min_spread_bps",
+        "max_slippage_bps",
+    }
     runtime_state = get_state()
     assert runtime_state.control.order_notional_usdt == pytest.approx(123.45)
     assert runtime_state.control.loop_pair == "ETHUSDT"
@@ -531,7 +551,9 @@ def test_ui_events_endpoint_pagination(client):
     assert "message" in first_page["items"][0]
     assert "type" in first_page["items"][0]
 
-    resp_next = client.get("/api/ui/events", params={"offset": first_page["next_offset"], "limit": 2})
+    resp_next = client.get(
+        "/api/ui/events", params={"offset": first_page["next_offset"], "limit": 2}
+    )
     assert resp_next.status_code == 200
     next_page = resp_next.json()
     assert next_page["offset"] == first_page["next_offset"]
@@ -555,7 +577,9 @@ def test_router_preview_endpoint(monkeypatch, client):
     monkeypatch.setattr("app.routers.ui.SmartRouter", DummyRouter)
     monkeypatch.setattr("app.routers.ui.smart_router_feature_enabled", lambda: True)
 
-    response = client.get("/api/ui/router/preview", params={"symbol": "BTCUSDT", "side": "buy", "qty": 1.0})
+    response = client.get(
+        "/api/ui/router/preview", params={"symbol": "BTCUSDT", "side": "buy", "qty": 1.0}
+    )
     assert response.status_code == 200
     payload = response.json()
     assert payload["best"] == "binance-um"
@@ -594,6 +618,7 @@ def test_daily_loss_status_endpoint(client, monkeypatch):
     embedded = state_payload.get("daily_loss_cap")
     assert embedded
     assert embedded["losses_usdt"] == pytest.approx(30.0)
+
 
 def test_status_includes_watchdog_reason(client):
     from app.watchdog.broker_watchdog import (

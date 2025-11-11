@@ -89,9 +89,7 @@ def _resolve_threshold(config: Any, key: str, env_var: str, default: float) -> f
         try:
             return float(override)
         except (TypeError, ValueError) as exc:
-            LOGGER.debug(
-                "invalid slo threshold key=%s value=%s error=%s", key, override, exc
-            )
+            LOGGER.debug("invalid slo threshold key=%s value=%s error=%s", key, override, exc)
     return _env_float(env_var, default)
 
 
@@ -128,7 +126,9 @@ def _extract_latency(snapshot: Mapping[str, Any]) -> float | None:
     return max(candidates)
 
 
-def _extract_md_staleness(snapshot: Mapping[str, Any], state: runtime.RuntimeState | None) -> float | None:
+def _extract_md_staleness(
+    snapshot: Mapping[str, Any], state: runtime.RuntimeState | None
+) -> float | None:
     direct = _coerce_float(snapshot.get("md_staleness_s"))
     if direct is not None:
         return direct
@@ -160,7 +160,9 @@ def _reset_state() -> None:
     _STATE.previous_auto_loop = None
 
 
-def _engage_auto_hold(metric: str, state: runtime.RuntimeState, *, source: str = "slo_guard") -> str:
+def _engage_auto_hold(
+    metric: str, state: runtime.RuntimeState, *, source: str = "slo_guard"
+) -> str:
     reason = f"SLO_CRITICAL::{metric}"
     if not _STATE.active_reason:
         _STATE.previous_safe_mode = bool(state.control.safe_mode)
@@ -256,6 +258,8 @@ def build_default_context() -> SimpleNamespace:
         auto_hold_on_slo=_env_flag("AUTO_HOLD_ON_SLO", True),
         latency_p95_critical=_env_float("SLO_LATENCY_P95_CRITICAL_MS", _DEFAULT_LATENCY_P95_MS),
         md_staleness_critical=_env_float("SLO_MD_STALENESS_CRITICAL_S", _DEFAULT_MD_STALENESS_S),
-        order_error_rate_critical=_env_float("SLO_ORDER_ERROR_RATE_CRITICAL", _DEFAULT_ORDER_ERROR_RATE),
+        order_error_rate_critical=_env_float(
+            "SLO_ORDER_ERROR_RATE_CRITICAL", _DEFAULT_ORDER_ERROR_RATE
+        ),
     )
     return SimpleNamespace(runtime=runtime, state=state, config=config)

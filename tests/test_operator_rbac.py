@@ -86,12 +86,40 @@ def test_operator_rbac_enforcement(monkeypatch, tmp_path, client):
     assert kill_resp.status_code == 200
 
     assert ("bob", "viewer", "HOLD", {"status": "forbidden"}) in calls
-    assert any(entry for entry in calls if entry[:3] == ("bob", "viewer", "RESUME_REQUEST") and entry[3]["status"] == "forbidden")
-    assert any(entry for entry in calls if entry[:3] == ("bob", "viewer", "KILL_REQUEST") and entry[3]["status"] == "forbidden")
+    assert any(
+        entry
+        for entry in calls
+        if entry[:3] == ("bob", "viewer", "RESUME_REQUEST") and entry[3]["status"] == "forbidden"
+    )
+    assert any(
+        entry
+        for entry in calls
+        if entry[:3] == ("bob", "viewer", "KILL_REQUEST") and entry[3]["status"] == "forbidden"
+    )
 
-    assert ("alice", "operator", "HOLD", {"status": "approved", "reason": "rbac", "requested_by": "ui"}) in calls
-    assert any(entry[:3] == ("alice", "operator", "RESUME_REQUEST") and entry[3]["status"] == "requested" for entry in calls)
-    assert any(entry[:3] == ("alice", "operator", "RESUME_APPROVE") and entry[3]["status"] == "approved" for entry in calls)
-    assert any(entry[:3] == ("alice", "operator", "RESUME_EXECUTE") and entry[3]["status"] == "approved" for entry in calls)
-    assert any(entry[:3] == ("alice", "operator", "KILL_REQUEST") and entry[3]["status"] == "requested" for entry in calls)
-    assert any(entry[:3] == ("alice", "operator", "KILL_APPROVE") and entry[3]["status"] == "approved" for entry in calls)
+    assert (
+        "alice",
+        "operator",
+        "HOLD",
+        {"status": "approved", "reason": "rbac", "requested_by": "ui"},
+    ) in calls
+    assert any(
+        entry[:3] == ("alice", "operator", "RESUME_REQUEST") and entry[3]["status"] == "requested"
+        for entry in calls
+    )
+    assert any(
+        entry[:3] == ("alice", "operator", "RESUME_APPROVE") and entry[3]["status"] == "approved"
+        for entry in calls
+    )
+    assert any(
+        entry[:3] == ("alice", "operator", "RESUME_EXECUTE") and entry[3]["status"] == "approved"
+        for entry in calls
+    )
+    assert any(
+        entry[:3] == ("alice", "operator", "KILL_REQUEST") and entry[3]["status"] == "requested"
+        for entry in calls
+    )
+    assert any(
+        entry[:3] == ("alice", "operator", "KILL_APPROVE") and entry[3]["status"] == "approved"
+        for entry in calls
+    )

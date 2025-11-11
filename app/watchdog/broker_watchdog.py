@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import threading
 import time
@@ -17,6 +18,10 @@ from ..metrics.broker_watchdog import (
     set_state as metrics_set_state,
     update_metrics as metrics_update_metrics,
 )
+
+
+LOGGER = logging.getLogger(__name__)
+
 STATE_OK = "OK"
 STATE_DEGRADED = "DEGRADED"
 STATE_DOWN = "DOWN"
@@ -307,8 +312,12 @@ class BrokerWatchdog:
             if on_remove is not None:
                 try:
                     on_remove(item)
-                except Exception:  # pragma: no cover - defensive
-                    pass
+                except Exception as exc:  # pragma: no cover - defensive  # noqa: BLE001
+                    LOGGER.debug(
+                        "broker watchdog prune callback failed",
+                        extra={"window": window},
+                        exc_info=exc,
+                    )
 
     def _percentile(self, values: Iterable[float], percentile: float) -> float:
         cleaned = [float(v) for v in values if v is not None]
@@ -386,14 +395,20 @@ class BrokerWatchdog:
         self._last_reason = f"{venue}:{state}:{reason}".strip(":")
         if self._event_queue is not None:
             try:
-                self._event_queue.put_nowait({
-                    "venue": venue,
-                    "state": state,
-                    "reason": reason,
-                    "ts": ts,
-                })
-            except Exception:  # pragma: no cover - defensive
-                pass
+                self._event_queue.put_nowait(
+                    {
+                        "venue": venue,
+                        "state": state,
+                        "reason": reason,
+                        "ts": ts,
+                    }
+                )
+            except Exception as exc:  # pragma: no cover - defensive  # noqa: BLE001
+                LOGGER.debug(
+                    "broker watchdog event queue publish failed",
+                    extra={"venue": venue, "state": state},
+                    exc_info=exc,
+                )
 
     def _update_throttle(self, venue: str, state: str, reason: str) -> None:
         throttled_before = bool(self._throttled)

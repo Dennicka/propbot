@@ -57,4 +57,3 @@ __all__ = [
     "get_pretrade_gate_status",
     "get_pretrade_status",
 ]
-

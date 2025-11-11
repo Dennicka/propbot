@@ -3,7 +3,7 @@
         docker-login docker-build docker-push docker-run-image docker-release \
         up down logs curl-health release \
         acceptance_smoke acceptance_trading acceptance_chaos \
-        run-paper run-testnet run-live
+        run_paper run_testnet run_live run-paper run-testnet run-live
 
 VENV=.venv
 PY=$(VENV)/bin/python
@@ -65,14 +65,22 @@ smoke_health:
 run:
 	$(UVICORN) app.main:app --host 127.0.0.1 --port 8000
 
-run-paper:
-	$(PY) -m app.cli run-profile paper
+RUN_PROFILE=$(PY) scripts/run_profile.py
 
-run-testnet:
-	$(PY) -m app.cli run-profile testnet
+run_paper:
+	$(RUN_PROFILE) --profile paper
 
-run-live:
-	$(PY) -m app.cli run-profile live
+run_testnet:
+	$(RUN_PROFILE) --profile testnet
+
+run_live:
+	$(RUN_PROFILE) --profile live
+
+run-paper: run_paper
+
+run-testnet: run_testnet
+
+run-live: run_live
 
 dryrun.once:
 	$(PY) -m app.cli exec --profile paper

@@ -119,6 +119,9 @@ def test_metrics_after_collect(fake_ctx: SimpleNamespace) -> None:
     assert registry.get_sample_value(
         "propbot_account_health_free_collateral_usd", {"exchange": "bybit"}
     ) == pytest.approx(900.0)
-    assert registry.get_sample_value(
-        "propbot_account_health_state", {"exchange": "binance", "state": "OK"}
-    ) == 1.0
+    assert (
+        registry.get_sample_value(
+            "propbot_account_health_state", {"exchange": "binance", "state": "OK"}
+        )
+        == 1.0
+    )

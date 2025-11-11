@@ -41,8 +41,10 @@ def test_stuck_order_metrics_exposed(client: TestClient) -> None:
     assert 'order_retries_total{symbol="symbol",venue="venue"} 1.0' in body
     assert 'open_orders_gauge{status="status",symbol="symbol",venue="venue"} 2.0' in body
     assert 'stuck_resolver_retries_total{reason="reason",symbol="symbol",venue="venue"} 1.0' in body
-    assert 'stuck_resolver_failures_total{reason="reason",symbol="symbol",venue="venue"} 1.0' in body
-    assert 'stuck_resolver_active_intents 3.0' in body
+    assert (
+        'stuck_resolver_failures_total{reason="reason",symbol="symbol",venue="venue"} 1.0' in body
+    )
+    assert "stuck_resolver_active_intents 3.0" in body
 
 
 def test_pnl_metrics_exposed(client: TestClient) -> None:

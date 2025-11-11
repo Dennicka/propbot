@@ -15,6 +15,16 @@ from ..runtime import leader_lock
 
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
+SAFE_RESET_TABLES = frozenset(
+    {
+        "orders",
+        "fills",
+        "positions",
+        "balances",
+        "events",
+        "order_journal",
+    }
+)
 
 
 def _attach_fencing_meta(payload: Mapping[str, object]) -> Dict[str, object]:
@@ -270,9 +280,7 @@ def _apply_position(
             if new_qty < 0:
                 prev_abs = abs(base_qty)
                 new_abs = abs(new_qty)
-                avg_price = (
-                    ((avg_price * prev_abs) + price * qty) / new_abs if new_abs else 0.0
-                )
+                avg_price = ((avg_price * prev_abs) + price * qty) / new_abs if new_abs else 0.0
             elif new_qty > 0:
                 avg_price = price
             else:
@@ -387,7 +395,9 @@ def record_fill(
             return int(cursor.lastrowid)
 
 
-def _record_event_locked(conn: sqlite3.Connection, *, level: str, code: str, payload: Dict[str, object]) -> None:
+def _record_event_locked(
+    conn: sqlite3.Connection, *, level: str, code: str, payload: Dict[str, object]
+) -> None:
     payload = _attach_fencing_meta(payload)
     conn.execute(
         "INSERT INTO events (ts, level, code, payload) VALUES (?, ?, ?, ?)",
@@ -545,7 +555,7 @@ def _filter_events(
         venue_value = _event_lookup(payload, ("venue", "exchange", "source_venue"))
         symbol_value = _event_lookup(payload, ("symbol", "pair"))
         message_value = _event_message(payload)
-        if venue_filter and (venue_value or "") .lower() != venue_filter:
+        if venue_filter and (venue_value or "").lower() != venue_filter:
             continue
         if symbol_filter and (symbol_value or "").lower() != symbol_filter:
             continue
@@ -734,7 +744,9 @@ def reset() -> None:
             if _feature_enabled("FEATURE_JOURNAL"):
                 tables.append("order_journal")
             for table in tables:
-                conn.execute(f"DELETE FROM {table}")
+                if table not in SAFE_RESET_TABLES:
+                    raise ValueError(f"Unexpected table name: {table}")
+                conn.execute(f"DELETE FROM {table}")  # nosec B608  # table name validated
 
 
 __all__ = [

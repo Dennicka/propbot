@@ -114,10 +114,7 @@ def _endpoint_label(key: Hashable) -> str:
 
 
 def _testing_bypass_enabled() -> bool:
-    return bool(
-        os.getenv("PYTEST_CURRENT_TEST")
-        or os.getenv("CI_TESTING") == "1"
-    )
+    return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("CI_TESTING") == "1")
 
 
 async def get_or_set(

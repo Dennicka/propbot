@@ -27,9 +27,7 @@ async def test_ops_report_includes_badges(monkeypatch):
     )
 
     watchdog = get_exchange_watchdog()
-    watchdog.check_once(
-        lambda: {"okx": {"ok": False, "reason": "outage"}}
-    )
+    watchdog.check_once(lambda: {"okx": {"ok": False, "reason": "outage"}})
 
     report = await build_ops_report()
     assert "badges" in report
