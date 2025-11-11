@@ -1,0 +1,39 @@
+{
+  "name": "order_router_live_safe_mode_block",
+  "profile": "live",
+  "time": 1700002000.0,
+  "safe_mode": {
+    "state": "HOLD",
+    "reason": "ops_hold"
+  },
+  "order": {
+    "request": {
+      "account": "live-account",
+      "venue": "okx",
+      "symbol": "ETHUSDT",
+      "side": "sell",
+      "order_type": "limit",
+      "qty": 1.5,
+      "price": 2000.0,
+      "strategy": "live-alpha"
+    },
+    "broker_response": {
+      "broker_order_id": "BRK-LIVE-1"
+    }
+  },
+  "expected": {
+    "error": {
+      "type": "PretradeGateThrottled",
+      "reason": "SAFE_MODE_ACTIVE"
+    },
+    "broker_calls": [],
+    "safe_mode": {
+      "state": "hold",
+      "reason": "ops_hold"
+    },
+    "last_pretrade_block": {
+      "reason": "SAFE_MODE_ACTIVE",
+      "symbol": "ETHUSDT"
+    }
+  }
+}
