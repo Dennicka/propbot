@@ -161,10 +161,10 @@ def compute_tca_preview(
                 "tca preview: skipping arbitrage pair entry missing attributes",
                 exc_info=exc,
             )
-            continue
-        if target_norm in {long_symbol_norm, short_symbol_norm}:
-            selected = entry
-            break
+        else:
+            if target_norm in {long_symbol_norm, short_symbol_norm}:
+                selected = entry
+                break
     if selected is None:
         raise ValueError(f"pair {pair} not configured for arbitrage")
 
