@@ -55,8 +55,17 @@ def _check_blockers(state) -> str | None:
         for venue_id, runtime in derivatives.venues.items():
             try:
                 if not runtime.client.ping():
+                    LOGGER.warning(
+                        "autopilot ping failed",
+                        extra={"venue": venue_id, "error": "ping_false"},
+                    )
                     return f"exchange_unreachable:{venue_id}"
-            except Exception:
+            except Exception as exc:
+                LOGGER.warning(
+                    "autopilot ping error",
+                    extra={"venue": venue_id, "error": str(exc)},
+                    exc_info=True,
+                )
                 return f"exchange_unreachable:{venue_id}"
     strategy_status = build_strategy_status()
     frozen = [name for name, entry in strategy_status.items() if entry.get("frozen")]
@@ -99,8 +108,12 @@ async def evaluate_startup() -> None:
                 f"AUTOPILOT refused to arm (reason={blocker})",
                 {"reason": blocker},
             )
-        except Exception:
-            LOGGER.debug("failed to emit autopilot refusal alert", exc_info=True)
+        except Exception as exc:
+            LOGGER.debug(
+                "failed to emit autopilot refusal alert",
+                extra={"error": str(exc)},
+                exc_info=True,
+            )
         return
     resume_reason = state.safety.hold_reason or "startup"
     result = autopilot_apply_resume(safe_mode=autopilot.target_safe_mode)
@@ -122,12 +135,16 @@ async def evaluate_startup() -> None:
             f"AUTOPILOT: resumed trading after restart (reason={resume_reason})",
             {"reason": resume_reason},
         )
-    except Exception:
-        LOGGER.debug("failed to emit autopilot resume alert", exc_info=True)
+    except Exception as exc:
+        LOGGER.debug(
+            "failed to emit autopilot resume alert",
+            extra={"error": str(exc)},
+            exc_info=True,
+        )
     try:
         await resume_loop()
-    except Exception:
-        LOGGER.exception("autopilot resume loop failed")
+    except Exception as exc:
+        LOGGER.exception("autopilot resume loop failed", extra={"error": str(exc)})
 
 
 def setup_autopilot(app: FastAPI) -> None:

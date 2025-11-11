@@ -252,7 +252,11 @@ def calc_attribution(
     if exclude_sim is None:
         try:
             exclude_sim = FeatureFlags.exclude_dry_run_from_pnl()
-        except Exception:
+        except Exception as exc:
+            _LOGGER.debug(
+                "failed to resolve feature flag for attribution",
+                extra={"error": str(exc)},
+            )
             exclude_sim = _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
     exclude_simulated = bool(exclude_sim)
     tier_table = _load_tier_table()

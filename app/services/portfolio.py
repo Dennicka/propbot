@@ -38,14 +38,19 @@ def _env_flag(name: str, default: bool = True) -> bool:
 def _exclude_simulated_entries() -> bool:
     try:
         return FeatureFlags.exclude_dry_run_from_pnl()
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug(
+            "failed to resolve feature flag for pnl simulation exclusion",
+            extra={"error": str(exc)},
+        )
         return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
 
 
 def _load_funding_events(limit: int = 200) -> List[dict[str, Any]]:
     try:
         events = ledger.fetch_events(limit=limit, order="desc")
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("failed to fetch funding events", extra={"error": str(exc)}, exc_info=True)
         return []
     funding_rows: List[dict[str, Any]] = []
     for event in events:

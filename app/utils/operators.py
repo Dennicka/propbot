@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from typing import Optional, Tuple
 
 from ..secrets_store import SecretsStore
+
+
+LOGGER = logging.getLogger(__name__)
 
 OperatorIdentity = Tuple[str, str]
 
@@ -17,7 +21,8 @@ def resolve_operator_identity(token: str) -> Optional[OperatorIdentity]:
     store: Optional[SecretsStore]
     try:
         store = SecretsStore()
-    except Exception:
+    except Exception as exc:
+        LOGGER.error("failed to load secrets store", extra={"error": str(exc)})
         store = None
     if store:
         identity = store.get_operator_by_token(token)

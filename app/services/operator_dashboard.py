@@ -552,7 +552,8 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
         break
     try:
         recent_operator_actions = list_recent_operator_actions(limit=5)
-    except Exception:
+    except Exception as exc:
+        logger.exception("failed to load recent operator actions", extra={"error": str(exc)})
         recent_operator_actions = []
     recent_ops_incidents = list_recent_events(limit=10)
 
@@ -588,12 +589,14 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
     execution_quality = _execution_quality_summary(execution_history)
     try:
         daily_report = load_latest_report()
-    except Exception:
+    except Exception as exc:
+        logger.exception("failed to load daily pnl report", extra={"error": str(exc)})
         daily_report = None
 
     try:
         last_backtest_report = load_latest_backtest_summary()
-    except Exception:
+    except Exception as exc:
+        logger.exception("failed to load backtest summary", extra={"error": str(exc)})
         last_backtest_report = None
     backtest_payload: dict[str, object] | None = None
     if last_backtest_report:

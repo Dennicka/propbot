@@ -300,16 +300,23 @@ class AccountHealthGuard:
                 summary_map.get(worst_state, "account health status"),
                 metrics,
             )
-        except Exception:  # pragma: no cover - defensive
-            LOGGER.debug("health guard failed to update guard snapshot", exc_info=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "health guard failed to update guard snapshot",
+                extra={"error": str(exc)},
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     def _safe_ctx(self, *, log: bool) -> object | None:
         try:
             return self._ctx_factory()
-        except Exception:
+        except Exception as exc:
             if log:
-                LOGGER.exception("health guard context factory failed")
+                LOGGER.exception(
+                    "health guard context factory failed",
+                    extra={"error": str(exc)},
+                )
             return None
 
     # ------------------------------------------------------------------

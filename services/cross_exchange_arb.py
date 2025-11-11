@@ -486,7 +486,8 @@ def _persist_partial_position(
             strategy=STRATEGY_NAME,
         )
         return record
-    except Exception:  # pragma: no cover - defensive persistence
+    except Exception as exc:  # pragma: no cover - defensive persistence
+        LOGGER.exception("failed to persist hedge position", extra={"error": str(exc)})
         return None
 
 
@@ -502,10 +503,14 @@ def execute_hedged_trade(
         def _record_failure(reason: str) -> None:
             try:
                 risk_manager.record_failure(STRATEGY_NAME, reason)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception(
                     "failed to record strategy failure",
-                    extra={"strategy": STRATEGY_NAME, "reason": reason},
+                    extra={
+                        "strategy": STRATEGY_NAME,
+                        "reason": reason,
+                        "error": str(exc),
+                    },
                 )
 
         if spread_value < float(min_spread):
@@ -554,10 +559,10 @@ def execute_hedged_trade(
         def _record_success() -> None:
             try:
                 risk_manager.record_success(STRATEGY_NAME)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception(
                     "failed to record strategy success",
-                    extra={"strategy": STRATEGY_NAME},
+                    extra={"strategy": STRATEGY_NAME, "error": str(exc)},
                 )
 
         def _record_and_return(reason: str, *, record_failure: bool = True) -> dict:

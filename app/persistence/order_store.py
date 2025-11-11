@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,6 +29,9 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 
 _DEFAULT_DB_URL = "sqlite:///data/orders.db"
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -174,8 +178,9 @@ def session_scope() -> Iterator[Session]:
     try:
         yield session
         session.commit()
-    except Exception:
+    except Exception as exc:
         session.rollback()
+        LOGGER.exception("order store session rollback", extra={"error": str(exc)})
         raise
     finally:
         session.close()

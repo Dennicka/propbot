@@ -441,8 +441,9 @@ class AutoHedgeDaemon:
                 await record_snapshot(reason="auto_hedge_cycle")
             except Exception:  # pragma: no cover - snapshot failures should not break cycle
                 logger.debug("failed to record pnl history snapshot", exc_info=True)
-        except Exception:
+        except Exception as exc:
             self._last_cycle_error = True
+            logger.exception("auto hedge cycle failed", extra={"error": str(exc)})
             raise
         finally:
             duration_ms = (time.perf_counter() - start) * 1000.0

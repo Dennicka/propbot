@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Mapping, Sequence
 
@@ -277,8 +277,11 @@ def _ctx_fetch(ctx, name: str, default):
     if callable(provider):
         try:
             return provider()
-        except Exception:
-            LOGGER.exception("recon.ctx_provider_failed", extra={"provider": name})
+        except Exception as exc:
+            LOGGER.exception(
+                "recon.ctx_provider_failed",
+                extra={"provider": name, "error": str(exc)},
+            )
             return default() if callable(default) else default
     if provider is not None:
         return provider
@@ -463,7 +466,7 @@ def _resolve_daemon_config(cfg: object | None = None) -> DaemonConfig:
             return value
         try:
             return Decimal(str(value))
-        except Exception:
+        except (InvalidOperation, TypeError, ValueError):
             return default
 
     enabled_raw = _cfg_value(recon_cfg, "enabled")

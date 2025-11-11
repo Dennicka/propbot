@@ -203,11 +203,15 @@ def create_app() -> FastAPI:
         route = _route_label(request)
         try:
             response = await call_next(request)
-        except Exception:
+        except Exception as exc:
             duration_s = max(time.perf_counter() - start, 0.0)
             observe_api_latency(route, method, 500, duration_s)
             if path.startswith("/api/ui"):
                 observe_ui_latency(path, duration_s * 1000.0, status_code=500, error=True)
+            logger.exception(
+                "unhandled request error",
+                extra={"route": route, "method": method, "error": str(exc)},
+            )
             raise
         duration_s = max(time.perf_counter() - start, 0.0)
         observe_api_latency(route, method, response.status_code, duration_s)

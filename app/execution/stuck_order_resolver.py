@@ -499,7 +499,15 @@ class StuckOrderResolver:
         if ledger_order_id is not None:
             try:
                 current = await asyncio.to_thread(self._ledger.get_order, ledger_order_id)
-            except Exception:
+            except Exception as exc:
+                self._logger.warning(
+                    "stuck resolver ledger fetch failed",
+                    extra={
+                        "intent_id": intent_id,
+                        "ledger_order_id": ledger_order_id,
+                        "error": str(exc),
+                    },
+                )
                 current = None
             status = (
                 _normalise_status(current.get("status")) if isinstance(current, Mapping) else ""

@@ -5,6 +5,7 @@ import math
 import os
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +18,9 @@ from ..services import runtime
 from ..strategy.pnl_tracker import get_strategy_pnl_tracker
 from ..strategy_pnl import snapshot_all as snapshot_strategy_pnl
 from .positions_view import build_positions_snapshot
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
@@ -32,7 +36,11 @@ def _env_flag(name: str, default: bool = True) -> bool:
 def _exclude_simulated() -> bool:
     try:
         return FeatureFlags.exclude_dry_run_from_pnl()
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug(
+            "failed to resolve feature flag for dry run exclusion",
+            extra={"error": str(exc)},
+        )
         return _env_flag("EXCLUDE_DRY_RUN_FROM_PNL", True)
 
 
@@ -117,7 +125,8 @@ def _build_trade_events(positions: Iterable[Mapping[str, Any]]) -> list[dict[str
 def _load_funding_events(limit: int = 200) -> list[dict[str, Any]]:
     try:
         events = fetch_events(limit=limit, order="desc")
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("failed to fetch funding events", extra={"error": str(exc)}, exc_info=True)
         return []
     funding_rows: list[dict[str, Any]] = []
     for event in events:
