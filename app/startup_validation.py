@@ -330,12 +330,18 @@ def _collect_errors() -> list[str]:
     return errors
 
 
+def collect_startup_errors() -> list[str]:
+    """Return collected startup validation errors without exiting."""
+
+    return _collect_errors()
+
+
 def validate_startup() -> None:
     """Validate environment and abort when unsafe configuration is detected."""
 
-    errors = _collect_errors()
+    errors = collect_startup_errors()
     if errors:
         raise SystemExit("\n".join(errors))
 
 
-__all__ = ["validate_startup"]
+__all__ = ["collect_startup_errors", "validate_startup"]

@@ -94,9 +94,20 @@ def load_profile() -> TradingProfile:
     return _PROFILE_LIMITS[profile_key]
 
 
+def get_profile(profile: ExecutionProfile | str) -> TradingProfile:
+    """Return the ``TradingProfile`` for ``profile`` regardless of env state."""
+
+    if isinstance(profile, ExecutionProfile):
+        profile_key = profile
+    else:
+        profile_key = _resolve_profile_name(str(profile))
+    return _PROFILE_LIMITS[profile_key]
+
+
 __all__ = [
     "ExecutionProfile",
     "TradingProfile",
     "TradingProfileError",
+    "get_profile",
     "load_profile",
 ]
