@@ -1,4 +1,9 @@
-"""Feature-flagged chaos helpers for exchange adapters."""
+"""Feature-flagged chaos helpers for exchange adapters.
+
+This module powers chaos and fault-injection utilities only; it intentionally
+uses Python's :mod:`random` for probabilistic triggers that are unrelated to
+security or cryptography.
+"""
 
 from __future__ import annotations
 
@@ -181,7 +186,7 @@ def should_drop_ws_update(settings: ChaosSettings | None = None) -> bool:
     payload = settings or get_settings()
     if not payload.enabled or payload.ws_drop_p <= 0.0:
         return False
-    chaos_roll = random.random()  # chaos-only probability trigger; not security sensitive. # nosec B311
+    chaos_roll = random.random()  # nosec B311 - chaos probability trigger, not security sensitive
     return chaos_roll < payload.ws_drop_p
 
 
@@ -191,7 +196,7 @@ def maybe_raise_rest_timeout(
     payload = settings or get_settings()
     if not payload.enabled or payload.rest_timeout_p <= 0.0:
         return
-    chaos_roll = random.random()  # chaos-only probability trigger; not security sensitive. # nosec B311
+    chaos_roll = random.random()  # nosec B311 - chaos probability trigger, not security sensitive
     if chaos_roll < payload.rest_timeout_p:
         if context:
             raise RuntimeError(f"chaos: simulated REST timeout ({context})")
