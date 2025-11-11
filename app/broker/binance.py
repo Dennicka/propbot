@@ -730,7 +730,7 @@ class BinanceTestnetBroker(_BaseBinanceBroker):
             base_url=base_url,
             credentials=credentials,
             api_key_env="BINANCE_UM_API_KEY_TESTNET",
-            api_secret_env="BINANCE_UM_API_SECRET_TESTNET",
+            api_secret_env="BINANCE_UM_API_SECRET_TESTNET",  # nosec B106  # env var name / non-secret
             base_url_env="BINANCE_UM_BASE_TESTNET",
             default_base_url=_DEFAULT_TESTNET_BASE_URL,
             venue_type="binance-testnet",
@@ -756,7 +756,7 @@ class BinanceLiveBroker(_BaseBinanceBroker):
             base_url=base_url,
             credentials=credentials,
             api_key_env="BINANCE_LV_API_KEY",
-            api_secret_env="BINANCE_LV_API_SECRET",
+            api_secret_env="BINANCE_LV_API_SECRET",  # nosec B106  # env var name / non-secret
             base_url_env="BINANCE_LV_BASE_URL",
             default_base_url=_DEFAULT_LIVE_BASE_URL,
             venue_type="binance-live",

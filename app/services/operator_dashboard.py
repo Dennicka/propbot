@@ -235,7 +235,7 @@ def build_reconciliation_summary(snapshot: object | None = None) -> dict[str, ob
     status_token = status_raw.replace("-", "_").upper()
     if normalized.get("auto_hold"):
         status = "AUTO_HOLD"
-    elif status_token == "OK":
+    elif status_token == "OK":  # nosec B105  # status marker, not password
         status = "OK"
     elif status_token in {"DRIFT", "DEGRADED", "DEGRADED_DRIFT"}:
         status = "DRIFT"
@@ -806,7 +806,12 @@ async def build_dashboard_context(request: Request) -> Dict[str, Any]:
                 for venue in venues:
                     try:
                         book = market_data.top_of_book(venue, symbol_norm)
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "operator_dashboard: failed to fetch top of book",
+                            extra={"venue": venue, "symbol": symbol_norm},
+                            exc_info=exc,
+                        )
                         continue
                     ask = _coerce_float(book.get("ask"))
                     bid = _coerce_float(book.get("bid"))

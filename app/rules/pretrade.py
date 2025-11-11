@@ -229,7 +229,10 @@ class PretradeValidator:
             try:
                 start_time = _parse_time(start_raw)
                 end_time = _parse_time(end_raw)
-            except Exception:
+            except (TypeError, ValueError) as exc:
+                LOGGER.warning(
+                    "pretrade: invalid trade window entry", extra={"entry": entry}, exc_info=exc
+                )
                 continue
             tz_value = _to_zoneinfo(
                 entry.get("tz") if isinstance(entry.get("tz"), str) else None, default_tz
@@ -291,20 +294,40 @@ class PretradeValidator:
             if callable(getter):
                 try:
                     filters = getter(exchange_symbol)
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    LOGGER.warning(
+                        "pretrade: failed to fetch symbol specs",
+                        extra={"venue": venue, "symbol": exchange_symbol},
+                        exc_info=exc,
+                    )
                     try:
                         filters = getter(symbol)
-                    except Exception:
+                    except Exception as retry_exc:  # noqa: BLE001
+                        LOGGER.warning(
+                            "pretrade: retry to fetch symbol specs failed",
+                            extra={"venue": venue, "symbol": symbol},
+                            exc_info=retry_exc,
+                        )
                         filters = None
             else:
                 getter = getattr(client, "get_filters", None)
                 if callable(getter):
                     try:
                         filters = getter(exchange_symbol)
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning(
+                            "pretrade: failed to fetch filters",
+                            extra={"venue": venue, "symbol": exchange_symbol},
+                            exc_info=exc,
+                        )
                         try:
                             filters = getter(symbol)
-                        except Exception:
+                        except Exception as retry_exc:  # noqa: BLE001
+                            LOGGER.warning(
+                                "pretrade: retry to fetch filters failed",
+                                extra={"venue": venue, "symbol": symbol},
+                                exc_info=retry_exc,
+                            )
                             filters = None
         if isinstance(filters, Mapping):
             tick = _coerce_positive_float(filters.get("tick_size")) if math.isnan(tick) else tick

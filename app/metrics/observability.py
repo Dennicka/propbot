@@ -106,7 +106,7 @@ def observe_api_latency(route: str, method: str, status: int, duration_seconds: 
 
     if not register_slo_metrics():
         return
-    assert API_LATENCY is not None
+    assert API_LATENCY is not None  # nosec B101  # metric registered during startup
     route_label = (route or "").strip() or "/"
     method_label = (method or "").strip().upper() or "GET"
     status_label = str(int(status) if status is not None else 500)
@@ -126,7 +126,7 @@ def set_market_data_staleness(venue: str, symbol: str, age_seconds: float) -> No
 
     if not register_slo_metrics():
         return
-    assert MARKET_DATA_STALENESS is not None
+    assert MARKET_DATA_STALENESS is not None  # nosec B101  # ensures metric initialised
     venue_label = _normalise_label(venue)
     symbol_label = (symbol or "").strip().upper() or "UNKNOWN"
     try:
@@ -143,7 +143,7 @@ def record_order_error(venue: str, reason: str | None) -> None:
 
     if not register_slo_metrics():
         return
-    assert ORDER_ERRORS_COUNTER is not None
+    assert ORDER_ERRORS_COUNTER is not None  # nosec B101  # guard for metric registration
     venue_label = _normalise_label(venue)
     reason_text = (reason or "").strip().lower()
     if not reason_text:
@@ -156,7 +156,7 @@ def set_watchdog_state_metric(venue: str, status: str) -> None:
 
     if not register_slo_metrics():
         return
-    assert WATCHDOG_STATE_GAUGE is not None
+    assert WATCHDOG_STATE_GAUGE is not None  # nosec B101  # guard for metric registration
     venue_label = _normalise_label(venue)
     status_key = (status or "").strip().upper()
     value = _WATCHDOG_STATE_VALUES.get(status_key)

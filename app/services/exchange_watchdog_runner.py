@@ -119,7 +119,7 @@ class ExchangeWatchdogRunner:
             result = self._probe()
             if inspect.isawaitable(result):
                 result = await result  # type: ignore[assignment]
-            assert not inspect.isawaitable(result)
+            assert not inspect.isawaitable(result)  # nosec B101  # ensure sync execution path
             report = self._watchdog.check_once(lambda: result)
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("exchange watchdog probe failed: %s", exc, exc_info=True)

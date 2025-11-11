@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def build_positions_snapshot(state, positions: Iterable[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -206,7 +210,12 @@ def _fetch_mark_price(client, symbol: str) -> float | None:
     for candidate in _symbol_candidates(symbol):
         try:
             data = client.get_mark_price(candidate)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "positions_view: failed to fetch mark price",
+                extra={"symbol": candidate},
+                exc_info=exc,
+            )
             continue
         price: float | None = None
         if isinstance(data, Mapping):

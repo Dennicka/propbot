@@ -298,7 +298,12 @@ class Reconciler:
         for candidate in candidates:
             try:
                 payload = client.get_mark_price(candidate)
-            except Exception:  # pragma: no cover - defensive
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning(
+                    "reconciler: failed to fetch mark price",
+                    extra={"symbol": candidate},
+                    exc_info=exc,
+                )
                 continue
             price = _extract_price(payload)
             if price:

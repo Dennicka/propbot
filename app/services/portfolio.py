@@ -528,7 +528,12 @@ def _mark_price_for_symbol(client, symbol: str) -> float | None:
     for candidate in _symbol_candidates(symbol):
         try:
             data = client.get_mark_price(candidate)
-        except Exception:  # pragma: no cover - defensive logging
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "portfolio: failed to fetch mark price",
+                extra={"symbol": candidate},
+                exc_info=exc,
+            )
             continue
         price = None
         if isinstance(data, dict):

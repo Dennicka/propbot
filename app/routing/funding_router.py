@@ -325,7 +325,12 @@ def extract_funding_inputs(
         resolved_symbol = resolve_venue_symbol(config, venue_id=venue_id, symbol=symbol) or symbol
         try:
             funding_info = client.get_funding_info(resolved_symbol)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "funding_router: failed to fetch funding info",
+                extra={"venue": str(alias), "symbol": resolved_symbol},
+                exc_info=exc,
+            )
             continue
         rate = float(funding_info.get("rate", 0.0)) if isinstance(funding_info, Mapping) else 0.0
         next_ts = (
@@ -338,7 +343,12 @@ def extract_funding_inputs(
             fee_info = client.get_fees(resolved_symbol)
             taker_bps = float(fee_info.get("taker_bps", manual_entry.get("taker_bps", 0.0)))
             maker_bps = float(fee_info.get("maker_bps", manual_entry.get("maker_bps", 0.0)))
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "funding_router: failed to fetch fee info",
+                extra={"venue": str(alias), "symbol": resolved_symbol},
+                exc_info=exc,
+            )
             taker_bps = float(manual_entry.get("taker_bps", 0.0))
             maker_bps = float(manual_entry.get("maker_bps", 0.0))
         vip_rebate_bps = float(manual_entry.get("vip_rebate_bps", 0.0))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -20,6 +21,9 @@ from ..risk.freeze import get_freeze_registry
 _GROUP_ORDER = ["P0", "P1", "P2", "P3"]
 _DEFAULT_HOLD_MINUTES = 5
 _SEVERITY_RANK = {"OK": 0, "WARN": 1, "ERROR": 2, "HOLD": 3}
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _coerce_metric_value(value: object) -> object:
@@ -137,7 +141,13 @@ def _evaluate_clock_skew(state: RuntimeState) -> float | None:
             continue
         try:
             server_time_raw = client.server_time()
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001
+            venue_label = getattr(runtime, "venue", None) or getattr(runtime, "name", "unknown")
+            LOGGER.warning(
+                "status: failed to fetch server_time",
+                extra={"venue": venue_label},
+                exc_info=exc,
+            )
             continue
         try:
             numeric = float(server_time_raw)
@@ -640,7 +650,8 @@ def _build_pnl_overview(state: RuntimeState, now: datetime) -> Dict[str, float]:
     default = {"today_net_usd": 0.0, "last_7d_net_usd": 0.0, "realized_total_usd": 0.0}
     try:
         ledger_obj = build_ledger_from_history(ctx, None)
-    except Exception:  # pragma: no cover - defensive
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("status: failed to build ledger snapshot", exc_info=exc)
         return default
     try:
         snapshots = ledger_obj.daily_snapshots()
@@ -787,7 +798,8 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     if resolver_state and bool(getattr(resolver_state, "enabled", False)):
         try:
             snapshot["stuck_resolver"] = resolver_state.snapshot()
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("status: stuck resolver snapshot unavailable", exc_info=exc)
             snapshot["stuck_resolver"] = {"enabled": True}
     return redact_sensitive_data(snapshot)
 

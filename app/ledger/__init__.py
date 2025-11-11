@@ -15,6 +15,14 @@ from ..runtime import leader_lock
 
 LEDGER_PATH = Path("data/ledger.db")
 _LEDGER_LOCK = threading.Lock()
+SAFE_RESET_TABLES = frozenset({
+    "orders",
+    "fills",
+    "positions",
+    "balances",
+    "events",
+    "order_journal",
+})
 
 
 def _attach_fencing_meta(payload: Mapping[str, object]) -> Dict[str, object]:
@@ -734,7 +742,9 @@ def reset() -> None:
             if _feature_enabled("FEATURE_JOURNAL"):
                 tables.append("order_journal")
             for table in tables:
-                conn.execute(f"DELETE FROM {table}")
+                if table not in SAFE_RESET_TABLES:
+                    raise ValueError(f"Unexpected table name: {table}")
+                conn.execute(f"DELETE FROM {table}")  # nosec B608  # table name validated
 
 
 __all__ = [

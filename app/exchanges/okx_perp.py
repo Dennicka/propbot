@@ -92,7 +92,7 @@ class OKXPerpClient:
     def _ensure_http(self) -> httpx.Client:
         if self.safe_mode:
             raise RuntimeError("HTTP client not available in SAFE_MODE")
-        assert self._client is not None
+        assert self._client is not None  # nosec B101  # ensures client bound before use
         return self._client
 
     def _timestamp(self) -> str:

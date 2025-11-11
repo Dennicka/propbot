@@ -93,7 +93,12 @@ def _tier_table_from_config(config) -> TierTable | None:
                 else:
                     try:
                         tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
-                    except Exception:  # pragma: no cover - defensive
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning(
+                            "smart_router: failed to serialise tier entry",
+                            extra={"venue": str(venue)},
+                            exc_info=exc,
+                        )
                         continue
         if tier_entries:
             mapping[str(venue)] = tier_entries

@@ -88,7 +88,15 @@ def _collect_clock_skew_ms(state) -> float | None:
             continue
         try:
             server_time_raw = client.server_time()
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001
+            venue_label = getattr(runtime_entry, "venue", None) or getattr(
+                runtime_entry, "name", "unknown"
+            )
+            LOGGER.warning(
+                "risk_governor: failed to fetch server_time",
+                extra={"venue": venue_label},
+                exc_info=exc,
+            )
             continue
         try:
             numeric = float(server_time_raw)
@@ -110,7 +118,8 @@ def _maintenance_flag(candidate) -> bool:
     if callable(candidate):  # pragma: no branch - simple accessor
         try:
             value = candidate()
-        except Exception:  # pragma: no cover - defensive
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("risk_governor: maintenance flag callable failed", exc_info=exc)
             return False
     if isinstance(value, bool):
         return value

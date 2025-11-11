@@ -85,7 +85,7 @@ class BinanceUMClient:
     def _ensure_http(self) -> httpx.Client:
         if self.safe_mode:
             raise RuntimeError("HTTP client not available in SAFE_MODE")
-        assert self._client is not None  # for type-checkers
+        assert self._client is not None  # nosec B101  # for type-checkers
         return self._client
 
     def _timestamp(self) -> int:

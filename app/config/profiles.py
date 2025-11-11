@@ -126,7 +126,7 @@ _PROFILE_DEFAULTS: dict[RuntimeProfile, _ProfileDefaults] = {
 }
 
 
-_LIVE_CONFIRM_TOKEN = "I_KNOW_WHAT_I_AM_DOING"
+_LIVE_CONFIRM_TOKEN = "I_KNOW_WHAT_I_AM_DOING"  # nosec B105  # non-secret control token
 
 _LIVE_LIMIT_ENV_REQUIREMENTS: tuple[tuple[str, str, bool], ...] = (
     (

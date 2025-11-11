@@ -162,14 +162,14 @@ def _ensure_initialised() -> None:
 
 def get_engine() -> Engine:
     _ensure_initialised()
-    assert _ENGINE is not None
+    assert _ENGINE is not None  # nosec B101  # initialised via configure_engine
     return _ENGINE
 
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
     _ensure_initialised()
-    assert _SESSION_FACTORY is not None
+    assert _SESSION_FACTORY is not None  # nosec B101  # initialised via configure_engine
     session: Session = _SESSION_FACTORY()
     try:
         yield session
