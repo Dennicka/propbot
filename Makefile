@@ -3,7 +3,8 @@
         docker-login docker-build docker-push docker-run-image docker-release \
         up down logs curl-health release \
         acceptance_smoke acceptance_trading acceptance_chaos \
-        run_paper run_testnet run_live run-paper run-testnet run-live
+        run_paper run_testnet run_live run-paper run-testnet run-live \
+        verify
 
 VENV=.venv
 PY=$(VENV)/bin/python
@@ -37,10 +38,31 @@ test:
 	$(PYTEST) -q --maxfail=1
 
 golden-check:
-        PYTHONPATH=. python -m app.cli_golden check
+	PYTHONPATH=. python -m app.cli_golden check
 
 golden-replay:
-        PYTHONPATH=. python -m app.golden.replay
+	PYTHONPATH=. python -m app.golden.replay
+
+verify:
+	ruff check .
+	black --check .
+	mypy --config-file mypy.ini app
+	pytest
+	pytest -q tests/golden
+	@if command -v pip-audit >/dev/null 2>&1; then \
+		pip-audit -r requirements.txt; \
+	elif python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('pip_audit') else 1)" >/dev/null 2>&1; then \
+		python -m pip_audit -r requirements.txt; \
+	else \
+		echo "pip-audit not installed, skipping"; \
+	fi
+	@if command -v bandit >/dev/null 2>&1; then \
+		bandit -q -r app services; \
+	elif python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('bandit') else 1)" >/dev/null 2>&1; then \
+		python -m bandit -q -r app services; \
+	else \
+		echo "bandit not installed, skipping"; \
+	fi
 
 # Acceptance targets:
 #   make acceptance_smoke   → quick smoke tests in CI/local env

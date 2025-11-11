@@ -1,80 +1,60 @@
-# Security and Secrets Handling
+# Security
 
-This project enforces a strict separation between code and runtime secrets to
-prevent accidental leakage during development or deployment.
+Ниже перечислены правила обращения с секретами и требования к коду, которые
+обязаны соблюдаться для paper/testnet/live окружений.
 
-## Secrets store
+## Хранение ключей и доступов
 
-* All exchange credentials and operator tokens are loaded via
-  `app.secrets_store.SecretsStore`. The path is provided through the
-  `SECRETS_STORE_PATH` environment variable and must point to an encrypted JSON
-  bundle stored outside the repository.
-* The optional `SECRETS_ENC_KEY` variable enables the lightweight XOR/base64
-  obfuscation implemented by the secrets store. The key never lives in the
-  repository and should be provisioned alongside the JSON payload.
-* Runtime components such as the Binance and OKX clients prefer credentials from
-  the secrets store. Environment variables remain a fallback for local testing,
-  but real keys must **not** be committed to the repository.
+* **Секреты только вне репозитория.** API ключи Binance/OKX, `APPROVE_TOKEN` и
+  Telegram токены хранятся в JSON-файле из `SECRETS_STORE_PATH` или в GitHub
+  Secrets (для CI). Значения в `.env.example` и `.env.prod.example` — это лишь
+  подсказки/плейсхолдеры, их нельзя коммитить с боевыми значениями.
+* `app.secrets_store.SecretsStore` поддерживает XOR/base64 обёртку через
+  `SECRETS_ENC_KEY`. Ключ шифрования задаётся только через окружение контейнера и
+  не попадает в git. 【F:app/secrets_store.py†L12-L148】
+* Для `PROFILE=live` self-check и `startup_validation` требуют наличие всех
+  секретов, перечисленных в `configs/profile.live.yaml` (binance/okx key/secret/
+  passphrase). Без этого сервис не стартует. 【F:app/profile_config.py†L123-L191】【F:app/startup_validation.py†L88-L159】
 
-### Handling new secrets
+## Кодовые ограничения
 
-* Provision new API tokens or credentials by updating the JSON bundle referenced
-  by `SECRETS_STORE_PATH`. Never hardcode tokens, passwords or chat identifiers
-  in source files or tests.
-* Operators interacting with automation (auto hedge daemon, approvals) should
-  provide human-readable identifiers via environment variables such as
-  `AUTO_HEDGE_INITIATOR`. These defaults are safe placeholders but should be
-  overridden during deployment to aid audit trails.
+* **Без логирования секретов.** Любые строки с ключами/токенами проходят через
+  redaction в `app/security.py` и должны логироваться только в masked-формате.
+  В логах запрещены прямые выводы `API_TOKEN`, `passphrase`, `secret` и т.п.
+* **Только Decimal для денег.** Модули risk/accounting/ledger используют
+  `decimal.Decimal` для расчётов; новые функции обязаны следовать этому правилу,
+  чтобы избежать накопления плавающих ошибок. 【F:app/risk/core.py†L33-L121】
+* **Явные таймауты.** REST/WebSocket клиенты выставляют таймауты и повторные
+  попытки. Новые вызовы должны использовать существующие врапперы (`httpx`,
+  `requests`) с `timeout=...`, запрещено оставлять сетевые вызовы по умолчанию.
+* **Никакого eval/exec.** `tests/test_code_hygiene.py` блокирует появление
+  `eval`, `exec`, `subprocess.Popen(shell=True)`, небезопасных исключений и
+  отсутствующих таймаутов. Любое отклонение ломает CI. 【F:tests/test_code_hygiene.py†L1-L183】
+* **Только timezone-aware время.** Используйте `datetime.now(timezone.utc)` и
+  `pendulum`-помощники, запрещены наивные `datetime.now()` — на это есть
+  проверки в коде и тестах (`test_security_sweep.py`).
 
-## Live profile requirements
+## Pipeline и проверки
 
-* Launching with `PROFILE=live` is blocked when the secrets store is missing or
-  does not contain the required keys. `app.startup_validation.validate_startup`
-  logs each blocking error and exits with status code `1`.
-* Mandatory secrets for the live profile are defined in
-  `configs/profile.live.yaml` and validated by `ensure_required_secrets`. Missing
-  entries prevent the service from starting.
-* `scripts/run_profile.py` also requires `LIVE_CONFIRM=I_KNOW_WHAT_I_AM_DOING`
-  and non-zero limits `MAX_TOTAL_NOTIONAL_USDT`, `MAX_OPEN_POSITIONS`,
-  `DAILY_LOSS_CAP_USDT` before launching the live profile. 【F:scripts/run_profile.py†L1-L99】【F:app/config/profiles.py†L154-L214】
+* GitHub Actions workflow `security-sweep` запускает `bandit` и `pip-audit` для
+  статического анализа и проверки зависимостей. Любая уязвимость или небезопасное
+  использование API блокирует merge. 【F:.github/workflows/ci.yml†L69-L119】
+* Скрипт `scripts/ci_secret_scan.py` выполняется на раннем этапе (`secret-scan`)
+  и ищет ключи/пароли высокой энтропии. Любой матч требует ручной проверки перед
+  продолжением пайплайна. 【F:.github/workflows/ci.yml†L9-L24】
+* `python -m app.services.self_check` интегрирован в CI и проверяет профиль,
+  переменные окружения, лимиты и наличие секретов до запуска acceptance.
 
-## Runtime guards
+## Практические рекомендации
 
-* Startup validation also checks for placeholder values, unsafe feature flags,
-  and critical filesystem paths before allowing the application to continue.
-  【F:app/startup_validation.py†L38-L185】
-* Risk, router, broker and reconciliation modules avoid placeholder constructs
-  (`pass`, `print`, `eval`, etc.). `tests/test_code_hygiene.py` enforces the
-  guardrail and additionally blocks HTTP calls without timeouts or silent
-  `except Exception`. 【F:tests/test_code_hygiene.py†L1-L183】
+1. При подготовке релиза заполняйте `.env.prod` только на целевом хосте и
+   добавляйте его в `.gitignore`.
+2. Регулярно ротируйте ключи и отмечайте дату в секции `meta` secrets store —
+   `SecretsStore.needs_rotation` подскажет о просроченных ключах. 【F:app/secrets_store.py†L150-L214】
+3. Никогда не отправляйте логи с секретами в внешние системы; для отладок
+   используйте redact-инструменты и проверяйте, что safe-mode включён.
+4. Перед любым live-выкатом убедитесь, что self-check, `make verify` и весь CI
+   зелёные — это единственный допустимый путь к merge.
 
-## Operator roles
-
-* The RBAC model recognises `viewer`, `auditor`, and `operator` roles. Only
-  operators may execute privileged actions such as `HOLD`, `RESUME`, or
-  `KILL`. Viewer and auditor tokens are strictly read-only and attempts to use
-  them for privileged endpoints are logged and rejected.
-* Operator tokens must be stored in the secrets store. `viewer` level accounts
-  are appropriate for dashboards, health checks, and audit snapshots.
-
-## Forbidden artefacts
-
-* Never commit raw API keys, secrets, authentication cookies, or Telegram
-  credentials. Use `make secrets-dump` tooling (see `scripts/`) to rotate and
-  provision secrets safely.
-* Do not add placeholder defaults such as `changeme` or `YOUR_NAME` to
-  production code paths. Runtime validation explicitly fails when placeholders
-  are detected.
-* All outbound HTTP requests must set explicit timeouts and rely on HTTPS with
-  certificate verification (the default behaviour of `requests`).
-
-## Continuous integration
-
-* The CI workflow (`.github/workflows/ci.yml`) contains a lightweight
-  `secret-scan` job that runs `scripts/ci_secret_scan.py` on every push and pull
-  request. The scanner searches the tracked files for high-entropy assignments
-  and private key blocks and fails the pipeline if a match is detected.
-* Unit and acceptance suites run after a successful secret scan to ensure no
-  regressions slip through.
-
-Follow these rules whenever preparing a new deployment or rotating credentials.
+Соблюдение этих правил критично: нарушение любого пункта приравнивается к блокеру
+для merge или запуска бота на реальные деньги.

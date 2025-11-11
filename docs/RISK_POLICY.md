@@ -1,55 +1,65 @@
 # Risk Policy
 
-Документ описывает обязательные лимиты и правила risk-guards для запуска PropBot
-в paper/testnet/live режимах.
+Документ фиксирует обязательные лимиты и автоматические срабатывания, которые
+должны быть включены перед запуском PropBot в paper/testnet/live режимах.
 
-## Дневной лимит убытков
+## Trading profiles и notional caps
 
-* Значение задаётся через `DAILY_LOSS_CAP_USDT` (обязательно для live). Лимит
-  хранится в `app/risk/daily_loss.py` и применяется как в risk accounting, так и в
-  UI бейджах. 【F:app/risk/daily_loss.py†L74-L193】
-* Нарушение лимита (`breached=true`) приводит к авто-HOLD и блокировке
-  автоторговли. `app/services/autopilot_guard.py` и `app/risk/auto_hold.py`
-  инициируют HOLD и записывают причину в audit лог. 【F:app/services/autopilot_guard.py†L70-L144】【F:app/risk/auto_hold.py†L26-L96】
-* Метрика `propbot_daily_loss_breached` и endpoint `/api/ui/daily_loss_status`
-  служат источником истины для дашборда и алертов. 【F:app/services/runtime_badges.py†L34-L125】【F:app/routers/ui.py†L571-L585】
+* Trading profile определяется `TRADING_PROFILE` или конфигами
+  `app/config/trading_profiles.py`. Для каждого профиля заданы жёсткие лимиты на
+  notional per order/per symbol/global и дневной убыток. 【F:app/config/trading_profiles.py†L13-L104】
+* `configs/profile.<profile>.yaml` дополняет caps профиля атрибутами
+  `risk_limits.max_single_position_usd`, `max_total_notional_usd`,
+  `daily_loss_cap_usd`, `max_drawdown_bps`. Все значения должны быть > 0 и не
+  противоречить лимитам trading profile (self-check проверяет порядок и границы).
+* Для overrides по символам и venue используйте переменные окружения
+  `MAX_POSITION_USDT__*`, `MAX_OPEN_ORDERS__*`, `MAX_NOTIONAL_PER_POSITION_USDT`.
+  Они применяются risk-gate'ом в `app/risk/accounting.py`. 【F:app/risk/accounting.py†L83-L169】
 
-## Совокупный ноционал и позиции
+## Daily loss и drawdown
 
-* Глобальный лимит открытого ноционала задаётся переменными
-  `MAX_TOTAL_NOTIONAL_USDT`/`MAX_TOTAL_NOTIONAL_USD`. Значение требуется для
-  live-профиля и проверяется при запуске (`scripts/run_profile.py`).
-* В runtime лимит применяется в `app/risk/core.py` и `app/services/risk.py`.
-  Нарушение приводит к отказу новых ордеров и потенциальному авто-HOLD после
-  нескольких окон троттлинга. 【F:app/risk/core.py†L360-L463】【F:app/services/risk.py†L180-L314】
-* Лимит на число одновременных позиций задаётся `MAX_OPEN_POSITIONS`. Значение
-  используется в `app/services/risk_guard.py` и UI отчётах. 【F:app/services/risk_guard.py†L236-L276】【F:app/services/operator_dashboard.py†L408-L666】
+* `DAILY_LOSS_CAP_USDT` и `DAILY_LOSS_CAP_ENABLED` активируют дневной стоп по
+  реализованному PnL. При breach autopilot переводит систему в HOLD, а статус
+  `daily_loss` отображается в UI и Prometheus. 【F:app/services/autopilot_guard.py†L70-L172】【F:app/services/runtime_badges.py†L34-L125】
+* `risk_limits.daily_loss_cap_usd` в профильном YAML должен быть меньше или равен
+  `daily_loss_limit` из trading profile. Это значение контролируется self-check
+  и `startup_validation`.
+* `risk_limits.max_drawdown_bps` задаёт относительный стоп (bps). Если дневной
+  дроудаун превышает порог, risk governor инициирует HOLD. 【F:app/services/risk.py†L180-L314】
 
-## Health guard
+## Safe mode и HOLD
 
-* Health guard активируется профилем (`app/config/profiles.py`) и следит за
-  маржинальными показателями через `app/risk/guards/health_guard.py`.
-* При переходе в состояние `CRITICAL` guard переводит runtime в HOLD с причиной
-  `ACCOUNT_HEALTH_CRITICAL`. Оператор обязан оценить маржинальные требования и
-  вручную снизить нагрузку. 【F:app/risk/guards/health_guard.py†L112-L181】
-* Для live запуска guard должен быть включён; `ensure_live_prerequisites`
-  блокирует старт, если флаг отключён в конфиге или env. 【F:app/config/profiles.py†L154-L214】
+* `SAFE_MODE=true` и `DRY_RUN_MODE=true` обязательны для первого запуска на любом
+  окружении. Ручной RESUME разрешён только после двухоператорного подтверждения.
+* Любой guard (risk caps, recon, watchdog, health guard) может вызвать
+  `engage_safety_hold(...)`, что фиксируется в audit логе и блокирует новые
+  заявки. 【F:app/services/safe_mode.py†L20-L134】【F:app/services/risk_guard.py†L236-L276】
+* Статус HOLD отображается в `/api/ui/status`, `/ui/dashboard`, Prometheus и
+  Telegram оповещениях. Оператор обязан устранить причину и пройти self-check
+  перед повторным RESUME.
 
-## Watchdog и auto-HOLD
+## Self-check и стартовые требования
 
-* Биржевой watchdog (`app/watchdog/broker_watchdog.py`) отслеживает задержки,
-  дисконнекты и ошибки. При `state=DOWN` или превышении порогов с флагом
-  auto-hold включается HOLD с причиной `EXCHANGE_WATCHDOG::<VENUE>::DOWN`.
-* Autopilot guard (`app/services/autopilot_guard.py`) агрегирует состояния
-  watchdog и дневного лимита, переводит runtime в HOLD и уведомляет операторов.
-* Все авто-HOLD события отображаются в `/api/ui/status`, Prometheus и Telegram
-  оповещениях. Перед ручным RESUME убедитесь, что первопричина устранена
-  (например, восстановлен стрим или обновлена маржа).
+* Перед запуском необходимо выполнить `python -m app.services.self_check` для
+  активного профиля. Чек проверяет лимиты, наличие секретов, конфиги и
+  валидность ENV. При статусе `FAIL` запуск запрещён.
+* `startup_validation.validate_startup()` вызывается при старте runtime и
+  блокирует unsafe конфигурации: отсутствие `APPROVE_TOKEN`, нулевые caps,
+  плейсхолдеры из `.env.prod.example`, несуществующие пути и live-режим без HOLD.
+  【F:app/startup_validation.py†L15-L214】
 
-## Операционные требования
+## Политика безопасности торговли
 
-* `LIVE_CONFIRM=I_KNOW_WHAT_I_AM_DOING` обязателен для `make run_live`.
-* Перед RESUME убедитесь, что дневной лимит не в `BREACH`, watchdog в `OK`, а
-  recon не сигнализирует расхождения. В противном случае auto-HOLD сработает
-  повторно сразу после возобновления торговли.
+* Торговля запрещена, если:
+  - дневной лимит в состоянии breach;
+  - recon сигнализирует расхождение выше допуска; 【F:app/services/recon_runner.py†L25-L152】
+  - watchdog переводит биржу в состояние `DOWN` и включён auto-hold; 【F:app/watchdog/broker_watchdog.py†L35-L190】
+  - self-check возвращает `FAIL` или `WARN` для критичных пунктов (секреты,
+    environment, risk);
+  - SAFE_MODE отключён без документированного окна обслуживания.
+* Любые override лимитов документируются в runbook и требуют ручной двойной
+  проверки двумя операторами.
 
+Эта политика обеспечивает, что даже в live-режиме бот торгует только в рамках
+чётко определённых лимитов и автоматически останавливается при малейших
+отклонениях.

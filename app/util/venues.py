@@ -5,9 +5,11 @@ VENUE_ALIASES = {
     "binance": "binance-um",
     "binance-um": "binance-um",
     "binance_um": "binance-um",
+    "binance_um_testnet": "binance-um-testnet",
     "okx": "okx-perp",
     "okx-perp": "okx-perp",
     "okx_perp": "okx-perp",
+    "okx_perp_testnet": "okx-perp-testnet",
     "paper": "paper",
 }
 

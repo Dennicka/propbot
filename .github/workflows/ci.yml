@@ -65,6 +65,42 @@ jobs:
           CI_TESTING: "1"
         run: python -m pytest -q tests/golden
 
+  self-check:
+    needs: golden-master
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Self-check (paper profile)
+        env:
+          PYTHONPATH: .
+          PROFILE: paper
+          TRADING_PROFILE: paper
+          APPROVE_TOKEN: ci-approve
+          AUTH_ENABLED: 'false'
+          API_TOKEN: ci-token
+          DRY_RUN_MODE: 'true'
+          SAFE_MODE: 'true'
+          TELEGRAM_ENABLE: 'false'
+          AUTO_HEDGE_ENABLED: 'false'
+          MAX_OPEN_POSITIONS: '3'
+          MAX_NOTIONAL_PER_POSITION_USDT: '1000'
+          MAX_TOTAL_NOTIONAL_USDT: '5000'
+          MAX_LEVERAGE: '3'
+          RUNTIME_STATE_PATH: ${{ github.workspace }}/.selfcheck/runtime_state.json
+          POSITIONS_STORE_PATH: ${{ github.workspace }}/.selfcheck/positions.json
+          HEDGE_LOG_PATH: ${{ github.workspace }}/.selfcheck/hedge_log.json
+          PNL_HISTORY_PATH: ${{ github.workspace }}/.selfcheck/pnl_history.json
+          OPS_ALERTS_FILE: ${{ github.workspace }}/.selfcheck/ops_alerts.json
+          OPS_APPROVALS_FILE: ${{ github.workspace }}/.selfcheck/ops_approvals.json
+        run: |
+          mkdir -p .selfcheck
+          python -m app.services.self_check --profile paper
+
   security-sweep:
     needs: lint
     runs-on: ubuntu-latest
@@ -83,7 +119,7 @@ jobs:
             --ignore-vuln GHSA-2c2j-9gv5-cj73
 
   acceptance:
-    needs: [test, security-sweep, golden-master]
+    needs: [test, security-sweep, golden-master, self-check]
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
