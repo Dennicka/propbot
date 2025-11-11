@@ -43,6 +43,7 @@ from ..risk.exposure_caps import (
     snapshot_entry,
 )
 from ..risk.freeze import get_freeze_registry
+from ..util.quantization import QuantizationError, ensure_order_quantized
 
 
 LOGGER = logging.getLogger(__name__)
@@ -469,6 +470,40 @@ class OrderRouter:
         qty = float(order_payload.get("qty", qty))
         price_value = order_payload.get("price", price)
         price = float(price_value) if price_value is not None else None
+
+        specs = validator.load_specs(order_payload)
+        try:
+            quantized_qty, quantized_price = ensure_order_quantized(
+                qty=qty,
+                price=price,
+                step_size=specs.lot if specs else None,
+                tick_size=specs.tick if specs else None,
+                min_notional=specs.min_notional if specs else None,
+            )
+        except QuantizationError as exc:
+            LOGGER.warning(
+                "order_quantization_failed",
+                extra={
+                    "log_module": __name__,
+                    "log_function": "submit_order",
+                    "operation": "quantize_order",
+                    "profile": profile.name,
+                    "venue": venue,
+                    "symbol": symbol,
+                    "strategy": strategy,
+                    "reason": exc.reason,
+                    "field": exc.field,
+                    "value": str(exc.value) if exc.value is not None else None,
+                    "limit": str(exc.limit) if exc.limit is not None else None,
+                },
+            )
+            raise PretradeValidationError(exc.reason, details=order_payload) from exc
+
+        qty = float(quantized_qty)
+        price = float(quantized_price) if quantized_price is not None else None
+        order_payload["qty"] = qty
+        if price is not None:
+            order_payload["price"] = price
 
         snapshot = collect_snapshot()
         entry, _, _ = snapshot_entry(snapshot, symbol=symbol, venue=venue)
