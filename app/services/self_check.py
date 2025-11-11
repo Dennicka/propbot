@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from enum import Enum
+import logging
 import os
 import socket
+import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Iterable, Sequence
 from urllib.parse import urlparse
@@ -23,6 +25,9 @@ from ..profile_config import (
 from ..secrets_store import SecretsStore
 from ..startup_validation import collect_startup_errors
 from ..util.venues import VENUE_ALIASES
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CheckStatus(str, Enum):
@@ -134,6 +139,13 @@ def _check_profile_config(profile_name: str) -> tuple[ProfileConfig | None, Chec
         try:
             store = SecretsStore(secrets_path)
         except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.exception(
+                "self_check.secrets_store_load_failed",
+                extra={
+                    "step": "profile.secrets",
+                    "secrets_path": secrets_path,
+                },
+            )
             return profile_cfg, CheckResult(
                 name="profile.secrets",
                 status=CheckStatus.FAIL,
@@ -170,7 +182,15 @@ def _check_runtime_config(profile_name: str) -> CheckResult:
         )
     try:
         loaded = load_app_config(config_path)
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.exception(
+            "self_check.runtime_config_load_failed",
+            extra={
+                "step": "config.runtime",
+                "profile": profile_name,
+                "config_path": str(config_path),
+            },
+        )
         return CheckResult(
             name="config.runtime",
             status=CheckStatus.FAIL,
@@ -419,7 +439,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser.parse_args(list(argv) if argv is not None else None)
     report = run_self_check(profile=args.profile, skip_network=args.skip_network)
-    print(_format_report(report))
+    formatted_report = _format_report(report)
+    LOGGER.info(
+        "self_check.report",
+        extra={
+            "profile": report.profile,
+            "overall": report.overall_status().value,
+        },
+    )
+    sys.stdout.write(f"{formatted_report}\n")
     return 1 if report.has_failures() else 0
 
 
