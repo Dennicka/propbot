@@ -63,6 +63,7 @@ from .services.autopilot_guard import setup_autopilot_guard
 from .services.partial_hedge_runner import setup_partial_hedge_runner
 from .services.recon_runner import setup_recon_runner
 from .services import runtime as runtime_service
+from .services.trading_profile import get_trading_profile
 from .execution.stuck_order_resolver import setup_stuck_resolver
 
 
@@ -107,6 +108,17 @@ def _startup_timeout_seconds(state) -> float:
 def create_app() -> FastAPI:
     ledger.init_db()
     validate_startup()
+    profile = get_trading_profile()
+    logger.info(
+        "Trading profile active: %s limits(order=%s symbol=%s global=%s daily_loss=%s) allow_new_orders=%s closures_only=%s",
+        profile.name,
+        profile.max_notional_per_order,
+        profile.max_notional_per_symbol,
+        profile.max_notional_global,
+        profile.daily_loss_limit,
+        profile.allow_new_orders,
+        profile.allow_closures_only,
+    )
     try:
         profile_cfg = load_profile_config()
     except ProfileConfigError as exc:
