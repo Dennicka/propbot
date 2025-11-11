@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import logging
 import time
-from typing import Any, Literal, Mapping, NamedTuple, Sequence
+from typing import Any, Iterable, Literal, Mapping, NamedTuple, Sequence
 
 from .. import ledger
 from ..services import runtime
@@ -21,7 +21,7 @@ _CONFIG_OVERRIDE: _ReconConfig | None = None
 class ReconDrift:
     """Normalized reconciliation drift discovered during a recon sweep."""
 
-    kind: Literal["BALANCE", "POSITION", "ORDER"]
+    kind: Literal["BALANCE", "POSITION", "ORDER", "PNL"]
     venue: str
     symbol: str | None
     local: Any
@@ -60,6 +60,14 @@ class _ReconConfig:
     position_size_warn: Decimal
     position_size_critical: Decimal
     order_critical_missing: bool
+    pnl_warn_usd: Decimal
+    pnl_critical_usd: Decimal
+    pnl_relative_warn: Decimal
+    pnl_relative_critical: Decimal
+    fee_warn_usd: Decimal
+    fee_critical_usd: Decimal
+    funding_warn_usd: Decimal
+    funding_critical_usd: Decimal
 
 
 _DEFAULT_CONFIG = _ReconConfig(
@@ -72,6 +80,14 @@ _DEFAULT_CONFIG = _ReconConfig(
     position_size_warn=Decimal("0.001"),
     position_size_critical=Decimal("0.01"),
     order_critical_missing=True,
+    pnl_warn_usd=Decimal("10"),
+    pnl_critical_usd=Decimal("50"),
+    pnl_relative_warn=Decimal("0.02"),
+    pnl_relative_critical=Decimal("0.05"),
+    fee_warn_usd=Decimal("5"),
+    fee_critical_usd=Decimal("20"),
+    funding_warn_usd=Decimal("5"),
+    funding_critical_usd=Decimal("25"),
 )
 
 
@@ -96,6 +112,43 @@ class _OrderEntry:
     price: Decimal | None
     notional: Decimal | None
     status: str | None
+
+
+@dataclass(slots=True)
+class _PnLTotals:
+    venue: str
+    symbol: str
+    realized: Decimal
+    fees: Decimal
+    funding: Decimal
+    rebates: Decimal
+    net: Decimal
+    notional: Decimal
+    trades: int
+    funding_events: int
+    supports_fees: bool
+    supports_funding: bool
+
+
+def compare_pnl_ledgers(
+    local: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    remote: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+) -> list[ReconIssue]:
+    """Compare realized PnL, fees and funding across ledgers."""
+
+    config = _get_recon_config()
+    local_entries = _normalise_pnl_entries(local)
+    remote_entries = _normalise_pnl_entries(remote)
+
+    issues: list[ReconIssue] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, symbol in sorted(keys):
+        local_entry = local_entries.get((venue, symbol))
+        remote_entry = remote_entries.get((venue, symbol))
+        issue = _pnl_issue(venue, symbol, local_entry, remote_entry, config)
+        if issue is not None:
+            issues.append(issue)
+    return issues
 
 
 def compare_positions(
@@ -278,6 +331,8 @@ def reconcile_once(ctx: object | None = None) -> ReconResult:
     remote_balances = _load_remote_balances(ctx)
     local_orders = _load_local_orders(ctx)
     remote_orders = _load_remote_orders(ctx)
+    local_pnl = _load_local_pnl(ctx)
+    remote_pnl = _load_remote_pnl(ctx)
 
     global _CONFIG_OVERRIDE
     previous_override = _CONFIG_OVERRIDE
@@ -287,6 +342,7 @@ def reconcile_once(ctx: object | None = None) -> ReconResult:
         issues.extend(compare_positions(local_positions, remote_positions))
         issues.extend(compare_balances(local_balances, remote_balances))
         issues.extend(compare_open_orders(local_orders, remote_orders))
+        issues.extend(compare_pnl_ledgers(local_pnl, remote_pnl))
     finally:
         _CONFIG_OVERRIDE = previous_override
 
@@ -568,6 +624,27 @@ def _load_remote_orders(ctx: object | None) -> Sequence[Mapping[str, object]]:
     return []
 
 
+def _load_local_pnl(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "local_pnl")
+    if provider is not None:
+        return provider
+    try:
+        from ..ledger import pnl_sources
+
+        pnl_ledger = pnl_sources.build_ledger_from_history(ctx)
+        return _ledger_rows_from_pnl(pnl_ledger, supports_fees=True, supports_funding=True)
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_pnl_failed")
+        return []
+
+
+def _load_remote_pnl(ctx: object | None) -> Sequence[Mapping[str, object]]:
+    provider = _resolve_provider(ctx, "remote_pnl")
+    if provider is not None:
+        return provider
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -623,6 +700,27 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
         bool(order_missing_raw) if order_missing_raw is not None else config.order_critical_missing
     )
 
+    pnl_warn = _coerce_decimal(_cfg_get(recon_cfg, "pnl_warn_usd"), config.pnl_warn_usd)
+    pnl_critical = _coerce_decimal(
+        _cfg_get(recon_cfg, "pnl_critical_usd"), config.pnl_critical_usd
+    )
+    pnl_rel_warn = _coerce_decimal(
+        _cfg_get(recon_cfg, "pnl_relative_warn"), config.pnl_relative_warn
+    )
+    pnl_rel_critical = _coerce_decimal(
+        _cfg_get(recon_cfg, "pnl_relative_critical"), config.pnl_relative_critical
+    )
+    fee_warn = _coerce_decimal(_cfg_get(recon_cfg, "fee_warn_usd"), config.fee_warn_usd)
+    fee_critical = _coerce_decimal(
+        _cfg_get(recon_cfg, "fee_critical_usd"), config.fee_critical_usd
+    )
+    funding_warn = _coerce_decimal(
+        _cfg_get(recon_cfg, "funding_warn_usd"), config.funding_warn_usd
+    )
+    funding_critical = _coerce_decimal(
+        _cfg_get(recon_cfg, "funding_critical_usd"), config.funding_critical_usd
+    )
+
     return _ReconConfig(
         epsilon_position=epsilon_position or config.epsilon_position,
         epsilon_balance=epsilon_balance or config.epsilon_balance,
@@ -633,6 +731,14 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
         position_size_warn=position_warn or config.position_size_warn,
         position_size_critical=position_critical or config.position_size_critical,
         order_critical_missing=order_missing_bool,
+        pnl_warn_usd=pnl_warn or config.pnl_warn_usd,
+        pnl_critical_usd=pnl_critical or config.pnl_critical_usd,
+        pnl_relative_warn=pnl_rel_warn or config.pnl_relative_warn,
+        pnl_relative_critical=pnl_rel_critical or config.pnl_relative_critical,
+        fee_warn_usd=fee_warn or config.fee_warn_usd,
+        fee_critical_usd=fee_critical or config.fee_critical_usd,
+        funding_warn_usd=funding_warn or config.funding_warn_usd,
+        funding_critical_usd=funding_critical or config.funding_critical_usd,
     )
 
 
@@ -837,6 +943,40 @@ def detect_order_drifts(
     return drifts
 
 
+def detect_pnl_drifts(
+    local_pnl: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    remote_pnl: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+    cfg: object | None,
+) -> list[ReconDrift]:
+    """Detect realized PnL, fee and funding divergences."""
+
+    config = _get_recon_config(cfg)
+    ts = time.time()
+    local_entries = _normalise_pnl_entries(local_pnl)
+    remote_entries = _normalise_pnl_entries(remote_pnl)
+    drifts: list[ReconDrift] = []
+    keys = set(local_entries) | set(remote_entries)
+    for venue, symbol in sorted(keys):
+        local_entry = local_entries.get((venue, symbol))
+        remote_entry = remote_entries.get((venue, symbol))
+        severity, delta_payload = _pnl_delta(local_entry, remote_entry, config)
+        if severity == "INFO":
+            continue
+        drifts.append(
+            ReconDrift(
+                kind="PNL",
+                venue=venue,
+                symbol=symbol,
+                local=_pnl_payload(local_entry),
+                remote=_pnl_payload(remote_entry),
+                delta=delta_payload,
+                severity=severity,
+                ts=ts,
+            )
+        )
+    return drifts
+
+
 def _order_status_drift(
     venue: str,
     order_key: str,
@@ -916,6 +1056,262 @@ def _severity_for_delta(
     if abs_qty >= config.epsilon_position:
         return "WARN"
     return "INFO"
+
+
+def _normalise_pnl_entries(
+    payload: Mapping[tuple[str, str], object] | Sequence[Mapping[str, object]] | None,
+) -> dict[tuple[str, str], _PnLTotals]:
+    entries: dict[tuple[str, str], _PnLTotals] = {}
+    if payload is None:
+        return entries
+    if isinstance(payload, Mapping):
+        iterable = payload.items()
+        for (venue, symbol), data in iterable:
+            if not isinstance(data, Mapping):
+                continue
+            norm_venue = _normalise_venue(venue)
+            norm_symbol = _normalise_symbol(symbol)
+            if not norm_venue or not norm_symbol:
+                continue
+            entries[(norm_venue, norm_symbol)] = _coerce_pnl_row(norm_venue, norm_symbol, data)
+        return entries
+    for row in payload:
+        if not isinstance(row, Mapping):
+            continue
+        norm_venue = _normalise_venue(row.get("venue"))
+        norm_symbol = _normalise_symbol(row.get("symbol"))
+        if not norm_venue or not norm_symbol:
+            continue
+        entries[(norm_venue, norm_symbol)] = _coerce_pnl_row(norm_venue, norm_symbol, row)
+    return entries
+
+
+def _coerce_pnl_row(venue: str, symbol: str, row: Mapping[str, object]) -> _PnLTotals:
+    realized = _to_decimal(row.get("realized") or row.get("realized_pnl"), default=Decimal("0"))
+    fees = _to_decimal(row.get("fees") or row.get("fee"), default=Decimal("0"))
+    funding = _to_decimal(row.get("funding"), default=Decimal("0"))
+    rebates = _to_decimal(row.get("rebates") or row.get("rebate"), default=Decimal("0"))
+    net_value = _to_decimal(row.get("net") or row.get("net_pnl"), default=None)
+    if net_value is None:
+        net_value = (realized or Decimal("0")) - (fees or Decimal("0")) + (funding or Decimal("0")) + (
+            rebates or Decimal("0")
+        )
+    notional = _to_decimal(row.get("notional") or row.get("volume_notional"), default=Decimal("0"))
+    trades_raw = row.get("trade_count") or row.get("trades") or row.get("fills")
+    funding_raw = row.get("funding_events") or row.get("funding_count")
+    try:
+        trades = int(trades_raw or 0)
+    except (TypeError, ValueError):
+        trades = 0
+    try:
+        funding_events = int(funding_raw or 0)
+    except (TypeError, ValueError):
+        funding_events = 0
+    supports_fees = bool(row.get("supports_fees", True))
+    supports_funding = bool(row.get("supports_funding", True))
+    return _PnLTotals(
+        venue=venue,
+        symbol=symbol,
+        realized=realized or Decimal("0"),
+        fees=fees or Decimal("0"),
+        funding=funding or Decimal("0"),
+        rebates=rebates or Decimal("0"),
+        net=net_value or Decimal("0"),
+        notional=notional or Decimal("0"),
+        trades=trades,
+        funding_events=funding_events,
+        supports_fees=supports_fees,
+        supports_funding=supports_funding,
+    )
+
+
+def _pnl_issue(
+    venue: str,
+    symbol: str,
+    local_entry: _PnLTotals | None,
+    remote_entry: _PnLTotals | None,
+    config: _ReconConfig,
+) -> ReconIssue | None:
+    if local_entry is None and remote_entry is None:
+        return None
+    if remote_entry is None:
+        return ReconIssue(
+            kind="PNL",
+            venue=venue,
+            symbol=symbol,
+            severity="CRITICAL",
+            code="PNL_REMOTE_MISSING",
+            details="remote ledger snapshot missing",
+        )
+    if local_entry is None:
+        return ReconIssue(
+            kind="PNL",
+            venue=venue,
+            symbol=symbol,
+            severity="CRITICAL",
+            code="PNL_LOCAL_MISSING",
+            details="local ledger snapshot missing",
+        )
+
+    severity, delta_payload = _pnl_delta(local_entry, remote_entry, config)
+    if severity == "INFO":
+        return None
+    details = (
+        f"net_delta={delta_payload['net']:.6f} realized_delta={delta_payload['realized']:.6f} "
+        f"fee_delta={delta_payload['fees']:.6f} funding_delta={delta_payload['funding']:.6f}"
+    )
+    return ReconIssue(
+        kind="PNL",
+        venue=venue,
+        symbol=symbol,
+        severity=severity,
+        code="PNL_MISMATCH",
+        details=details,
+    )
+
+
+def _pnl_delta(
+    local_entry: _PnLTotals | None,
+    remote_entry: _PnLTotals | None,
+    config: _ReconConfig,
+) -> tuple[str, dict[str, float]]:
+    if local_entry is None or remote_entry is None:
+        return "CRITICAL", {"net": 0.0, "realized": 0.0, "fees": 0.0, "funding": 0.0}
+
+    net_delta = remote_entry.net - local_entry.net
+    realized_delta = remote_entry.realized - local_entry.realized
+    fee_delta = remote_entry.fees - local_entry.fees
+    funding_delta = remote_entry.funding - local_entry.funding
+
+    severity = _pnl_severity(net_delta, local_entry, remote_entry, config)
+
+    if local_entry.supports_fees and remote_entry.supports_fees:
+        fee_severity = _pnl_threshold(abs(fee_delta), config.fee_warn_usd, config.fee_critical_usd)
+        severity = _max_severity(severity, fee_severity)
+    if local_entry.supports_funding and remote_entry.supports_funding:
+        funding_severity = _pnl_threshold(
+            abs(funding_delta), config.funding_warn_usd, config.funding_critical_usd
+        )
+        severity = _max_severity(severity, funding_severity)
+
+    delta_payload = {
+        "net": float(net_delta),
+        "realized": float(realized_delta),
+        "fees": float(fee_delta),
+        "funding": float(funding_delta),
+    }
+    return severity, delta_payload
+
+
+def _pnl_payload(entry: _PnLTotals | None) -> dict[str, object] | None:
+    if entry is None:
+        return None
+    return {
+        "net": float(entry.net),
+        "realized": float(entry.realized),
+        "fees": float(entry.fees),
+        "funding": float(entry.funding),
+        "rebates": float(entry.rebates),
+        "notional": float(entry.notional),
+        "trades": entry.trades,
+        "funding_events": entry.funding_events,
+        "supports_fees": entry.supports_fees,
+        "supports_funding": entry.supports_funding,
+    }
+
+
+def _ledger_rows_from_pnl(
+    pnl_ledger, *, supports_fees: bool, supports_funding: bool
+) -> list[dict[str, object]]:
+    entries: dict[tuple[str, str], _PnLTotals] = {}
+    for record in pnl_ledger.iter_entries():
+        venue = _normalise_venue(getattr(record, "venue", ""))
+        symbol = _normalise_symbol(getattr(record, "symbol", ""))
+        if not venue or not symbol:
+            continue
+        totals = entries.setdefault(
+            (venue, symbol),
+            _PnLTotals(
+                venue=venue,
+                symbol=symbol,
+                realized=Decimal("0"),
+                fees=Decimal("0"),
+                funding=Decimal("0"),
+                rebates=Decimal("0"),
+                net=Decimal("0"),
+                notional=Decimal("0"),
+                trades=0,
+                funding_events=0,
+                supports_fees=supports_fees,
+                supports_funding=supports_funding,
+            ),
+        )
+        totals.realized += getattr(record, "realized_pnl", Decimal("0"))
+        totals.fees += getattr(record, "fee", Decimal("0"))
+        totals.funding += getattr(record, "funding", Decimal("0"))
+        totals.rebates += getattr(record, "rebate", Decimal("0"))
+        totals.notional += getattr(record, "notional", Decimal("0"))
+        totals.net = totals.realized - totals.fees + totals.funding + totals.rebates
+        kind = str(getattr(record, "kind", "")).upper()
+        if kind == "FILL":
+            totals.trades += 1
+        elif kind == "FUNDING":
+            totals.funding_events += 1
+    snapshot: list[dict[str, object]] = []
+    for totals in entries.values():
+        snapshot.append(
+            {
+                "venue": totals.venue,
+                "symbol": totals.symbol,
+                "realized": totals.realized,
+                "fees": totals.fees,
+                "funding": totals.funding,
+                "rebates": totals.rebates,
+                "net": totals.net,
+                "notional": totals.notional,
+                "trade_count": totals.trades,
+                "funding_events": totals.funding_events,
+                "supports_fees": totals.supports_fees,
+                "supports_funding": totals.supports_funding,
+            }
+        )
+    return snapshot
+
+
+def _pnl_severity(
+    net_delta: Decimal,
+    local_entry: _PnLTotals,
+    remote_entry: _PnLTotals,
+    config: _ReconConfig,
+) -> str:
+    abs_delta = abs(net_delta)
+    severity = _pnl_threshold(abs_delta, config.pnl_warn_usd, config.pnl_critical_usd)
+    reference = max(
+        abs(local_entry.net),
+        abs(remote_entry.net),
+        abs(local_entry.notional),
+        Decimal("1"),
+    )
+    if reference > 0:
+        ratio = abs_delta / reference
+        relative_severity = _pnl_threshold(
+            ratio, config.pnl_relative_warn, config.pnl_relative_critical
+        )
+        severity = _max_severity(severity, relative_severity)
+    return severity
+
+
+def _pnl_threshold(delta: Decimal, warn: Decimal, critical: Decimal) -> str:
+    if delta >= critical:
+        return "CRITICAL"
+    if delta >= warn:
+        return "WARN"
+    return "INFO"
+
+
+def _max_severity(current: str, other: str) -> str:
+    order = {"INFO": 0, "WARN": 1, "CRITICAL": 2}
+    return current if order.get(current, 0) >= order.get(other, 0) else other
 
 
 def _resolve_provider(ctx: object | None, name: str):
@@ -1010,8 +1406,10 @@ __all__ = [
     "detect_balance_drifts",
     "detect_position_drifts",
     "detect_order_drifts",
+    "detect_pnl_drifts",
     "compare_positions",
     "compare_balances",
     "compare_open_orders",
+    "compare_pnl_ledgers",
     "reconcile_once",
 ]

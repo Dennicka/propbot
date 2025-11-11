@@ -1,7 +1,13 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.recon.core import detect_balance_drifts, detect_order_drifts, detect_position_drifts
+from app.recon.core import (
+    compare_pnl_ledgers,
+    detect_balance_drifts,
+    detect_order_drifts,
+    detect_pnl_drifts,
+    detect_position_drifts,
+)
 
 
 def _cfg(
@@ -11,6 +17,14 @@ def _cfg(
     position_warn: str = "0.001",
     position_critical: str = "0.01",
     order_critical_missing: bool = True,
+    pnl_warn: str = "5",
+    pnl_critical: str = "20",
+    pnl_rel_warn: str = "0.01",
+    pnl_rel_critical: str = "0.05",
+    fee_warn: str = "2",
+    fee_critical: str = "10",
+    funding_warn: str = "2",
+    funding_critical: str = "10",
 ):
     return SimpleNamespace(
         cfg=SimpleNamespace(
@@ -20,6 +34,14 @@ def _cfg(
                 position_size_warn=Decimal(position_warn),
                 position_size_critical=Decimal(position_critical),
                 order_critical_missing=order_critical_missing,
+                pnl_warn_usd=Decimal(pnl_warn),
+                pnl_critical_usd=Decimal(pnl_critical),
+                pnl_relative_warn=Decimal(pnl_rel_warn),
+                pnl_relative_critical=Decimal(pnl_rel_critical),
+                fee_warn_usd=Decimal(fee_warn),
+                fee_critical_usd=Decimal(fee_critical),
+                funding_warn_usd=Decimal(funding_warn),
+                funding_critical_usd=Decimal(funding_critical),
             )
         )
     )
@@ -120,3 +142,92 @@ def test_detect_order_drifts_flags_orphans_and_stale() -> None:
     assert ("local", "CRITICAL") in kinds  # orphan remote order
     stale = [drift for drift in drifts if drift.delta.get("note")]
     assert stale and stale[0].severity in {"WARN", "CRITICAL"}
+
+
+def test_detect_pnl_drifts_respects_thresholds() -> None:
+    cfg = _cfg(
+        pnl_warn="5",
+        pnl_critical="25",
+        pnl_rel_warn="1",
+        pnl_rel_critical="2",
+        fee_warn="1",
+        fee_critical="5",
+    )
+    local = [
+        {
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "realized": Decimal("10"),
+            "fees": Decimal("1"),
+            "funding": Decimal("0"),
+            "rebates": Decimal("0"),
+            "net": Decimal("9"),
+            "supports_fees": True,
+            "supports_funding": True,
+        }
+    ]
+    remote_warn = [
+        {
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "realized": Decimal("16"),
+            "fees": Decimal("1"),
+            "funding": Decimal("0"),
+            "rebates": Decimal("0"),
+            "net": Decimal("15"),
+            "supports_fees": True,
+            "supports_funding": True,
+        }
+    ]
+    warn = detect_pnl_drifts(local, remote_warn, cfg)
+    assert warn and warn[0].severity == "WARN"
+
+    remote_crit = [
+        {
+            "venue": "binance",
+            "symbol": "BTCUSDT",
+            "realized": Decimal("50"),
+            "fees": Decimal("1"),
+            "funding": Decimal("0"),
+            "rebates": Decimal("0"),
+            "net": Decimal("49"),
+            "supports_fees": True,
+            "supports_funding": True,
+        }
+    ]
+    critical = detect_pnl_drifts(local, remote_crit, cfg)
+    assert critical and critical[0].severity == "CRITICAL"
+
+
+def test_compare_pnl_ledgers_flags_missing_remote() -> None:
+    local = [
+        {
+            "venue": "okx",
+            "symbol": "ETHUSDT",
+            "realized": Decimal("5"),
+            "fees": Decimal("0.5"),
+            "funding": Decimal("0"),
+            "rebates": Decimal("0"),
+            "net": Decimal("4.5"),
+            "supports_fees": True,
+            "supports_funding": True,
+        }
+    ]
+    issues = compare_pnl_ledgers(local, [],)
+    assert issues and issues[0].code == "PNL_REMOTE_MISSING"
+
+    remote = [
+        {
+            "venue": "okx",
+            "symbol": "ETHUSDT",
+            "realized": Decimal("8"),
+            "fees": Decimal("0.5"),
+            "funding": Decimal("0"),
+            "rebates": Decimal("0"),
+            "net": Decimal("7.5"),
+            "supports_fees": True,
+            "supports_funding": True,
+        }
+    ]
+    mismatches = compare_pnl_ledgers(local, remote)
+    assert mismatches and mismatches[0].kind == "PNL"
