@@ -8,6 +8,7 @@ from dataclasses import is_dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from types import SimpleNamespace
 
 import secrets
 import time
@@ -251,6 +252,9 @@ class GoldenScenarioRunner:
         from app.risk import exposure_caps as exposure_caps_module
 
         class _PretradeValidatorStub:
+            def load_specs(self, payload: Mapping[str, Any]) -> Any:
+                return SimpleNamespace(tick=None, lot=None, min_notional=None)
+
             def validate(
                 self, payload: Mapping[str, Any]
             ) -> tuple[bool, str | None, Mapping[str, Any] | None]:

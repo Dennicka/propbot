@@ -76,18 +76,12 @@ def ensure_order_quantized(
     if step_dec is not None:
         floored_qty = _floor_to_step(qty_dec, step_dec)
         if floored_qty <= 0:
-            raise QuantizationError(
-                "qty_below_step", field="qty", value=qty_dec, limit=step_dec
-            )
+            raise QuantizationError("qty_below_step", field="qty", value=qty_dec, limit=step_dec)
         if _differs(floored_qty, qty_dec):
-            raise QuantizationError(
-                "qty_step", field="qty", value=qty_dec, limit=step_dec
-            )
+            raise QuantizationError("qty_step", field="qty", value=qty_dec, limit=step_dec)
     min_qty_dec = _to_positive_decimal(min_qty)
     if min_qty_dec is not None and qty_dec + _EPSILON < min_qty_dec:
-        raise QuantizationError(
-            "min_qty", field="qty", value=qty_dec, limit=min_qty_dec
-        )
+        raise QuantizationError("min_qty", field="qty", value=qty_dec, limit=min_qty_dec)
 
     price_dec: Decimal | None = None
     if price is not None:
