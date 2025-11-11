@@ -701,9 +701,7 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
     )
 
     pnl_warn = _coerce_decimal(_cfg_get(recon_cfg, "pnl_warn_usd"), config.pnl_warn_usd)
-    pnl_critical = _coerce_decimal(
-        _cfg_get(recon_cfg, "pnl_critical_usd"), config.pnl_critical_usd
-    )
+    pnl_critical = _coerce_decimal(_cfg_get(recon_cfg, "pnl_critical_usd"), config.pnl_critical_usd)
     pnl_rel_warn = _coerce_decimal(
         _cfg_get(recon_cfg, "pnl_relative_warn"), config.pnl_relative_warn
     )
@@ -711,12 +709,8 @@ def _get_recon_config(ctx: object | None = None) -> _ReconConfig:
         _cfg_get(recon_cfg, "pnl_relative_critical"), config.pnl_relative_critical
     )
     fee_warn = _coerce_decimal(_cfg_get(recon_cfg, "fee_warn_usd"), config.fee_warn_usd)
-    fee_critical = _coerce_decimal(
-        _cfg_get(recon_cfg, "fee_critical_usd"), config.fee_critical_usd
-    )
-    funding_warn = _coerce_decimal(
-        _cfg_get(recon_cfg, "funding_warn_usd"), config.funding_warn_usd
-    )
+    fee_critical = _coerce_decimal(_cfg_get(recon_cfg, "fee_critical_usd"), config.fee_critical_usd)
+    funding_warn = _coerce_decimal(_cfg_get(recon_cfg, "funding_warn_usd"), config.funding_warn_usd)
     funding_critical = _coerce_decimal(
         _cfg_get(recon_cfg, "funding_critical_usd"), config.funding_critical_usd
     )
@@ -1093,8 +1087,11 @@ def _coerce_pnl_row(venue: str, symbol: str, row: Mapping[str, object]) -> _PnLT
     rebates = _to_decimal(row.get("rebates") or row.get("rebate"), default=Decimal("0"))
     net_value = _to_decimal(row.get("net") or row.get("net_pnl"), default=None)
     if net_value is None:
-        net_value = (realized or Decimal("0")) - (fees or Decimal("0")) + (funding or Decimal("0")) + (
-            rebates or Decimal("0")
+        net_value = (
+            (realized or Decimal("0"))
+            - (fees or Decimal("0"))
+            + (funding or Decimal("0"))
+            + (rebates or Decimal("0"))
         )
     notional = _to_decimal(row.get("notional") or row.get("volume_notional"), default=Decimal("0"))
     trades_raw = row.get("trade_count") or row.get("trades") or row.get("fills")

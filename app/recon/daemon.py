@@ -472,10 +472,7 @@ def _normalise_remote_fill(venue: str, payload: object) -> Mapping[str, object] 
     if not isinstance(payload, Mapping):
         return None
     symbol = str(
-        payload.get("symbol")
-        or payload.get("instId")
-        or payload.get("instrument")
-        or ""
+        payload.get("symbol") or payload.get("instId") or payload.get("instrument") or ""
     ).upper()
     if not symbol:
         return None
@@ -495,9 +492,7 @@ def _normalise_remote_fill(venue: str, payload: object) -> Mapping[str, object] 
             side = "sell"
     fee = payload.get("fee") or payload.get("commission") or payload.get("feePaid")
     fee_asset = (
-        payload.get("fee_asset")
-        or payload.get("feeCurrency")
-        or payload.get("commissionAsset")
+        payload.get("fee_asset") or payload.get("feeCurrency") or payload.get("commissionAsset")
     )
     ts_value = payload.get("ts") or payload.get("timestamp") or payload.get("time")
     iso_ts = _isoformat_ts(ts_value)
@@ -546,6 +541,7 @@ class _StaticPnLSource:
 
     def fetch_events(self, **_) -> list[Mapping[str, object]]:
         return list(self._events)
+
 
 def _ctx_recon_config(ctx) -> object:
     if ctx is None:

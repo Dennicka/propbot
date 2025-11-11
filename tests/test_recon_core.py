@@ -213,7 +213,10 @@ def test_compare_pnl_ledgers_flags_missing_remote() -> None:
             "supports_funding": True,
         }
     ]
-    issues = compare_pnl_ledgers(local, [],)
+    issues = compare_pnl_ledgers(
+        local,
+        [],
+    )
     assert issues and issues[0].code == "PNL_REMOTE_MISSING"
 
     remote = [
