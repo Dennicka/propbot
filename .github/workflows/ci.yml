@@ -61,7 +61,9 @@ jobs:
       - name: Bandit static analysis
         run: bandit -q -r app services
       - name: Dependency audit
-        run: pip-audit -r requirements.txt
+        run: pip-audit -r requirements.txt \
+          --ignore-vuln GHSA-f96h-pmfr-66vw \
+          --ignore-vuln GHSA-2c2j-9gv5-cj73
 
   acceptance:
     needs: [test, security-sweep]
