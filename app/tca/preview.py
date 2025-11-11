@@ -69,7 +69,10 @@ def _tier_table_from_config(config) -> TierTable | None:
                 else:
                     try:
                         tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
-                    except Exception:  # pragma: no cover - defensive
+                    except (AttributeError, TypeError, ValueError) as exc:
+                        LOGGER.warning(
+                            "TCA preview: failed to serialize tier entry %r", entry, exc_info=exc
+                        )
                         continue
         if tier_entries:
             mapping[str(venue)] = tier_entries
