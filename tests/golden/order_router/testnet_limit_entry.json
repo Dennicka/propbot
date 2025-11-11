@@ -1,0 +1,64 @@
+{
+  "name": "order_router_testnet_limit_entry",
+  "profile": "testnet",
+  "time": 1700001000.0,
+  "positions": [
+    {
+      "venue": "binance",
+      "symbol": "BTCUSDT",
+      "base_qty": 0.0,
+      "avg_price": 0.0
+    }
+  ],
+  "order": {
+    "request": {
+      "account": "test-account",
+      "venue": "binance",
+      "symbol": "BTCUSDT",
+      "side": "buy",
+      "order_type": "limit",
+      "qty": 0.1,
+      "price": 30000.0,
+      "tif": "GTC",
+      "strategy": "scalper"
+    },
+    "broker_response": {
+      "broker_order_id": "BRK-TEST-1"
+    }
+  },
+  "expected": {
+    "order_ref": {
+      "state": "ACKED",
+      "broker_order_id": "BRK-TEST-1"
+    },
+    "order_intent": {
+      "account": "test-account",
+      "venue": "binance",
+      "symbol": "BTCUSDT",
+      "side": "buy",
+      "type": "limit",
+      "tif": "GTC",
+      "qty": 0.1,
+      "price": 30000.0,
+      "strategy": "scalper",
+      "state": "ACKED",
+      "broker_order_id": "BRK-TEST-1"
+    },
+    "broker_calls": [
+      {
+        "venue": "binance",
+        "symbol": "BTCUSDT",
+        "side": "buy",
+        "qty": 0.1,
+        "price": 30000.0,
+        "type": "limit",
+        "tif": "GTC",
+        "strategy": "scalper",
+        "reduce_only": false
+      }
+    ],
+    "safe_mode": {
+      "state": "normal"
+    }
+  }
+}

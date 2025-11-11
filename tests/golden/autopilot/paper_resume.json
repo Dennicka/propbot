@@ -1,0 +1,69 @@
+{
+  "name": "autopilot_paper_resume",
+  "profile": "paper",
+  "time": 1700000000.0,
+  "runtime": {
+    "control": {
+      "mode": "HOLD",
+      "safe_mode": true,
+      "auto_loop": false,
+      "preflight_passed": true,
+      "environment": "paper"
+    },
+    "autopilot": {
+      "enabled": true,
+      "target_mode": "RUN",
+      "target_safe_mode": false
+    },
+    "safety": {
+      "hold_active": true,
+      "hold_reason": "restart_safe_mode"
+    },
+    "risk": {
+      "breaches": []
+    }
+  },
+  "strategy_status": {},
+  "expected": {
+    "autopilot": {
+      "last_decision": "resumed",
+      "last_decision_reason": "restart_safe_mode",
+      "armed": true,
+      "target_mode": "RUN",
+      "target_safe_mode": false
+    },
+    "control": {
+      "mode": "RUN",
+      "safe_mode": false,
+      "auto_loop": true,
+      "preflight_passed": true
+    },
+    "safety": {
+      "hold_active": false,
+      "hold_reason": "restart_safe_mode"
+    },
+    "safe_mode": {
+      "state": "normal"
+    },
+    "resume_calls": 1,
+    "ledger_events": [
+      {
+        "code": "autopilot_resume",
+        "payload": {
+          "initiator": "autopilot",
+          "reason": "restart_safe_mode",
+          "hold_cleared": true,
+          "safe_mode": false
+        }
+      }
+    ],
+    "alerts": [
+      {
+        "kind": "autopilot_resumed",
+        "extra": {
+          "reason": "restart_safe_mode"
+        }
+      }
+    ]
+  }
+}

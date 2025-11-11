@@ -49,6 +49,22 @@ jobs:
         if: hashFiles('data/golden/baseline.jsonl') != ''
         run: make golden-check
 
+  golden-master:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Golden trading flows
+        env:
+          PYTHONPATH: .
+          CI_TESTING: "1"
+        run: python -m pytest -q tests/golden
+
   security-sweep:
     needs: lint
     runs-on: ubuntu-latest
@@ -67,7 +83,7 @@ jobs:
             --ignore-vuln GHSA-2c2j-9gv5-cj73
 
   acceptance:
-    needs: [test, security-sweep]
+    needs: [test, security-sweep, golden-master]
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:

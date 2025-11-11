@@ -1,0 +1,33 @@
+{
+  "name": "risk_limits_paper_symbol_block",
+  "profile": "paper",
+  "risk_checks": {
+    "symbol_notional": {
+      "symbol": "BTCUSDT",
+      "projected": 6000
+    },
+    "global_notional": {
+      "projected": 15000
+    },
+    "daily_loss": {
+      "current_loss": 4000
+    }
+  },
+  "expected": {
+    "symbol_notional": {
+      "allowed": false,
+      "limit": "5000",
+      "projected": "6000"
+    },
+    "global_notional": {
+      "allowed": true,
+      "limit": "20000",
+      "projected": "15000"
+    },
+    "daily_loss": {
+      "allowed": true,
+      "limit": "5000",
+      "projected": "4000"
+    }
+  }
+}

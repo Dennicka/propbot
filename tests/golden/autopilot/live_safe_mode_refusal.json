@@ -1,0 +1,70 @@
+{
+  "name": "autopilot_live_safe_mode_refusal",
+  "profile": "live",
+  "time": 1700000500.0,
+  "runtime": {
+    "control": {
+      "mode": "HOLD",
+      "safe_mode": true,
+      "auto_loop": false,
+      "preflight_passed": true,
+      "environment": "live"
+    },
+    "autopilot": {
+      "enabled": true,
+      "target_mode": "RUN",
+      "target_safe_mode": true
+    },
+    "safety": {
+      "hold_active": true,
+      "hold_reason": "restart_safe_mode"
+    },
+    "guards": {
+      "runaway_breaker": {
+        "status": "OK"
+      }
+    },
+    "risk": {
+      "breaches": []
+    }
+  },
+  "safe_mode": {
+    "state": "HOLD",
+    "reason": "manual_hold"
+  },
+  "expected": {
+    "autopilot": {
+      "last_decision": "refused",
+      "last_decision_reason": "previous_safe_mode_true",
+      "armed": false,
+      "target_mode": "RUN",
+      "target_safe_mode": true
+    },
+    "control": {
+      "mode": "HOLD",
+      "safe_mode": true,
+      "auto_loop": false
+    },
+    "safety": {
+      "hold_active": true,
+      "hold_reason": "restart_safe_mode"
+    },
+    "resume_calls": 0,
+    "ledger_events": [
+      {
+        "code": "autopilot_resume_refused",
+        "payload": {
+          "reason": "previous_safe_mode_true"
+        }
+      }
+    ],
+    "alerts": [
+      {
+        "kind": "autopilot_refused",
+        "extra": {
+          "reason": "previous_safe_mode_true"
+        }
+      }
+    ]
+  }
+}

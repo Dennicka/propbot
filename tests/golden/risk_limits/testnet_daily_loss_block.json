@@ -1,0 +1,33 @@
+{
+  "name": "risk_limits_testnet_daily_loss_block",
+  "profile": "testnet",
+  "risk_checks": {
+    "symbol_notional": {
+      "symbol": "ETHUSDT",
+      "projected": 18000
+    },
+    "global_notional": {
+      "projected": 80000
+    },
+    "daily_loss": {
+      "current_loss": 25000
+    }
+  },
+  "expected": {
+    "symbol_notional": {
+      "allowed": true,
+      "limit": "25000",
+      "projected": "18000"
+    },
+    "global_notional": {
+      "allowed": true,
+      "limit": "100000",
+      "projected": "80000"
+    },
+    "daily_loss": {
+      "allowed": false,
+      "limit": "20000",
+      "projected": "25000"
+    }
+  }
+}
