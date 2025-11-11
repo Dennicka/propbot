@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from asyncio import TimeoutError as AsyncTimeoutError
 from types import SimpleNamespace
 from typing import Callable, Dict, Iterable, Mapping
 
@@ -22,7 +23,7 @@ from ...golden.logger import get_golden_logger
 
 try:  # pragma: no cover - import guard for optional bootstrap contexts
     from ...config.schema import HealthConfig
-except Exception:  # pragma: no cover - fallback when schema unavailable
+except (ImportError, AttributeError):  # pragma: no cover - fallback when schema unavailable
     HealthConfig = None  # type: ignore[misc, assignment]
 
 LOGGER = logging.getLogger(__name__)
@@ -105,8 +106,21 @@ class AccountHealthGuard:
     def _collect_snapshots(self, ctx: object) -> dict[str, AccountHealthSnapshot]:
         try:
             snapshots = collect_account_health(ctx) or {}
-        except Exception:  # pragma: no cover - defensive guard
-            LOGGER.exception("health guard failed to collect account snapshots")
+        except (
+            RuntimeError,
+            ValueError,
+            AsyncTimeoutError,
+            OSError,
+        ) as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "health guard failed to collect account snapshots",
+                extra={
+                    "event": "collect_health_failed",
+                    "component": "account_health_guard",
+                    "details": {"error": str(exc)},
+                },
+                exc_info=True,
+            )
             return {}
         return snapshots
 
@@ -121,8 +135,16 @@ class AccountHealthGuard:
         for exchange, snapshot in snapshots.items():
             try:
                 state = evaluate_health(snapshot, config_scope)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.exception("health guard failed to evaluate snapshot for %s", exchange)
+            except (RuntimeError, ValueError, KeyError) as exc:  # pragma: no cover - defensive
+                LOGGER.error(
+                    "health guard failed to evaluate snapshot",
+                    extra={
+                        "event": "health_evaluation_failed",
+                        "component": "account_health_guard",
+                        "details": {"exchange": exchange, "error": str(exc)},
+                    },
+                    exc_info=True,
+                )
                 state = "CRITICAL"
             states[exchange] = state
             severity = _STATE_SEVERITY.get(state, 0)
@@ -162,8 +184,16 @@ class AccountHealthGuard:
         if gate is not None:
             try:
                 gate.set_throttled(self.CRITICAL_CAUSE)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to throttle pre-trade gate", exc_info=True)
+            except (RuntimeError, AttributeError) as exc:  # pragma: no cover - defensive
+                LOGGER.error(
+                    "health guard failed to throttle pre-trade gate",
+                    extra={
+                        "event": "gate_throttle_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc)},
+                    },
+                    exc_info=True,
+                )
         self._engage_hold(runtime, reason)
         if self._auto_freeze:
             self._apply_freeze_rules(exchanges)
@@ -180,8 +210,16 @@ class AccountHealthGuard:
         if gate is not None:
             try:
                 gate.clear()
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to clear pre-trade gate", exc_info=True)
+            except (RuntimeError, AttributeError) as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    "health guard failed to clear pre-trade gate",
+                    extra={
+                        "event": "gate_clear_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc)},
+                    },
+                    exc_info=True,
+                )
         if self._active_hold_reason:
             self._clear_hold(runtime)
         if self._auto_freeze:
@@ -195,8 +233,16 @@ class AccountHealthGuard:
         if callable(updater):
             try:
                 updater(True, reason=reason, source=self.HOLD_SOURCE)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to update risk throttle", exc_info=True)
+            except (RuntimeError, AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+                LOGGER.error(
+                    "health guard failed to update risk throttle",
+                    extra={
+                        "event": "risk_throttle_update_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc), "reason": reason},
+                    },
+                    exc_info=True,
+                )
         set_risk_throttled(True, reason)
         self._throttle_reason = reason
 
@@ -209,8 +255,16 @@ class AccountHealthGuard:
         if callable(updater):
             try:
                 updater(False, reason=reason, source=self.HOLD_SOURCE)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to clear risk throttle", exc_info=True)
+            except (RuntimeError, AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    "health guard failed to clear risk throttle",
+                    extra={
+                        "event": "risk_throttle_clear_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc), "reason": reason},
+                    },
+                    exc_info=True,
+                )
         set_risk_throttled(False, reason)
         self._throttle_reason = None
 
@@ -223,8 +277,17 @@ class AccountHealthGuard:
             if callable(state_getter):
                 try:
                     state = state_getter()
-                except Exception:  # pragma: no cover - defensive
+                except (RuntimeError, AttributeError) as exc:  # pragma: no cover - defensive
                     state = None
+                    LOGGER.warning(
+                        "health guard failed to fetch runtime state",
+                        extra={
+                            "event": "runtime_state_unavailable",
+                            "component": "account_health_guard",
+                            "details": {"error": str(exc)},
+                        },
+                        exc_info=True,
+                    )
                 if state is not None:
                     control = getattr(state, "control", None)
                     if control is not None:
@@ -234,8 +297,16 @@ class AccountHealthGuard:
         if callable(engager):
             try:
                 engaged = bool(engager(reason, source=self.HOLD_SOURCE))
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to engage safety hold", exc_info=True)
+            except (RuntimeError, AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+                LOGGER.error(
+                    "health guard failed to engage safety hold",
+                    extra={
+                        "event": "engage_hold_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc), "reason": reason},
+                    },
+                    exc_info=True,
+                )
         if engaged:
             self._active_hold_reason = reason
 
@@ -246,8 +317,16 @@ class AccountHealthGuard:
         if callable(resume):
             try:
                 resume(safe_mode=safe_mode)
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to resume after hold", exc_info=True)
+            except (RuntimeError, AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    "health guard failed to resume after hold",
+                    extra={
+                        "event": "resume_after_hold_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc), "safe_mode": safe_mode},
+                    },
+                    exc_info=True,
+                )
         self._active_hold_reason = None
         self._previous_safe_mode = None
 
@@ -268,8 +347,16 @@ class AccountHealthGuard:
         if callable(getter):
             try:
                 return getter()
-            except Exception:  # pragma: no cover - defensive
-                LOGGER.debug("health guard failed to access pre-trade gate", exc_info=True)
+            except (RuntimeError, AttributeError) as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    "health guard failed to access pre-trade gate",
+                    extra={
+                        "event": "gate_lookup_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc)},
+                    },
+                    exc_info=True,
+                )
         return None
 
     # ------------------------------------------------------------------
@@ -300,10 +387,19 @@ class AccountHealthGuard:
                 summary_map.get(worst_state, "account health status"),
                 metrics,
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.debug(
+        except (
+            RuntimeError,
+            AttributeError,
+            TypeError,
+            ValueError,
+        ) as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
                 "health guard failed to update guard snapshot",
-                extra={"error": str(exc)},
+                extra={
+                    "event": "guard_update_failed",
+                    "component": "account_health_guard",
+                    "details": {"error": str(exc)},
+                },
                 exc_info=True,
             )
 
@@ -311,11 +407,16 @@ class AccountHealthGuard:
     def _safe_ctx(self, *, log: bool) -> object | None:
         try:
             return self._ctx_factory()
-        except Exception as exc:
+        except (RuntimeError, AttributeError, TypeError) as exc:
             if log:
-                LOGGER.exception(
+                LOGGER.error(
                     "health guard context factory failed",
-                    extra={"error": str(exc)},
+                    extra={
+                        "event": "context_factory_failed",
+                        "component": "account_health_guard",
+                        "details": {"error": str(exc)},
+                    },
+                    exc_info=True,
                 )
             return None
 
