@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from .. import ledger
 from ..opsbot.notifier import emit_alert
 from .loop import resume_loop
+from .trading_profile import get_trading_profile
 from .runtime import (
     autopilot_apply_resume,
     autopilot_mark_action,
@@ -27,6 +28,7 @@ def _resolve_mode(state) -> str:
 
 
 def _check_blockers(state) -> str | None:
+    profile = get_trading_profile()
     mode = _resolve_mode(state)
     autopilot = state.autopilot
     if str(autopilot.target_mode or "").upper() != "RUN":
@@ -70,6 +72,7 @@ def _check_blockers(state) -> str | None:
                             "operation": "client.ping",
                             "venue": venue_id,
                             "mode": mode,
+                            "profile": profile.name,
                             "error": "ping_false",
                         },
                     )
@@ -83,6 +86,7 @@ def _check_blockers(state) -> str | None:
                         "operation": "client.ping",
                         "venue": venue_id,
                         "mode": mode,
+                        "profile": profile.name,
                         "error": str(exc),
                     },
                     exc_info=True,
@@ -104,6 +108,7 @@ async def evaluate_startup() -> None:
     state = get_state()
     mode = _resolve_mode(state)
     autopilot = get_autopilot_state()
+    profile = get_trading_profile()
     if not autopilot.enabled:
         LOGGER.info("autopilot disabled; startup resume skipped")
         autopilot_mark_action("disabled", "autopilot_disabled", armed=False)
@@ -118,6 +123,7 @@ async def evaluate_startup() -> None:
                 "log_function": "evaluate_startup",
                 "operation": "autopilot.resume",
                 "mode": mode,
+                "profile": profile.name,
                 "reason": blocker,
             },
         )
@@ -147,6 +153,7 @@ async def evaluate_startup() -> None:
                     "log_function": "evaluate_startup",
                     "operation": "emit_alert",
                     "mode": mode,
+                    "profile": profile.name,
                     "reason": blocker,
                     "error": str(exc),
                 },
@@ -181,6 +188,7 @@ async def evaluate_startup() -> None:
                 "log_function": "evaluate_startup",
                 "operation": "emit_alert",
                 "mode": mode,
+                "profile": profile.name,
                 "reason": resume_reason,
                 "error": str(exc),
             },
@@ -196,6 +204,7 @@ async def evaluate_startup() -> None:
                 "log_function": "evaluate_startup",
                 "operation": "resume_loop",
                 "mode": mode,
+                "profile": profile.name,
                 "error": str(exc),
             },
         )

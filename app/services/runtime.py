@@ -36,6 +36,7 @@ from ..runtime_state_store import (
 )
 from . import approvals_store
 from .derivatives import DerivativesRuntime, bootstrap_derivatives
+from .safe_mode import reset_safe_mode_for_tests
 from .marketdata import MarketDataAggregator
 from ..risk.runaway_guard import get_guard
 from ..utils.chaos import (
@@ -2032,6 +2033,7 @@ def reset_for_tests() -> None:
     _SHUTDOWN_LOCK = None
     _SHUTDOWN_STARTED = False
     _LAST_SHUTDOWN_RESULT = None
+    reset_safe_mode_for_tests()
     with _STATE_LOCK:
         _STATE = _bootstrap_runtime()
         _load_persisted_state(_STATE)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, Mapping, Tuple
 
@@ -24,6 +25,15 @@ from ..rules.pretrade import PretradeValidationError, get_pretrade_validator
 from ..persistence import order_store
 from ..runtime import locks
 from ..services import runtime
+from ..services.safe_mode import enter_hold, get_safe_mode_state, is_opening_allowed
+from ..services.trading_profile import get_trading_profile
+from ..services.risk_limits import (
+    check_daily_loss,
+    check_global_notional,
+    check_symbol_notional,
+    to_decimal,
+)
+from ..risk.daily_loss import get_daily_loss_cap_state
 from ..utils.identifiers import generate_request_id
 from .adapter import generate_client_order_id
 from ..risk.exposure_caps import (
@@ -55,6 +65,36 @@ def _maybe_float(value: object) -> float | None:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _log_guard_event(
+    event: str,
+    *,
+    profile: str,
+    venue: str,
+    symbol: str,
+    notional: Decimal | float | str,
+    limit: Decimal | float | str | None,
+    mode: str,
+    reason: str,
+    limit_type: str | None = None,
+) -> Dict[str, object]:
+    payload: Dict[str, object] = {
+        "log_module": __name__,
+        "log_function": "submit_order",
+        "operation": event,
+        "profile": profile,
+        "venue": venue,
+        "symbol": symbol,
+        "notional": str(notional),
+        "limit": str(limit) if limit is not None else None,
+        "mode": mode,
+        "reason": reason,
+    }
+    if limit_type is not None:
+        payload["limit_type"] = limit_type
+    LOGGER.warning(event, extra=payload)
+    return payload
 
 
 _FILLED_STATUSES = {"FILLED", "DONE", "COMPLETED", "CLOSED"}
@@ -352,6 +392,7 @@ class OrderRouter:
         request_id: str | None = None,
     ) -> OrderRef:
         validator = get_pretrade_validator()
+        profile = get_trading_profile()
         order_payload: Dict[str, object] = {
             "venue": venue,
             "symbol": symbol,
@@ -363,10 +404,11 @@ class OrderRouter:
             "strategy": strategy,
         }
         reduce_only_flag = False
+        current_position_value = self._current_position(venue, symbol)
+        is_reduction = _is_reduce_only_order(side, qty, current_position_value)
         registry = get_freeze_registry()
         if registry.is_frozen(strategy=strategy, venue=venue, symbol=symbol):
-            current_position = self._current_position(venue, symbol)
-            if _is_reduce_only_order(side, qty, current_position):
+            if is_reduction:
                 reduce_only_flag = self._supports_native_reduce_only(venue)
             else:
                 reason_text = _FROZEN_BLOCK
@@ -393,9 +435,8 @@ class OrderRouter:
                 runtime=runtime,
                 native_reduce_only=self._supports_native_reduce_only(venue),
             )
-            current_position = self._current_position(venue, symbol)
             reduce_allowed, native_supported, reduce_reason = enforce_reduce_only(
-                ctx, symbol, side, qty, current_position
+                ctx, symbol, side, qty, current_position_value
             )
             if reduce_allowed:
                 allowed = True
@@ -488,7 +529,146 @@ class OrderRouter:
             else:
                 new_abs_position = abs(new_base_qty) * price_reference
         increasing = bool(target_side) and (new_abs_position > current_side_abs + 1e-6)
+        order_notional_decimal = Decimal("0")
+        if notional_value > 0:
+            order_notional_decimal = to_decimal(notional_value)
+        elif abs(qty) > 1e-9 and price_reference > 0:
+            order_notional_decimal = to_decimal(abs(qty) * price_reference)
+        if is_reduction:
+            increasing = False
         if increasing and target_side is not None:
+            safe_status = get_safe_mode_state()
+            safe_mode_label = safe_status.state.value
+            if not profile.allow_new_orders:
+                reason_text = "TRADING_PROFILE_DISABLED"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                _log_guard_event(
+                    "order_router.profile_block",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=order_notional_decimal,
+                    limit=None,
+                    mode=safe_mode_label,
+                    reason=reason_text,
+                    limit_type="profile",
+                )
+                raise PretradeGateThrottled(reason_text, details=order_payload)
+            if profile.allow_closures_only:
+                reason_text = "TRADING_PROFILE_CLOSURES_ONLY"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                _log_guard_event(
+                    "order_router.profile_closures_only",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=order_notional_decimal,
+                    limit=None,
+                    mode=safe_mode_label,
+                    reason=reason_text,
+                    limit_type="profile",
+                )
+                raise PretradeGateThrottled(reason_text, details=order_payload)
+            if not is_opening_allowed():
+                reason_text = "SAFE_MODE_ACTIVE"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                _log_guard_event(
+                    "order_router.safe_mode_block",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=order_notional_decimal,
+                    limit=None,
+                    mode=safe_mode_label,
+                    reason=safe_status.reason or reason_text,
+                    limit_type="safe_mode",
+                )
+                raise PretradeGateThrottled(reason_text, details=order_payload)
+            if (
+                profile.max_notional_per_order > 0
+                and order_notional_decimal > profile.max_notional_per_order
+            ):
+                reason_text = "RISK_LIMIT_ORDER_NOTIONAL"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                log_extra = _log_guard_event(
+                    "order_router.risk_limit_order",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=order_notional_decimal,
+                    limit=profile.max_notional_per_order,
+                    mode=safe_mode_label,
+                    reason=reason_text,
+                    limit_type="per_order",
+                )
+                enter_hold("risk_limit_exceeded", extra=dict(log_extra))
+                raise PretradeGateThrottled(reason_text, details=order_payload)
+            symbol_check = check_symbol_notional(symbol, new_abs_position, profile)
+            if not symbol_check.allowed:
+                reason_text = "RISK_LIMIT_SYMBOL_NOTIONAL"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                log_extra = _log_guard_event(
+                    "order_router.risk_limit_symbol",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=symbol_check.projected,
+                    limit=symbol_check.limit,
+                    mode=safe_mode_label,
+                    reason=reason_text,
+                    limit_type="per_symbol",
+                )
+                enter_hold("risk_limit_exceeded", extra=dict(log_extra))
+                raise PretradeGateThrottled(reason_text, details=order_payload)
+            incremental_abs = max(new_abs_position - current_side_abs, 0.0)
+            current_global_total = sum(
+                (to_decimal(value) for value in snapshot.by_symbol.values()),
+                Decimal("0"),
+            )
+            projected_global_total = current_global_total + to_decimal(incremental_abs)
+            global_check = check_global_notional(projected_global_total, profile)
+            if not global_check.allowed:
+                reason_text = "RISK_LIMIT_GLOBAL_NOTIONAL"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                log_extra = _log_guard_event(
+                    "order_router.risk_limit_global",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=global_check.projected,
+                    limit=global_check.limit,
+                    mode=safe_mode_label,
+                    reason=reason_text,
+                    limit_type="global",
+                )
+                enter_hold("risk_limit_exceeded", extra=dict(log_extra))
+                raise PretradeGateThrottled(reason_text, details=order_payload)
+            daily_loss_state = get_daily_loss_cap_state()
+            current_loss = to_decimal(daily_loss_state.get("losses_usdt"))
+            daily_check = check_daily_loss(current_loss, profile)
+            if not daily_check.allowed:
+                reason_text = "RISK_LIMIT_DAILY_LOSS"
+                PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                log_extra = _log_guard_event(
+                    "order_router.risk_limit_daily_loss",
+                    profile=profile.name,
+                    venue=venue,
+                    symbol=symbol,
+                    notional=daily_check.projected,
+                    limit=daily_check.limit,
+                    mode=safe_mode_label,
+                    reason=reason_text,
+                    limit_type="daily_loss",
+                )
+                enter_hold("risk_limit_exceeded", extra=dict(log_extra))
+                raise PretradeGateThrottled(reason_text, details=order_payload)
             state = runtime.get_state()
             caps_ctx: Dict[str, object] = {
                 "config": state.config.data,
