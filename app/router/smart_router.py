@@ -34,6 +34,7 @@ from ..tca.cost_model import (
 from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 from ..risk.limits import RiskGovernor, load_config_from_env
+from ..config import feature_flags as ff
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
@@ -57,12 +58,6 @@ def feature_enabled() -> bool:
     """Return True when smart router scoring is enabled."""
 
     return _feature_flag_enabled("FEATURE_SMART_ROUTER", False)
-
-
-def ff_pretrade() -> bool:
-    import os
-
-    return os.getenv("FF_PRETRADE_STRICT", "0").lower() in {"1", "true", "yes", "on"}
 
 
 def _manual_fee_table(config) -> FeeTable:
@@ -255,7 +250,7 @@ class SmartRouter:
         self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
         self._order_strategies: Dict[str, str] = {}
         self._risk_governor: RiskGovernor | None = None
-        if _feature_flag_enabled("FF_RISK_LIMITS"):
+        if ff.risk_limits_on():
             try:
                 self._risk_governor = RiskGovernor(load_config_from_env())
             except (ArithmeticError, ValueError) as exc:  # pragma: no cover - defensive
@@ -380,7 +375,7 @@ class SmartRouter:
 
         side_lower = str(side or "").strip().lower()
         price_value = float(price) if price is not None else None
-        if ff_pretrade():
+        if ff.pretrade_strict_on():
             try:
                 meta = self._load_symbol_meta(venue, symbol)
                 price_dec = as_dec(price, field="price", allow_none=True)

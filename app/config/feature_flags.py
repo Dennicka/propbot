@@ -1,0 +1,24 @@
+import os
+
+TRUE_SET = {"1", "true", "on", "yes", "y", "True", "TRUE", "ON"}
+
+
+def _env_on(name: str) -> bool | None:
+    v = os.getenv(name)
+    return (v in TRUE_SET) if v is not None else None
+
+
+def pretrade_strict_on() -> bool:
+    v = _env_on("FF_PRETRADE_STRICT")
+    if v is not None:
+        return v
+    prof = os.getenv("DEFAULT_PROFILE", "").lower()
+    return prof in {"paper", "testnet"}
+
+
+def risk_limits_on() -> bool:
+    v = _env_on("FF_RISK_LIMITS")
+    if v is not None:
+        return v
+    prof = os.getenv("DEFAULT_PROFILE", "").lower()
+    return prof in {"paper", "testnet"}
