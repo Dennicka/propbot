@@ -156,7 +156,9 @@ class OrderTracker:
         if not self._orders:
             return 0
         removed = 0
-        terminal_ids = [coid for coid, tracked in self._orders.items() if self.is_terminal(tracked.state)]
+        terminal_ids = [
+            coid for coid, tracked in self._orders.items() if self.is_terminal(tracked.state)
+        ]
         for coid in terminal_ids:
             self._orders.pop(coid, None)
             removed += 1
@@ -168,9 +170,7 @@ class OrderTracker:
         ttl_ns = ttl_sec * _NANOS_IN_SECOND
         removed = 0
         aged_ids = [
-            coid
-            for coid, tracked in self._orders.items()
-            if now_ns - tracked.updated_ns > ttl_ns
+            coid for coid, tracked in self._orders.items() if now_ns - tracked.updated_ns > ttl_ns
         ]
         for coid in aged_ids:
             self._orders.pop(coid, None)
