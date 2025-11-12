@@ -615,9 +615,7 @@ def validate_pretrade(
         raise PretradeRejection(reason, details={"symbol": symbol})
 
     trade_windows = [
-        window
-        for window in (_meta_attr(meta, "trade_hours") or [])
-        if hasattr(window, "contains")
+        window for window in (_meta_attr(meta, "trade_hours") or []) if hasattr(window, "contains")
     ]
     if trade_windows:
         now_dt = now or datetime.now(timezone.utc)
@@ -635,4 +633,3 @@ def validate_pretrade(
                 "min_notional",
                 details={"symbol": symbol, "limit": str(min_notional_dec)},
             )
-
