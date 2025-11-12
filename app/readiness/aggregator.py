@@ -7,6 +7,8 @@ import time
 from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
+from asyncio import TimeoutError as AsyncTimeoutError
+
 from prometheus_client import Counter, Gauge
 
 from .. import ledger
@@ -214,8 +216,21 @@ def _md_staleness_threshold() -> float:
         value = getattr(config, "md_staleness_critical", None)
         if value is not None:
             return max(float(value), 0.0)
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("readiness: failed to resolve staleness threshold", exc_info=True)
+    except (
+        RuntimeError,
+        AttributeError,
+        TypeError,
+        ValueError,
+    ) as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "readiness failed to resolve staleness threshold",
+            extra={
+                "event": "md_staleness_threshold_error",
+                "component": "readiness",
+                "details": {"error": str(exc)},
+            },
+            exc_info=True,
+        )
     raw = os.getenv("SLO_MD_STALENESS_CRITICAL_S")
     if raw:
         try:
@@ -296,8 +311,21 @@ def _resolve_watchdog_state() -> str | None:
 def _resolve_router_ready() -> bool | None:
     try:
         broker_state = get_broker_state()
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("readiness: failed to fetch broker state", exc_info=True)
+    except (
+        RuntimeError,
+        ConnectionError,
+        AsyncTimeoutError,
+        OSError,
+    ) as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "readiness failed to fetch broker state",
+            extra={
+                "event": "broker_state_unavailable",
+                "component": "readiness",
+                "details": {"error": str(exc)},
+            },
+            exc_info=True,
+        )
         return None
     overall = getattr(broker_state, "overall", None)
     if overall is None:
@@ -316,8 +344,21 @@ def _resolve_router_ready() -> bool | None:
 def _resolve_metrics_ok() -> bool | None:
     try:
         snapshot = slo_snapshot()
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("readiness: slo_snapshot failed", exc_info=True)
+    except (
+        RuntimeError,
+        ValueError,
+        AsyncTimeoutError,
+        OSError,
+    ) as exc:  # pragma: no cover - defensive
+        logger.error(
+            "readiness failed to collect slo snapshot",
+            extra={
+                "event": "metrics_snapshot_failed",
+                "component": "readiness",
+                "details": {"error": str(exc)},
+            },
+            exc_info=True,
+        )
         return False
     return bool(isinstance(snapshot, Mapping))
 
@@ -325,8 +366,21 @@ def _resolve_metrics_ok() -> bool | None:
 def _resolve_md_signals(threshold: float) -> tuple[bool | None, bool | None]:
     try:
         status_rows = market_status_snapshot()
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("readiness: market_status_snapshot failed", exc_info=True)
+    except (
+        RuntimeError,
+        ConnectionError,
+        AsyncTimeoutError,
+        OSError,
+    ) as exc:  # pragma: no cover - defensive
+        logger.error(
+            "readiness failed to collect market status snapshot",
+            extra={
+                "event": "market_status_unavailable",
+                "component": "readiness",
+                "details": {"error": str(exc)},
+            },
+            exc_info=True,
+        )
         return None, None
     if not isinstance(status_rows, Sequence) or not status_rows:
         return False, False
@@ -352,8 +406,16 @@ def _resolve_md_signals(threshold: float) -> tuple[bool | None, bool | None]:
 def _resolve_db_ok() -> bool | None:
     try:
         return ledger.LEDGER_PATH.exists()
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("readiness: ledger path check failed", exc_info=True)
+    except (OSError, RuntimeError) as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "readiness ledger path check failed",
+            extra={
+                "event": "ledger_check_failed",
+                "component": "readiness",
+                "details": {"error": str(exc)},
+            },
+            exc_info=True,
+        )
         return None
 
 
@@ -361,8 +423,16 @@ def collect_readiness_signals() -> dict[str, Any]:
     details: dict[str, Any] = {key: None for key in _DETAIL_KEYS}
     try:
         state = runtime.get_state()
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("readiness: runtime state unavailable", exc_info=True)
+    except (RuntimeError, AttributeError) as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "readiness runtime state unavailable",
+            extra={
+                "event": "runtime_state_unavailable",
+                "component": "readiness",
+                "details": {"error": str(exc)},
+            },
+            exc_info=True,
+        )
         state = None
 
     if state is not None:
@@ -410,8 +480,16 @@ async def wait_for_live_readiness(
     while True:
         try:
             context = ctx_factory()
-        except Exception:  # pragma: no cover - defensive
-            logger_obj.exception("wait-for-readiness: context factory failed")
+        except (RuntimeError, AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+            logger_obj.error(
+                "wait-for-readiness context factory failed",
+                extra={
+                    "event": "readiness_context_failed",
+                    "component": "readiness",
+                    "details": {"error": str(exc)},
+                },
+                exc_info=True,
+            )
             context = {}
         snapshot = aggregator.snapshot(context)
         status = snapshot.get("status", "UNKNOWN")

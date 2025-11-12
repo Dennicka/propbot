@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
-import logging
 from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping, Sequence
+
+import httpx
 
 from ..golden.logger import get_golden_logger
 from ..services.runtime import (
@@ -59,7 +61,16 @@ def _manual_fee_table(config) -> FeeTable:
         else:
             try:
                 items = manual_cfg.model_dump().items()  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - defensive
+            except (AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+                LOGGER.debug(
+                    "smart_router.manual_fee_serialise_failed",
+                    extra={
+                        "event": "smart_router_manual_fee_serialise_failed",
+                        "module": __name__,
+                        "details": {"config": type(manual_cfg).__name__},
+                    },
+                    exc_info=exc,
+                )
                 items = []
         for venue, payload in items:
             if isinstance(payload, Mapping):
@@ -82,7 +93,16 @@ def _tier_table_from_config(config) -> TierTable | None:
     else:
         try:
             items = tiers_cfg.model_dump().items()  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover - defensive
+        except (AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "smart_router.tier_table_serialise_failed",
+                extra={
+                    "event": "smart_router_tier_table_serialise_failed",
+                    "module": __name__,
+                    "details": {"config": type(tiers_cfg).__name__},
+                },
+                exc_info=exc,
+            )
             items = []
     for venue, payload in items:
         tier_entries: list[Mapping[str, object]] = []
@@ -93,10 +113,14 @@ def _tier_table_from_config(config) -> TierTable | None:
                 else:
                     try:
                         tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
-                    except Exception as exc:  # noqa: BLE001
+                    except (AttributeError, TypeError) as exc:  # noqa: BLE001
                         LOGGER.warning(
-                            "smart_router: failed to serialise tier entry",
-                            extra={"venue": str(venue)},
+                            "smart_router.tier_entry_serialise_failed",
+                            extra={
+                                "event": "smart_router_tier_entry_serialise_failed",
+                                "module": __name__,
+                                "details": {"venue": str(venue)},
+                            },
                             exc_info=exc,
                         )
                         continue
@@ -187,7 +211,16 @@ class SmartRouter:
         snapshot: Dict[str, float] = {}
         try:
             liquidity_state = get_liquidity_status()
-        except Exception:  # pragma: no cover - defensive
+        except (RuntimeError, ValueError, TypeError) as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "smart_router.liquidity_snapshot_failed",
+                extra={
+                    "event": "smart_router_liquidity_snapshot_failed",
+                    "module": __name__,
+                    "details": {},
+                },
+                exc_info=exc,
+            )
             return snapshot
         per_venue = liquidity_state.get("per_venue") if isinstance(liquidity_state, Mapping) else {}
         if not isinstance(per_venue, Mapping):
@@ -287,8 +320,16 @@ class SmartRouter:
                 impact_model=self._impact_model,
                 book_liquidity_usdt=liquidity_value,
             )
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.debug("smart_router.tca_failed", extra={"venue": canonical, "error": str(exc)})
+        except (ValueError, TypeError, RuntimeError) as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "smart_router.tca_failed",
+                extra={
+                    "event": "smart_router_tca_failed",
+                    "module": __name__,
+                    "details": {"venue": canonical, "symbol": symbol_norm},
+                },
+                exc_info=exc,
+            )
             return {
                 "venue": canonical,
                 "score": math.inf,
@@ -410,7 +451,23 @@ class SmartRouter:
     def _resolve_price(self, venue: str, symbol: str, side: str) -> float:
         try:
             book = self._market_data.top_of_book(venue, symbol)
-        except Exception:  # pragma: no cover - fallback
+        except (
+            KeyError,
+            LookupError,
+            RuntimeError,
+            ValueError,
+            OSError,
+            httpx.HTTPError,
+        ) as exc:  # pragma: no cover - fallback
+            LOGGER.debug(
+                "smart_router.price_lookup_failed",
+                extra={
+                    "event": "smart_router_price_lookup_failed",
+                    "module": __name__,
+                    "details": {"venue": venue, "symbol": symbol},
+                },
+                exc_info=exc,
+            )
             return 0.0
         bid = self._coerce_float(book.get("bid"))
         ask = self._coerce_float(book.get("ask"))
@@ -450,7 +507,23 @@ class SmartRouter:
                 return 0.0
         try:
             book = self._market_data.top_of_book(venue, symbol)
-        except Exception:  # pragma: no cover - fallback
+        except (
+            KeyError,
+            LookupError,
+            RuntimeError,
+            ValueError,
+            OSError,
+            httpx.HTTPError,
+        ) as exc:  # pragma: no cover - fallback
+            LOGGER.debug(
+                "smart_router.ws_latency_lookup_failed",
+                extra={
+                    "event": "smart_router_ws_latency_lookup_failed",
+                    "module": __name__,
+                    "details": {"venue": venue, "symbol": symbol},
+                },
+                exc_info=exc,
+            )
             return 0.0
         ts_value = self._coerce_float(book.get("ts"))
         if ts_value <= 0:
