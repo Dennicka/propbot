@@ -7,7 +7,6 @@ import logging
 import math
 import os
 import signal
-import sqlite3
 import time
 from collections import deque
 from copy import deepcopy
@@ -15,9 +14,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
-
-import httpx
-from requests import RequestException
 
 from ..audit_log import log_operator_action
 from ..golden.logger import get_golden_logger
@@ -127,29 +123,13 @@ def send_notifier_alert(kind: str, text: str, extra: Mapping[str, object] | None
 
     try:
         from ..opsbot.notifier import emit_alert
-    except (ImportError, ModuleNotFoundError) as exc:
-        LOGGER.warning(
-            "ops_notifier.import_failed",
-            extra={
-                "event": "ops_notifier_import_failed",
-                "module": __name__,
-                "details": {"kind": kind, "text": text},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:
+        LOGGER.warning("ops notifier import failed kind=%s error=%s", kind, exc)
         return
     try:
         emit_alert(kind=kind, text=text, extra=extra or None)
-    except (RequestException, RuntimeError, OSError, TypeError, ValueError) as exc:
-        LOGGER.warning(
-            "ops_notifier.emit_failed",
-            extra={
-                "event": "ops_notifier_emit_failed",
-                "module": __name__,
-                "details": {"kind": kind, "text": text, "extra": dict(extra or {})},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:
+        LOGGER.warning("ops notifier emit failed kind=%s error=%s", kind, exc)
 
 
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
@@ -828,16 +808,7 @@ def _extract_watchdog_thresholds(watchdog_cfg) -> Dict[str, Dict[str, float]]:
     else:
         try:
             raw_mapping = thresholds.model_dump()  # type: ignore[attr-defined]
-        except (AttributeError, TypeError) as exc:  # pragma: no cover - defensive
-            LOGGER.debug(
-                "watchdog.threshold_serialisation_failed",
-                extra={
-                    "event": "watchdog_threshold_serialisation_failed",
-                    "module": __name__,
-                    "details": {"source": type(thresholds).__name__},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover - defensive
             raw_mapping = {}
     result: Dict[str, Dict[str, float]] = {}
     for metric, payload in raw_mapping.items():
@@ -1582,16 +1553,7 @@ def _broker_watchdog_throttle_change(active: bool, reason: str | None) -> None:
 
         _risk_governor_module.set_throttle(active, reason=reason)
         updated = True
-    except (ImportError, ModuleNotFoundError, AttributeError, RuntimeError, TypeError) as exc:
-        LOGGER.warning(
-            "broker_watchdog.throttle_delegate_failed",
-            extra={
-                "event": "broker_watchdog_throttle_delegate_failed",
-                "module": __name__,
-                "details": {"active": active, "reason": reason},
-            },
-            exc_info=exc,
-        )
+    except Exception:  # pragma: no cover - defensive
         updated = False
     if not updated:
         update_risk_throttle(active, reason=reason, source="broker_watchdog")
@@ -2103,21 +2065,7 @@ def reset_for_tests() -> None:
         _enforce_safe_start(_STATE)
     try:
         from positions_store import reset_store as _reset_positions_store
-    except (
-        ImportError,
-        ModuleNotFoundError,
-        AttributeError,
-        OSError,
-    ) as exc:  # pragma: no cover - defensive import
-        LOGGER.warning(
-            "positions_store.reset_import_failed",
-            extra={
-                "event": "positions_store_reset_import_failed",
-                "module": __name__,
-                "details": {},
-            },
-            exc_info=exc,
-        )
+    except Exception:  # pragma: no cover - defensive import
         _reset_positions_store = None
     if _reset_positions_store is not None:
         _reset_positions_store()
@@ -2138,16 +2086,8 @@ def reset_for_tests() -> None:
         from ..strategy_budget import get_strategy_budget_manager
 
         get_strategy_budget_manager().reset_all_usage()
-    except (ImportError, ModuleNotFoundError, AttributeError, RuntimeError) as exc:
-        LOGGER.warning(
-            "strategy_budget.reset_failed",
-            extra={
-                "event": "strategy_budget_reset_failed",
-                "module": __name__,
-                "details": {},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:
+        LOGGER.warning("strategy budget reset failed: %s", exc)
 
 
 def control_as_dict() -> Dict[str, object]:
@@ -2719,30 +2659,20 @@ def _restore_runtime_snapshot(state: RuntimeState) -> bool:
                 append_record as _append_position,
                 reset_store as _reset_positions_store,
             )
-        except (ImportError, ModuleNotFoundError, AttributeError, OSError) as exc:
-            LOGGER.error(
-                "positions_store.restore_import_failed",
-                extra={
-                    "event": "positions_store_restore_import_failed",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
+        except Exception as exc:
+            LOGGER.exception(
+                "failed to import positions store for snapshot restore",
+                extra={"error": str(exc)},
             )
         else:
             try:
                 _reset_positions_store()
                 for entry in positions_snapshot:
                     _append_position(entry)
-            except (OSError, ValueError, RuntimeError, TypeError) as exc:
-                LOGGER.error(
-                    "positions_store.restore_failed",
-                    extra={
-                        "event": "positions_store_restore_failed",
-                        "module": __name__,
-                        "details": {"records": len(positions_snapshot)},
-                    },
-                    exc_info=exc,
+            except Exception as exc:
+                LOGGER.exception(
+                    "failed to restore hedge positions store from snapshot",
+                    extra={"error": str(exc)},
                 )
 
     if restored:
@@ -3201,16 +3131,7 @@ def handle_shutdown_signal(signum: int) -> asyncio.Task[Dict[str, object]] | Non
         return None
     try:
         signal_name = signal.Signals(signum).name
-    except ValueError as exc:  # pragma: no cover - defensive
-        LOGGER.debug(
-            "shutdown_signal.unknown",
-            extra={
-                "event": "shutdown_signal_unknown",
-                "module": __name__,
-                "details": {"signal": signum},
-            },
-            exc_info=exc,
-        )
+    except Exception:  # pragma: no cover - defensive
         signal_name = str(signum)
     LOGGER.info("shutdown signal received", extra={"signal": signal_name})
     return loop.create_task(on_shutdown(reason=signal_name))
@@ -3226,23 +3147,8 @@ async def _stop_component(
             await result
         LOGGER.info("component stopped", extra={"component": label})
         return {"component": label, "status": "stopped"}
-    except (
-        asyncio.CancelledError,
-        RuntimeError,
-        OSError,
-        ValueError,
-        TypeError,
-        httpx.HTTPError,
-    ) as exc:  # pragma: no cover - defensive logging
-        LOGGER.error(
-            "component.stop_failed",
-            extra={
-                "event": "component_stop_failed",
-                "module": __name__,
-                "details": {"component": label},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.exception("component stop failed", extra={"component": label})
         return {"component": label, "status": "error", "error": str(exc)}
 
 
@@ -3281,20 +3187,8 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
             from . import loop as loop_service
 
             stop_results.append(await _stop_component("loop", loop_service.stop_loop))
-        except (
-            ImportError,
-            ModuleNotFoundError,
-            AttributeError,
-        ) as exc:  # pragma: no cover - defensive import failure
-            LOGGER.warning(
-                "loop.stop_import_failed",
-                extra={
-                    "event": "loop_stop_import_failed",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception as exc:  # pragma: no cover - defensive import failure
+            LOGGER.debug("loop.stop_loop not available", exc_info=True)
             stop_results.append({"component": "loop", "status": "error", "error": str(exc)})
 
         stoppables: list[tuple[str, Callable[[], Awaitable[object] | object]]] = []
@@ -3302,100 +3196,44 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
             from .partial_hedge_runner import get_runner as get_partial_runner
 
             stoppables.append(("partial_hedge_runner", lambda: get_partial_runner().stop()))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "partial_hedge_runner.unavailable",
-                extra={
-                    "event": "partial_hedge_runner_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("partial hedge runner unavailable", exc_info=True)
         try:
             from .recon_runner import get_runner as get_recon_runner
 
             stoppables.append(("recon_runner", lambda: get_recon_runner().stop()))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "recon_runner.unavailable",
-                extra={
-                    "event": "recon_runner_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("recon runner unavailable", exc_info=True)
         try:
             from .exchange_watchdog_runner import get_runner as get_watchdog_runner
 
             stoppables.append(("exchange_watchdog", lambda: get_watchdog_runner().stop()))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "exchange_watchdog_runner.unavailable",
-                extra={
-                    "event": "exchange_watchdog_runner_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("exchange watchdog runner unavailable", exc_info=True)
         try:
             from ..auto_hedge_daemon import _daemon as auto_hedge_daemon
 
             stoppables.append(("auto_hedge_daemon", auto_hedge_daemon.stop))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "auto_hedge_daemon.unavailable",
-                extra={
-                    "event": "auto_hedge_daemon_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("auto hedge daemon unavailable", exc_info=True)
         try:
             from .autopilot_guard import get_guard as get_autopilot_guard
 
             stoppables.append(("autopilot_guard", lambda: get_autopilot_guard().stop()))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "autopilot_guard.unavailable",
-                extra={
-                    "event": "autopilot_guard_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("autopilot guard unavailable", exc_info=True)
         try:
             from .orchestrator_alerts import _ALERT_LOOP
 
             stoppables.append(("orchestrator_alerts", _ALERT_LOOP.stop))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "orchestrator_alerts.unavailable",
-                extra={
-                    "event": "orchestrator_alerts_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("orchestrator alerts unavailable", exc_info=True)
         try:
             from services.opportunity_scanner import get_scanner
 
             stoppables.append(("opportunity_scanner", lambda: get_scanner().stop()))
-        except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
-            LOGGER.debug(
-                "opportunity_scanner.unavailable",
-                extra={
-                    "event": "opportunity_scanner_unavailable",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception:  # pragma: no cover
+            LOGGER.debug("opportunity scanner unavailable", exc_info=True)
 
         for label, stopper in stoppables:
             stop_results.append(await _stop_component(label, stopper))
@@ -3404,20 +3242,8 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
 
         try:
             open_orders = await asyncio.to_thread(ledger.fetch_open_orders)
-        except (
-            sqlite3.Error,
-            OSError,
-            RuntimeError,
-        ) as exc:  # pragma: no cover - defensive logging
-            LOGGER.error(
-                "ledger.fetch_open_orders_failed",
-                extra={
-                    "event": "ledger_fetch_open_orders_failed",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
-            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            LOGGER.exception("failed to load open orders prior to cancel-all")
             open_orders = []
 
         batch_id = _batch_id_for_orders(open_orders)
@@ -3438,23 +3264,8 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
                         orders=venue_orders,
                         batch_id=venue_batch,
                     )
-                except (
-                    asyncio.TimeoutError,
-                    RuntimeError,
-                    ValueError,
-                    OSError,
-                    httpx.HTTPError,
-                    HoldActiveError,
-                ) as exc:  # pragma: no cover - defensive logging
-                    LOGGER.error(
-                        "cancel_all.failed",
-                        extra={
-                            "event": "cancel_all_failed",
-                            "module": __name__,
-                            "details": {"venue": venue_key, "orders": len(venue_orders)},
-                        },
-                        exc_info=exc,
-                    )
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    LOGGER.exception("cancel-all failed", extra={"venue": venue_key})
                     result = {
                         "venue": venue_key,
                         "cancelled": 0,
@@ -3476,15 +3287,10 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
                 safety=pre_shutdown_safety,
                 positions=pre_shutdown_positions,
             )
-        except (OSError, ValueError, RuntimeError, TypeError) as exc:
-            LOGGER.error(
-                "runtime.snapshot_persist_failed",
-                extra={
-                    "event": "runtime_snapshot_persist_failed",
-                    "module": __name__,
-                    "details": {},
-                },
-                exc_info=exc,
+        except Exception as exc:
+            LOGGER.exception(
+                "failed to persist runtime snapshot on shutdown",
+                extra={"error": str(exc)},
             )
 
         _LAST_SHUTDOWN_RESULT = dict(summary)

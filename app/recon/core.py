@@ -5,11 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import logging
-import sqlite3
 import time
 from typing import Any, Iterable, Literal, Mapping, NamedTuple, Sequence
-
-import httpx
 
 from .. import ledger
 from ..services import runtime
@@ -18,45 +15,6 @@ from ..util.venues import VENUE_ALIASES
 LOGGER = logging.getLogger(__name__)
 
 _CONFIG_OVERRIDE: _ReconConfig | None = None
-
-
-_LEDGER_EXCEPTIONS: tuple[type[Exception], ...] = (
-    sqlite3.Error,
-    RuntimeError,
-    OSError,
-    ValueError,
-)
-_REMOTE_EXCEPTIONS: tuple[type[Exception], ...] = (
-    httpx.HTTPError,
-    RuntimeError,
-    ValueError,
-    KeyError,
-    TypeError,
-    AttributeError,
-    LookupError,
-    OSError,
-)
-_PNL_SNAPSHOT_EXCEPTIONS: tuple[type[Exception], ...] = _LEDGER_EXCEPTIONS + (
-    InvalidOperation,
-    TypeError,
-    LookupError,
-)
-_PROVIDER_EXCEPTIONS: tuple[type[Exception], ...] = _REMOTE_EXCEPTIONS + (sqlite3.Error,)
-
-
-def _log_loader_failure(
-    message: str, *, details: Mapping[str, object], exc: BaseException, level: int
-) -> None:
-    LOGGER.log(
-        level,
-        message,
-        extra={
-            "event": message,
-            "component": "recon",
-            "details": dict(details),
-        },
-        exc_info=exc,
-    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -609,13 +567,8 @@ def _load_local_positions(ctx: object | None) -> Sequence[Mapping[str, object]]:
         return provider
     try:
         return ledger.fetch_positions()
-    except _LEDGER_EXCEPTIONS as exc:  # pragma: no cover - defensive
-        _log_loader_failure(
-            "recon.fetch_local_positions_failed",
-            details={"loader": "local_positions"},
-            exc=exc,
-            level=logging.ERROR,
-        )
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_positions_failed")
         return []
 
 
@@ -630,13 +583,8 @@ def _load_remote_positions(
 
         reconciler = Reconciler()
         return reconciler.fetch_exchange_positions()
-    except (ImportError,) + _REMOTE_EXCEPTIONS as exc:  # pragma: no cover - defensive
-        _log_loader_failure(
-            "recon.fetch_remote_positions_failed",
-            details={"loader": "remote_positions"},
-            exc=exc,
-            level=logging.WARNING,
-        )
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_remote_positions_failed")
         return {}
 
 
@@ -646,13 +594,8 @@ def _load_local_balances(ctx: object | None) -> Sequence[Mapping[str, object]]:
         return provider
     try:
         return ledger.fetch_balances()
-    except _LEDGER_EXCEPTIONS as exc:  # pragma: no cover - defensive
-        _log_loader_failure(
-            "recon.fetch_local_balances_failed",
-            details={"loader": "local_balances"},
-            exc=exc,
-            level=logging.ERROR,
-        )
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_balances_failed")
         return []
 
 
@@ -669,13 +612,8 @@ def _load_local_orders(ctx: object | None) -> Sequence[Mapping[str, object]]:
         return provider
     try:
         return ledger.fetch_open_orders()
-    except _LEDGER_EXCEPTIONS as exc:  # pragma: no cover - defensive
-        _log_loader_failure(
-            "recon.fetch_local_orders_failed",
-            details={"loader": "local_orders"},
-            exc=exc,
-            level=logging.ERROR,
-        )
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_orders_failed")
         return []
 
 
@@ -695,13 +633,8 @@ def _load_local_pnl(ctx: object | None) -> Sequence[Mapping[str, object]]:
 
         pnl_ledger = pnl_sources.build_ledger_from_history(ctx)
         return _ledger_rows_from_pnl(pnl_ledger, supports_fees=True, supports_funding=True)
-    except _PNL_SNAPSHOT_EXCEPTIONS as exc:  # pragma: no cover - defensive
-        _log_loader_failure(
-            "recon.fetch_local_pnl_failed",
-            details={"loader": "local_pnl"},
-            exc=exc,
-            level=logging.ERROR,
-        )
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("recon.fetch_local_pnl_failed")
         return []
 
 
@@ -1385,13 +1318,8 @@ def _resolve_provider(ctx: object | None, name: str):
     if callable(value):
         try:
             return value()
-        except _PROVIDER_EXCEPTIONS as exc:  # pragma: no cover - defensive
-            _log_loader_failure(
-                "recon.provider_failed",
-                details={"provider": name},
-                exc=exc,
-                level=logging.WARNING,
-            )
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.exception("recon.provider_failed", extra={"provider": name})
             return None
     return value
 

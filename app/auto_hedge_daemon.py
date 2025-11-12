@@ -31,7 +31,6 @@ from .telemetry import observe_core_latency, set_hedge_daemon_ok
 
 
 logger = logging.getLogger(__name__)
-COMPONENT = "auto_hedge"
 
 INITIATOR = os.getenv("AUTO_HEDGE_INITIATOR", "auto-hedge-daemon")
 _FAIL_WINDOW = 60.0
@@ -42,29 +41,13 @@ STRATEGY_NAME = "cross_exchange_arb"
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     try:
         from .opsbot.notifier import emit_alert
-    except (ImportError, ModuleNotFoundError) as exc:
-        logger.warning(
-            "auto_hedge.ops_notifier_import_failed",
-            extra={
-                "event": "auto_hedge.ops_notifier_import_failed",
-                "component": COMPONENT,
-                "details": {"kind": kind},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:
+        logger.warning("ops notifier import failed kind=%s error=%s", kind, exc)
         return
     try:
         emit_alert(kind=kind, text=text, extra=extra or None)
-    except (OSError, ValueError, RuntimeError) as exc:
-        logger.warning(
-            "auto_hedge.ops_notifier_emit_failed",
-            extra={
-                "event": "auto_hedge.ops_notifier_emit_failed",
-                "component": COMPONENT,
-                "details": {"kind": kind, "extra": dict(extra or {})},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:
+        logger.warning("ops notifier emit failed kind=%s error=%s", kind, exc)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -169,22 +152,8 @@ class AutoHedgeDaemon:
                 await self.run_cycle()
             except asyncio.CancelledError:
                 break
-            except (
-                RuntimeError,
-                ValueError,
-                TypeError,
-                OSError,
-                asyncio.TimeoutError,
-            ) as exc:  # pragma: no cover - defensive logging
-                logger.error(
-                    "auto_hedge.cycle_run_failed",
-                    extra={
-                        "event": "auto_hedge.cycle_run_failed",
-                        "component": COMPONENT,
-                        "details": {"error": str(exc)},
-                    },
-                    exc_info=exc,
-                )
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("auto hedge cycle failed: %s", exc)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
             except asyncio.TimeoutError:
@@ -327,23 +296,8 @@ class AutoHedgeDaemon:
 
             try:
                 scan_payload = await self._scanner.scan_once()
-            except (
-                RuntimeError,
-                ValueError,
-                TypeError,
-                KeyError,
-                OSError,
-                asyncio.TimeoutError,
-            ) as exc:
-                logger.error(
-                    "auto_hedge.scan_failed",
-                    extra={
-                        "event": "auto_hedge.scan_failed",
-                        "component": COMPONENT,
-                        "details": {"error": str(exc)},
-                    },
-                    exc_info=exc,
-                )
+            except Exception as exc:
+                logger.exception("auto hedge scan failed: %s", exc)
                 self._register_failure(reason="scanner_error", candidate=None)
                 return
 
@@ -399,22 +353,8 @@ class AutoHedgeDaemon:
 
             try:
                 trade_result = execute_hedged_trade(symbol, notional, leverage, min_spread)
-            except (
-                RuntimeError,
-                ValueError,
-                TypeError,
-                KeyError,
-                OSError,
-            ) as exc:  # pragma: no cover - defensive
-                logger.error(
-                    "auto_hedge.execution_failed",
-                    extra={
-                        "event": "auto_hedge.execution_failed",
-                        "component": COMPONENT,
-                        "details": {"symbol": symbol, "error": str(exc)},
-                    },
-                    exc_info=exc,
-                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception("auto hedge execution raised: %s", exc)
                 self._register_failure(reason="execution_error", candidate=candidate)
                 return
 
@@ -499,38 +439,11 @@ class AutoHedgeDaemon:
             _emit_ops_alert("auto_hedge_executed", alert_text, alert_payload)
             try:
                 await record_snapshot(reason="auto_hedge_cycle")
-            except (
-                RuntimeError,
-                ValueError,
-                OSError,
-            ) as exc:  # pragma: no cover - snapshot failures should not break cycle
-                logger.warning(
-                    "auto_hedge.snapshot_failed",
-                    extra={
-                        "event": "auto_hedge.snapshot_failed",
-                        "component": COMPONENT,
-                        "details": {"reason": "auto_hedge_cycle"},
-                    },
-                    exc_info=exc,
-                )
-        except (
-            RuntimeError,
-            ValueError,
-            TypeError,
-            KeyError,
-            OSError,
-            asyncio.TimeoutError,
-        ) as exc:
+            except Exception:  # pragma: no cover - snapshot failures should not break cycle
+                logger.debug("failed to record pnl history snapshot", exc_info=True)
+        except Exception as exc:
             self._last_cycle_error = True
-            logger.error(
-                "auto_hedge.cycle_failed",
-                extra={
-                    "event": "auto_hedge.cycle_failed",
-                    "component": COMPONENT,
-                    "details": {"error": str(exc)},
-                },
-                exc_info=exc,
-            )
+            logger.exception("auto hedge cycle failed", extra={"error": str(exc)})
             raise
         finally:
             duration_ms = (time.perf_counter() - start) * 1000.0

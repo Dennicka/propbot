@@ -27,7 +27,6 @@ from .edge_guard import allowed_to_trade as guard_allowed_to_trade
 
 
 LOGGER = logging.getLogger(__name__)
-COMPONENT = "arb"
 
 
 def _ts() -> str:
@@ -211,7 +210,7 @@ def _record_execution_stat(
         expected_notional = _coerce_float(plan.get("expected_notional"))
         if planned_size <= 0.0 and planned_px > 0.0 and expected_notional > 0.0:
             planned_size = expected_notional / planned_px
-    except (TypeError, ValueError):  # pragma: no cover - defensive
+    except Exception:  # pragma: no cover - defensive
         planned_px = 0.0
         planned_size = 0.0
         expected_notional = 0.0
@@ -244,18 +243,10 @@ def _record_execution_stat(
     }
     try:
         store_execution_stat(record)
-    except (
-        OSError,
-        TypeError,
-        ValueError,
-    ) as exc:  # pragma: no cover - store must not break hedge flow
+    except Exception as exc:  # pragma: no cover - store must not break hedge flow  # noqa: BLE001
         LOGGER.warning(
-            "cross_exchange_arb.execution_stat_persist_failed",
-            extra={
-                "event": "cross_exchange_arb.execution_stat_persist_failed",
-                "component": COMPONENT,
-                "details": {"symbol": symbol, "side": side, "dry_run": dry_run},
-            },
+            "cross_exchange_arb execution stat persistence failed",
+            extra={"symbol": symbol, "side": side},
             exc_info=exc,
         )
 
@@ -288,14 +279,10 @@ def _log_edge_guard_block(
     }
     try:
         append_entry(entry)
-    except (OSError, TypeError, ValueError) as exc:  # pragma: no cover - logging best effort
+    except Exception as exc:  # pragma: no cover - logging best effort  # noqa: BLE001
         LOGGER.warning(
-            "cross_exchange_arb.hedge_log_append_failed",
-            extra={
-                "event": "cross_exchange_arb.hedge_log_append_failed",
-                "component": COMPONENT,
-                "details": {"symbol": symbol, "reason": reason},
-            },
+            "cross_exchange_arb hedge log append failed",
+            extra={"symbol": symbol, "reason": reason},
             exc_info=exc,
         )
     try:
@@ -307,14 +294,10 @@ def _log_edge_guard_block(
                 "spread_bps": float(spread_info.get("spread_bps", 0.0)),
             },
         )
-    except (RuntimeError, ValueError) as exc:  # pragma: no cover - incident log best effort
-        LOGGER.error(
-            "cross_exchange_arb.incident_record_failed",
-            extra={
-                "event": "cross_exchange_arb.incident_record_failed",
-                "component": COMPONENT,
-                "details": {"symbol": symbol, "reason": reason},
-            },
+    except Exception as exc:  # pragma: no cover - incident log best effort  # noqa: BLE001
+        LOGGER.warning(
+            "cross_exchange_arb incident record failed",
+            extra={"symbol": symbol, "reason": reason},
             exc_info=exc,
         )
 
@@ -503,16 +486,8 @@ def _persist_partial_position(
             strategy=STRATEGY_NAME,
         )
         return record
-    except (OSError, ValueError, TypeError) as exc:  # pragma: no cover - defensive persistence
-        LOGGER.error(
-            "cross_exchange_arb.partial_position_persist_failed",
-            extra={
-                "event": "cross_exchange_arb.partial_position_persist_failed",
-                "component": COMPONENT,
-                "details": {"symbol": symbol, "notional_usdt": notional_usdt},
-            },
-            exc_info=exc,
-        )
+    except Exception as exc:  # pragma: no cover - defensive persistence
+        LOGGER.exception("failed to persist hedge position", extra={"error": str(exc)})
         return None
 
 
@@ -528,15 +503,14 @@ def execute_hedged_trade(
         def _record_failure(reason: str) -> None:
             try:
                 risk_manager.record_failure(STRATEGY_NAME, reason)
-            except (RuntimeError, ValueError) as exc:
-                LOGGER.warning(
-                    "cross_exchange_arb.strategy_failure_record_failed",
+            except Exception as exc:
+                LOGGER.exception(
+                    "failed to record strategy failure",
                     extra={
-                        "event": "cross_exchange_arb.strategy_failure_record_failed",
-                        "component": COMPONENT,
-                        "details": {"strategy": STRATEGY_NAME, "reason": reason},
+                        "strategy": STRATEGY_NAME,
+                        "reason": reason,
+                        "error": str(exc),
                     },
-                    exc_info=exc,
                 )
 
         if spread_value < float(min_spread):
@@ -585,15 +559,10 @@ def execute_hedged_trade(
         def _record_success() -> None:
             try:
                 risk_manager.record_success(STRATEGY_NAME)
-            except (RuntimeError, ValueError) as exc:
-                LOGGER.warning(
-                    "cross_exchange_arb.strategy_success_record_failed",
-                    extra={
-                        "event": "cross_exchange_arb.strategy_success_record_failed",
-                        "component": COMPONENT,
-                        "details": {"strategy": STRATEGY_NAME},
-                    },
-                    exc_info=exc,
+            except Exception as exc:
+                LOGGER.exception(
+                    "failed to record strategy success",
+                    extra={"strategy": STRATEGY_NAME, "error": str(exc)},
                 )
 
         def _record_and_return(reason: str, *, record_failure: bool = True) -> dict:
@@ -813,13 +782,7 @@ def execute_hedged_trade(
                 "short_plan": short_plan,
             }
             _record_failure(exc.reason or "hold_active")
-        except (
-            RuntimeError,
-            ValueError,
-            TypeError,
-            KeyError,
-            OSError,
-        ) as exc:
+        except Exception as exc:
             reason = str(exc)
             error_reason = reason
             partial = bool(long_leg and not short_leg and not dry_run_mode)
