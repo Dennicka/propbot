@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
+from app.readiness.live import registry
 from .util.logging import setup_logging
 from .services.status import get_status_overview, get_status_components, get_status_slo
 from .routers import (
@@ -70,9 +71,25 @@ app.include_router(deriv.router, prefix="/api/deriv")
 app.include_router(hedge.router, prefix="/api/hedge")
 
 
+app.router.routes = [
+    route
+    for route in app.router.routes
+    if not (
+        getattr(route, "path", None) == "/live-readiness"
+        and "GET" in getattr(route, "methods", set())
+    )
+]
+
+
 # Prometheus metrics endpoint
 @app.get("/metrics")
 def metrics() -> Response:
     return Response(
         generate_latest(REGISTRY), media_type="text/plain; version=0.0.4; charset=utf-8"
     )
+
+
+@app.get("/live-readiness")
+def live_readiness() -> JSONResponse:
+    status, components = registry.report()
+    return JSONResponse({"status": status, "components": components})
