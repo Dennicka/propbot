@@ -31,9 +31,7 @@ def test_notional_caps() -> None:
     assert ok
     assert reason == ""
 
-    symbol_cfg = RiskConfig(
-        cap_per_symbol={("okx", "BTC-USDT"): Decimal("900")}
-    )
+    symbol_cfg = RiskConfig(cap_per_symbol={("okx", "BTC-USDT"): Decimal("900")})
     symbol_governor = RiskGovernor(symbol_cfg)
     ok, reason = symbol_governor.allow_order(
         "okx",

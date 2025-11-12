@@ -545,10 +545,7 @@ class SmartRouter:
         self._prune_completed(now_ns)
         if self._order_strategies:
             for coid in list(self._order_strategies.keys()):
-                if (
-                    self._order_tracker.get(coid) is None
-                    and coid not in self._completed_orders
-                ):
+                if self._order_tracker.get(coid) is None and coid not in self._completed_orders:
                     self._order_strategies.pop(coid, None)
 
         return new_state

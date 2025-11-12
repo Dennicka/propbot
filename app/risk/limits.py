@@ -59,9 +59,7 @@ class RiskGovernor:
             return None
         return "daily_cooloff"
 
-    def _check_key_cooloff(
-        self, key: Tuple[str, str, str], now_s: int
-    ) -> Optional[str]:
+    def _check_key_cooloff(self, key: Tuple[str, str, str], now_s: int) -> Optional[str]:
         expiry = self.state.key_cooloff_until.get(key)
         if expiry is None:
             return None
@@ -221,4 +219,3 @@ def load_config_from_env() -> RiskConfig:
 
 
 __all__ = ["RiskConfig", "RiskState", "RiskGovernor", "load_config_from_env"]
-
