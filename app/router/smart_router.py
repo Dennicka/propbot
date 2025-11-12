@@ -7,6 +7,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Dict, Iterable, Mapping, Sequence
 
 import httpx
@@ -14,7 +15,8 @@ import httpx
 from ..golden.logger import get_golden_logger
 from ..orders.idempotency import IdempoStore, make_coid
 from ..orders.quantization import as_dec, quantize_order
-from ..orders.state import OrderState, next_state
+from ..orders.state import OrderState
+from ..orders.tracker import OrderTracker, TRACKER_MAX_ACTIVE, TRACKER_TTL_SEC
 from ..rules.pretrade import PretradeRejection, validate_pretrade
 from ..exchanges.metadata import provider
 from ..services.runtime import (
@@ -33,6 +35,7 @@ from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 
 LOGGER = logging.getLogger(__name__)
+NANOS_IN_SECOND = 1_000_000_000
 
 
 def _maybe_float(value: object) -> float | None:
@@ -194,33 +197,33 @@ def _latency_weight_bps_per_ms() -> float:
     return max(weight, 0.0)
 
 
+def _order_tracker_ttl() -> int:
+    raw = os.getenv("ORDER_TRACKER_TTL_SEC")
+    if raw is None:
+        return TRACKER_TTL_SEC
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return TRACKER_TTL_SEC
+    return max(value, 0)
+
+
+def _order_tracker_max_active() -> int:
+    raw = os.getenv("ORDER_TRACKER_MAX_ACTIVE")
+    if raw is None:
+        return TRACKER_MAX_ACTIVE
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return TRACKER_MAX_ACTIVE
+    return value if value > 0 else TRACKER_MAX_ACTIVE
+
+
 @dataclass(slots=True)
 class _ScoreResult:
     venue: str
     score: float
     payload: Dict[str, object]
-
-
-@dataclass(slots=True)
-class _TrackedOrder:
-    strategy: str
-    venue: str
-    symbol: str
-    side: str
-    qty: float
-    state: OrderState = OrderState.NEW
-    filled_qty: float = 0.0
-
-    def snapshot(self) -> Dict[str, object]:
-        return {
-            "strategy": self.strategy,
-            "venue": self.venue,
-            "symbol": self.symbol,
-            "side": self.side,
-            "qty": self.qty,
-            "filled_qty": self.filled_qty,
-            "state": self.state,
-        }
 
 
 class SmartRouter:
@@ -246,7 +249,9 @@ class SmartRouter:
         self._latency_weight = _latency_weight_bps_per_ms()
         self._liquidity_snapshot = self._load_liquidity_snapshot()
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
-        self._orders: Dict[str, _TrackedOrder] = {}
+        self._order_tracker = OrderTracker(max_active=_order_tracker_max_active())
+        self._order_tracker_ttl_sec = _order_tracker_ttl()
+        self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
 
     def _load_symbol_meta(self, venue: str, symbol: str) -> Mapping[str, object]:
         cached = provider.get(venue, symbol)
@@ -291,7 +296,8 @@ class SmartRouter:
 
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
         if not self._idempo.should_send(client_order_id):
-            tracked = self._orders.get(client_order_id)
+            tracked = self._order_tracker.get(client_order_id)
+            completed = None if tracked is not None else self._completed_orders.get(client_order_id)
             LOGGER.warning(
                 "smart_router.idempotent_skip",
                 extra={
@@ -311,8 +317,17 @@ class SmartRouter:
             }
             if tracked is not None:
                 response["state"] = tracked.state
-                response["filled_qty"] = tracked.filled_qty
-                response["qty"] = tracked.qty
+                response["filled_qty"] = float(tracked.filled)
+                response["qty"] = float(tracked.qty)
+            elif completed is not None:
+                snapshot, _ = completed
+                response.update(
+                    {
+                        "state": snapshot["state"],
+                        "filled_qty": snapshot["filled_qty"],
+                        "qty": snapshot["qty"],
+                    }
+                )
             return response
 
         side_lower = str(side or "").strip().lower()
@@ -352,21 +367,23 @@ class SmartRouter:
         else:
             qty_value = max(float(qty), 0.0)
 
-        tracked = self._orders.get(client_order_id)
-        if tracked is None:
-            tracked = _TrackedOrder(
-                strategy=strategy,
-                venue=venue,
-                symbol=symbol,
-                side=side,
-                qty=qty_value,
-            )
-            self._orders[client_order_id] = tracked
-        else:
-            tracked.qty = qty_value
-
+        self._completed_orders.pop(client_order_id, None)
+        qty_decimal = Decimal(str(qty_value))
+        self._order_tracker.register_order(
+            client_order_id,
+            venue=venue,
+            symbol=symbol,
+            side=side,
+            qty=qty_decimal,
+            now_ns=ts_ns,
+        )
         try:
-            tracked.state = next_state(tracked.state, "submit")
+            state = self._order_tracker.apply_event(
+                client_order_id,
+                "submit",
+                None,
+                ts_ns,
+            )
         except ValueError as exc:  # pragma: no cover - defensive
             LOGGER.error(
                 "smart_router.invalid_state_transition",
@@ -375,7 +392,7 @@ class SmartRouter:
                     "component": "smart_router",
                     "details": {
                         "client_order_id": client_order_id,
-                        "current_state": tracked.state.value,
+                        "current_state": OrderState.NEW.value,
                         "event": "submit",
                     },
                 },
@@ -384,11 +401,11 @@ class SmartRouter:
             self._idempo.expire(client_order_id)
             raise
 
-        tracked.filled_qty = min(tracked.filled_qty, tracked.qty)
+        tracked = self._order_tracker.get(client_order_id)
         response: Dict[str, object] = {
             "client_order_id": client_order_id,
-            "state": tracked.state,
-            "qty": tracked.qty,
+            "state": state,
+            "qty": float(tracked.qty) if tracked is not None else qty_value,
         }
         if price_value is not None:
             response["price"] = price_value
@@ -403,7 +420,7 @@ class SmartRouter:
     ) -> OrderState:
         """Apply an order lifecycle event and update idempotency state."""
 
-        tracked = self._orders.get(client_order_id)
+        tracked = self._order_tracker.get(client_order_id)
         if tracked is None:
             LOGGER.error(
                 "smart_router.unknown_order_event",
@@ -418,8 +435,15 @@ class SmartRouter:
         event_key = event.strip().lower()
         if event_key == "expired":
             event_key = "expire"
+        now_ns = time.time_ns()
+        qty_value = Decimal(str(quantity)) if quantity is not None else None
         try:
-            new_state = next_state(tracked.state, event_key)
+            new_state = self._order_tracker.apply_event(
+                client_order_id,
+                event_key,
+                qty_value,
+                now_ns,
+            )
         except ValueError as exc:
             LOGGER.error(
                 "smart_router.invalid_state_transition",
@@ -436,33 +460,63 @@ class SmartRouter:
             )
             raise
 
+        updated = self._order_tracker.get(client_order_id)
         if event_key == "ack":
             self._idempo.mark_ack(client_order_id)
         elif event_key == "partial_fill":
-            increment = self._coerce_positive(quantity)
-            tracked.filled_qty = min(tracked.qty, tracked.filled_qty + increment)
-            self._idempo.mark_fill(client_order_id, tracked.filled_qty)
+            filled_qty = float(updated.filled) if updated is not None else 0.0
+            self._idempo.mark_fill(client_order_id, filled_qty)
         elif event_key == "filled":
-            increment = self._coerce_positive(quantity)
-            if increment <= 0.0:
-                increment = max(tracked.qty - tracked.filled_qty, 0.0)
-            tracked.filled_qty = min(tracked.qty, tracked.filled_qty + increment)
-            self._idempo.mark_fill(client_order_id, tracked.filled_qty)
+            filled_qty = float(updated.filled) if updated is not None else 0.0
+            self._idempo.mark_fill(client_order_id, filled_qty)
         elif event_key == "canceled":
             self._idempo.mark_cancel(client_order_id)
-        elif event_key in {"reject", "expired", "expire"}:
+        elif event_key in {"reject", "expire"}:
             self._idempo.expire(client_order_id)
 
-        tracked.state = new_state
-        if new_state == OrderState.FILLED and tracked.qty > 0:
-            tracked.filled_qty = tracked.qty
-        return tracked.state
+        if updated is not None and self._order_tracker.is_terminal(new_state):
+            snapshot = self._snapshot_from_tracked(updated)
+            self._completed_orders[client_order_id] = (snapshot, now_ns)
+
+        self._order_tracker.prune_terminal()
+        self._order_tracker.prune_aged(now_ns, self._order_tracker_ttl_sec)
+        self._prune_completed(now_ns)
+
+        return new_state
 
     def get_order_snapshot(self, client_order_id: str) -> Dict[str, object]:
-        tracked = self._orders.get(client_order_id)
-        if tracked is None:
+        tracked = self._order_tracker.get(client_order_id)
+        if tracked is not None:
+            return self._snapshot_from_tracked(tracked)
+        completed = self._completed_orders.get(client_order_id)
+        if completed is None:
             raise KeyError(f"unknown client order id: {client_order_id}")
-        return tracked.snapshot()
+        snapshot, _ = completed
+        return snapshot
+
+    @staticmethod
+    def _snapshot_from_tracked(tracked) -> Dict[str, object]:
+        return {
+            "venue": tracked.venue,
+            "symbol": tracked.symbol,
+            "side": tracked.side,
+            "qty": float(tracked.qty),
+            "filled_qty": float(tracked.filled),
+            "state": tracked.state,
+        }
+
+    def _prune_completed(self, now_ns: int) -> None:
+        ttl_sec = self._order_tracker_ttl_sec
+        if ttl_sec <= 0 or not self._completed_orders:
+            return
+        ttl_ns = ttl_sec * NANOS_IN_SECOND
+        stale_ids = [
+            coid
+            for coid, (_, updated_ns) in self._completed_orders.items()
+            if now_ns - updated_ns > ttl_ns
+        ]
+        for coid in stale_ids:
+            self._completed_orders.pop(coid, None)
 
     def _load_liquidity_snapshot(self) -> Dict[str, float]:
         snapshot: Dict[str, float] = {}
@@ -819,16 +873,6 @@ class SmartRouter:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
-
-    @staticmethod
-    def _coerce_positive(value: float | None) -> float:
-        if value is None:
-            return 0.0
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            return 0.0
-        return max(numeric, 0.0)
 
 
 __all__ = ["SmartRouter", "feature_enabled"]
