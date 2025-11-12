@@ -1,0 +1,30 @@
+name: Auto format
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  auto-format:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install formatters
+        run: pip install black ruff
+      - name: Run Black
+        run: black .
+      - name: Run Ruff (fix mode)
+        run: ruff check --fix .
+      - name: Commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: chore(fmt): auto-format via CI
+          branch: ${{ github.head_ref }}
