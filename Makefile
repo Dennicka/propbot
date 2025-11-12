@@ -24,8 +24,8 @@ venv:
 	$(PIP) install -r requirements.txt
 
 fmt:
-	$(VENV)/bin/ruff check --fix app || true
-	$(VENV)/bin/black app tests
+	python -m black .
+	python -m ruff check --fix .
 
 lint:
 	$(VENV)/bin/ruff check app
