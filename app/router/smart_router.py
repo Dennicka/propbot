@@ -12,6 +12,9 @@ from typing import Dict, Iterable, Mapping, Sequence
 
 import httpx
 
+import app.config.feature_flags as ff
+from app.market.watchdog import watchdog
+
 from ..golden.logger import get_golden_logger
 from ..orders.idempotency import IdempoStore, make_coid
 from ..orders.quantization import as_dec, quantize_order
@@ -34,7 +37,6 @@ from ..tca.cost_model import (
 from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 from ..risk.limits import RiskGovernor, load_config_from_env
-from ..config import feature_flags as ff
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
@@ -409,6 +411,30 @@ class SmartRouter:
             price_value = float(q_price) if q_price is not None else price_value
         else:
             qty_value = max(float(qty), 0.0)
+
+        if ff.md_watchdog_on() and watchdog.is_stale(venue, symbol):
+            LOGGER.warning(
+                "marketdata-stale: %s/%s",
+                venue,
+                symbol,
+                extra={
+                    "event": "smart_router_marketdata_stale",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "strategy": strategy,
+                    },
+                },
+            )
+            self._idempo.expire(client_order_id)
+            return {
+                "client_order_id": client_order_id,
+                "status": "marketdata_stale",
+                "error": "market data stale",
+                "reason": "marketdata_stale",
+            }
 
         self._completed_orders.pop(client_order_id, None)
         self._order_strategies[client_order_id] = strategy
