@@ -110,6 +110,15 @@ class PretradeValidationError(RuntimeError):
         self.details = dict(details or {})
 
 
+class PretradeRejection(RuntimeError):
+    """Raised when an order fails lightweight pre-trade checks."""
+
+    def __init__(self, reason: str, *, details: Mapping[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.details = dict(details or {})
+
+
 def _decimal_floor(value: float, step: float) -> float:
     if step <= 0:
         return value
@@ -576,3 +585,51 @@ def reset_pretrade_validator_for_tests() -> None:
     global _VALIDATOR
     with _VALIDATOR_LOCK:
         _VALIDATOR = None
+
+
+def _meta_attr(meta: Mapping[str, Any] | Any, name: str, default: Any = None) -> Any:
+    if isinstance(meta, Mapping):
+        return meta.get(name, default)
+    return getattr(meta, name, default)
+
+
+def validate_pretrade(
+    side: str,
+    price: Decimal | None,
+    qty: Decimal,
+    meta: Mapping[str, Any] | Any,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Run lightweight pre-trade checks for smart-router submissions."""
+
+    side_value = str(side or "").strip().lower()
+    if side_value not in {"buy", "sell", "long", "short"}:
+        raise PretradeRejection("invalid_side", details={"side": side})
+    if qty <= 0:
+        raise PretradeRejection("qty_invalid", details={"qty": str(qty)})
+
+    symbol = _meta_attr(meta, "symbol")
+    if _meta_attr(meta, "blocked"):
+        reason = _meta_attr(meta, "reason") or "symbol_blocked"
+        raise PretradeRejection(reason, details={"symbol": symbol})
+
+    trade_windows = [
+        window for window in (_meta_attr(meta, "trade_hours") or []) if hasattr(window, "contains")
+    ]
+    if trade_windows:
+        now_dt = now or datetime.now(timezone.utc)
+        if not any(window.contains(now_dt) for window in trade_windows):
+            raise PretradeRejection("outside_trade_hours", details={"symbol": symbol})
+
+    min_notional_value = _meta_attr(meta, "min_notional")
+    if price is not None and min_notional_value:
+        try:
+            min_notional_dec = Decimal(str(min_notional_value))
+        except (InvalidOperation, ValueError, TypeError):  # pragma: no cover - defensive
+            min_notional_dec = None
+        if min_notional_dec is not None and price * qty + Decimal("1e-12") < min_notional_dec:
+            raise PretradeRejection(
+                "min_notional",
+                details={"symbol": symbol, "limit": str(min_notional_dec)},
+            )
