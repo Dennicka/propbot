@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Tuple, Literal
-import time
 import os
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Literal, Tuple
 
 StatusT = Literal["ready", "degraded", "down"]
 
@@ -45,4 +45,3 @@ class Registry:
 
 
 registry = Registry()
-
