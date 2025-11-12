@@ -43,7 +43,9 @@ def _seed_metadata() -> None:
 
 def _make_router(monkeypatch: pytest.MonkeyPatch, idempo: IdempoStore) -> SmartRouter:
     monkeypatch.setattr("app.router.smart_router.get_liquidity_status", lambda: {})
-    state = SimpleNamespace(config=SimpleNamespace(data=None), derivatives=SimpleNamespace(venues={}))
+    state = SimpleNamespace(
+        config=SimpleNamespace(data=None), derivatives=SimpleNamespace(venues={})
+    )
     market_data = SimpleNamespace()
     return SmartRouter(state=state, market_data=market_data, idempo_store=idempo)
 
@@ -81,7 +83,9 @@ def test_pretrade_strict_rejects_invalid_qty(monkeypatch: pytest.MonkeyPatch) ->
     assert tracker.should_send_calls == 1
 
 
-def test_risk_limits_block_high_notional(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_risk_limits_block_high_notional(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     _set_default_env(monkeypatch)
     monkeypatch.setenv("RISK_CAP_VENUE", "binance:1000")
     tracker = TrackingIdempoStore()
@@ -106,7 +110,9 @@ def test_risk_limits_block_high_notional(monkeypatch: pytest.MonkeyPatch, caplog
     assert response["status"] == "risk-blocked:venue_cap"
     assert response["reason"] == "venue_cap"
     assert tracker.should_send_calls == 0
-    assert any(getattr(record, "details", {}).get("reason") == "venue_cap" for record in caplog.records)
+    assert any(
+        getattr(record, "details", {}).get("reason") == "venue_cap" for record in caplog.records
+    )
 
 
 def test_order_passes_within_limits(monkeypatch: pytest.MonkeyPatch) -> None:
