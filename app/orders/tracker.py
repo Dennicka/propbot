@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter as _Counter
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable
+
+from prometheus_client import Counter, Gauge
 
 from .state import OrderState, next_state
 
@@ -14,6 +17,55 @@ LOGGER = logging.getLogger(__name__)
 TRACKER_TTL_SEC = 3600
 TRACKER_MAX_ACTIVE = 5000
 _NANOS_IN_SECOND = 1_000_000_000
+
+
+class _TrackerMetrics:
+    """Capture tracker specific telemetry with optional Prometheus export."""
+
+    def __init__(self) -> None:
+        self._orders_tracked = Gauge(
+            "orders_tracked",
+            "Number of active orders tracked in memory",
+        )
+        self._orders_finalized = Counter(
+            "orders_finalized_total",
+            "Count of finalized orders partitioned by state",
+            labelnames=("state",),
+        )
+        self._tracked_count = 0
+        self._finalized_counts: _Counter[str] = _Counter()
+        self._orders_tracked.set(0.0)
+
+    def observe_tracked(self, count: int) -> None:
+        """Update the tracked orders gauge and cached count."""
+
+        self._tracked_count = max(0, count)
+        self._orders_tracked.set(float(self._tracked_count))
+
+    def observe_finalized(self, state: OrderState) -> None:
+        """Record a finalized order for the provided terminal state."""
+
+        label = state.value.lower()
+        self._finalized_counts[label] += 1
+        self._orders_finalized.labels(state=label).inc()
+
+    def snapshot(self) -> Dict[str, object]:
+        """Return a snapshot of the collected metrics for tests."""
+
+        return {
+            "tracked": self._tracked_count,
+            "finalized": dict(self._finalized_counts),
+        }
+
+    def reset(self) -> None:
+        """Reset cached metric values for deterministic unit tests."""
+
+        self._tracked_count = 0
+        self._finalized_counts.clear()
+        self._orders_tracked.set(0.0)
+
+
+_TRACKER_METRICS = _TrackerMetrics()
 
 
 def _to_decimal(value: Decimal | float | int | str | None) -> Decimal:
@@ -55,6 +107,7 @@ class OrderTracker:
     def __init__(self, *, max_active: int = TRACKER_MAX_ACTIVE) -> None:
         self._orders: Dict[str, TrackedOrder] = {}
         self._max_active = max_active if max_active > 0 else TRACKER_MAX_ACTIVE
+        _TRACKER_METRICS.observe_tracked(len(self._orders))
 
     def __len__(self) -> int:
         return len(self._orders)
@@ -72,17 +125,28 @@ class OrderTracker:
         qty: Decimal,
         now_ns: int,
     ) -> None:
+        """Register a new order for lifecycle tracking.
+
+        Duplicate registrations are ignored to guarantee idempotency.
+        """
+
         qty_value = _to_decimal(qty)
         if qty_value < Decimal("0"):
             qty_value = Decimal("0")
         existing = self._orders.get(coid)
         if existing is not None:
-            existing.venue = venue
-            existing.symbol = symbol
-            existing.side = side
-            existing.qty = qty_value
-            existing.filled = min(existing.filled, qty_value)
-            existing.updated_ns = now_ns
+            LOGGER.warning(
+                "order_tracker.duplicate_registration",
+                extra={
+                    "event": "order_tracker_duplicate_registration",
+                    "component": "orders_tracker",
+                    "details": {
+                        "coid": coid,
+                        "venue": venue,
+                        "symbol": symbol,
+                    },
+                },
+            )
             return
         tracked = TrackedOrder(
             coid=coid,
@@ -95,6 +159,7 @@ class OrderTracker:
         )
         self._orders[coid] = tracked
         self._enforce_capacity()
+        _TRACKER_METRICS.observe_tracked(len(self._orders))
 
     def apply_event(
         self,
@@ -152,6 +217,30 @@ class OrderTracker:
             OrderState.EXPIRED,
         }
 
+    def finalize(self, coid: str, state: OrderState) -> bool:
+        """Remove a finalized order and emit telemetry.
+
+        Returns ``True`` when the order was tracked and removed.
+        """
+
+        tracked = self._orders.pop(coid, None)
+        if tracked is None:
+            return False
+        final_state = tracked.state if self.is_terminal(tracked.state) else state
+        if not self.is_terminal(final_state):
+            raise ValueError(f"state {state!s} is not terminal")
+        LOGGER.debug(
+            "order_tracker.finalized",
+            extra={
+                "event": "order_tracker_finalized",
+                "component": "orders_tracker",
+                "details": {"coid": coid, "state": final_state.value},
+            },
+        )
+        _TRACKER_METRICS.observe_finalized(final_state)
+        _TRACKER_METRICS.observe_tracked(len(self._orders))
+        return True
+
     def prune_terminal(self) -> int:
         if not self._orders:
             return 0
@@ -160,8 +249,11 @@ class OrderTracker:
             coid for coid, tracked in self._orders.items() if self.is_terminal(tracked.state)
         ]
         for coid in terminal_ids:
-            self._orders.pop(coid, None)
-            removed += 1
+            tracked = self._orders.get(coid)
+            if tracked is None:
+                continue
+            if self.finalize(coid, tracked.state):
+                removed += 1
         return removed
 
     def prune_aged(self, now_ns: int, ttl_sec: int) -> int:
@@ -175,6 +267,8 @@ class OrderTracker:
         for coid in aged_ids:
             self._orders.pop(coid, None)
             removed += 1
+        if removed:
+            _TRACKER_METRICS.observe_tracked(len(self._orders))
         return removed
 
     def _enforce_capacity(self) -> None:
@@ -186,7 +280,7 @@ class OrderTracker:
         for tracked in sorted(terminal_orders, key=lambda item: item.updated_ns):
             if len(self._orders) <= self._max_active:
                 break
-            self._orders.pop(tracked.coid, None)
+            self.finalize(tracked.coid, tracked.state)
         if len(self._orders) > self._max_active:
             LOGGER.warning(
                 "order_tracker.capacity_exceeded",
@@ -199,6 +293,19 @@ class OrderTracker:
                     },
                 },
             )
+        _TRACKER_METRICS.observe_tracked(len(self._orders))
+
+
+def tracker_metrics_snapshot() -> Dict[str, object]:
+    """Expose tracker telemetry for unit tests."""
+
+    return _TRACKER_METRICS.snapshot()
+
+
+def reset_tracker_metrics() -> None:
+    """Reset cached tracker telemetry for unit tests."""
+
+    _TRACKER_METRICS.reset()
 
 
 __all__ = [
@@ -206,4 +313,6 @@ __all__ = [
     "TrackedOrder",
     "TRACKER_TTL_SEC",
     "TRACKER_MAX_ACTIVE",
+    "reset_tracker_metrics",
+    "tracker_metrics_snapshot",
 ]

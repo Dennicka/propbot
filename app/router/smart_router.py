@@ -560,6 +560,7 @@ class SmartRouter:
             snapshot = self._snapshot_from_tracked(updated)
             self._completed_orders[client_order_id] = (snapshot, now_ns)
             self._order_strategies.pop(client_order_id, None)
+            self._order_tracker.finalize(client_order_id, new_state)
 
         self._order_tracker.prune_terminal()
         self._order_tracker.prune_aged(now_ns, self._order_tracker_ttl_sec)
