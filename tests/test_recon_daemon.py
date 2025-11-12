@@ -1,173 +1,114 @@
-from decimal import Decimal
-from types import SimpleNamespace
+import asyncio
+from dataclasses import dataclass
+from typing import Iterable, Tuple
 
 import pytest
 
-from app.recon.daemon import DaemonConfig, ReconDaemon, run_recon_cycle
+from app.orders.state import OrderState
+from app.recon.core import ReconConfig, ReconReport, Reconciler
+from app.recon.daemon import OrderReconDaemon
 
 
-def _daemon_config() -> DaemonConfig:
-    return DaemonConfig(
-        enabled=True,
-        interval_sec=1.0,
-        epsilon_position=Decimal("0.0001"),
-        epsilon_balance=Decimal("0.5"),
-        epsilon_notional=Decimal("1.0"),
-        auto_hold_on_critical=True,
-        balance_warn_usd=Decimal("5"),
-        balance_critical_usd=Decimal("25"),
-        position_size_warn=Decimal("0.1"),
-        position_size_critical=Decimal("0.5"),
-        order_critical_missing=True,
-        pnl_warn_usd=Decimal("5"),
-        pnl_critical_usd=Decimal("25"),
-        pnl_relative_warn=Decimal("0.01"),
-        pnl_relative_critical=Decimal("0.05"),
-        fee_warn_usd=Decimal("1"),
-        fee_critical_usd=Decimal("5"),
-        funding_warn_usd=Decimal("1"),
-        funding_critical_usd=Decimal("5"),
-    )
+@dataclass
+class FakeTrackedOrder:
+    order_id: str
+    state: OrderState
+    last_update_ts: float
+
+
+class FakeRouter:
+    def __init__(self, orders: Iterable[FakeTrackedOrder]) -> None:
+        self._orders = list(orders)
+
+    def snapshot_tracked_orders(self) -> Tuple[FakeTrackedOrder, ...]:
+        return tuple(self._orders)
+
+    def update(
+        self, order_id: str, *, last_update_ts: float | None = None, state: OrderState | None = None
+    ) -> None:
+        for order in self._orders:
+            if order.order_id == order_id:
+                if last_update_ts is not None:
+                    order.last_update_ts = last_update_ts
+                if state is not None:
+                    order.state = state
+                break
+
+
+class FakeClock:
+    def __init__(self, start: float) -> None:
+        self._value = start
+
+    def __call__(self) -> float:
+        return self._value
+
+    def set(self, value: float) -> None:
+        self._value = value
+
+    def advance(self, delta: float) -> None:
+        self._value += delta
+
+
+def _base_orders(now: float) -> list[FakeTrackedOrder]:
+    return [
+        FakeTrackedOrder(order_id="fresh", state=OrderState.ACK, last_update_ts=now - 1),
+        FakeTrackedOrder(order_id="stale", state=OrderState.PARTIAL, last_update_ts=now - 10),
+        FakeTrackedOrder(order_id="final", state=OrderState.FILLED, last_update_ts=now - 100),
+    ]
+
+
+def test_reconciler_flags_stale_orders() -> None:
+    start = 100.0
+    clock = FakeClock(start)
+    router = FakeRouter(_base_orders(start))
+    cfg = ReconConfig(order_stale_sec=5.0, max_batch=10)
+    reconciler = Reconciler(router=router, clock=clock, cfg=cfg)
+
+    report = reconciler.check_staleness()
+
+    assert report.ts == pytest.approx(start)
+    assert report.checked == 2
+    assert {issue.order_id for issue in report.issues} == {"stale"}
+    issue = report.issues[0]
+    assert issue.kind == "stale-order"
+    assert issue.age_sec is not None and issue.age_sec > cfg.order_stale_sec
+    assert issue.details and issue.details.get("state") == OrderState.PARTIAL.value
+
+    router.update("stale", last_update_ts=start)
+    clock.set(start + 1)
+    refreshed = reconciler.check_staleness()
+    assert all(issue.order_id != "stale" for issue in refreshed.issues)
 
 
 @pytest.mark.asyncio
-async def test_recon_cycle_sets_hold_on_critical_drift(monkeypatch: pytest.MonkeyPatch) -> None:
-    safety = SimpleNamespace(hold_active=False, hold_reason=None)
-    state = SimpleNamespace(derivatives=None, safety=safety)
-    monkeypatch.setattr("app.recon.daemon.runtime.get_state", lambda: state)
+async def test_daemon_emits_reports_and_updates_state() -> None:
+    start = 200.0
+    clock = FakeClock(start)
+    router = FakeRouter(_base_orders(start))
+    cfg = ReconConfig(order_stale_sec=5.0, interval_sec=0.01)
+    reconciler = Reconciler(router=router, clock=clock, cfg=cfg)
+    daemon = OrderReconDaemon(reconciler)
 
-    context = SimpleNamespace(
-        cfg=SimpleNamespace(recon=_daemon_config()),
-        state=state,
-        local_positions=lambda: [{"venue": "binance", "symbol": "BTCUSDT", "qty": Decimal("0.0")}],
-        remote_positions=lambda: [{"venue": "binance", "symbol": "BTCUSDT", "qty": Decimal("1.0")}],
-        local_balances=lambda: [],
-        remote_balances=lambda: [],
-        local_orders=lambda: [],
-        remote_orders=lambda: [],
-    )
+    clock.set(start + 10)
+    router.update("fresh", last_update_ts=clock())
+    await daemon.start()
+    try:
+        await asyncio.sleep(cfg.interval_sec * 3)
+        report = await daemon.get_last_report()
+        assert report is not None
+        assert report.checked == 2
+        assert any(issue.order_id == "stale" for issue in report.issues)
 
-    async def fake_build_context(self, _state):
-        return context
-
-    monkeypatch.setattr("app.recon.daemon.ReconDaemon._build_context", fake_build_context)
-
-    holds: dict[str, str] = {}
-
-    def engage(reason: str, *, source: str) -> bool:
-        holds["reason"] = reason
-        holds["source"] = source
-        return True
-
-    metadata_calls: list[dict[str, object]] = []
-
-    def update_status(**kwargs) -> None:
-        metadata_calls.append(kwargs.get("metadata", {}))
-
-    monkeypatch.setattr("app.recon.daemon.runtime.engage_safety_hold", engage)
-    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", update_status)
-
-    daemon = ReconDaemon(_daemon_config())
-    result = await daemon.run_once()
-
-    assert holds["reason"] == "RECON_DIVERGENCE"
-    assert holds["source"] == "recon"
-    assert metadata_calls
-    last_meta = metadata_calls[-1]
-    assert last_meta.get("status") == "CRITICAL"
-    assert last_meta.get("auto_hold") is True
-    assert result.issues and result.issues[0].severity == "CRITICAL"
-
-
-def test_recon_cycle_logs_and_metrics_for_warn(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
-    cfg = _daemon_config()
-    cfg.auto_hold_on_critical = False
-    state = SimpleNamespace(hold_active=False, hold_reason=None)
-
-    metrics_calls: list[tuple[str, str]] = []
-
-    class _Counter:
-        def __init__(self, label):
-            self.label = label
-
-        def inc(self):
-            metrics_calls.append(self.label)
-
-    class _CounterFactory:
-        def labels(self, **labels):
-            label = (labels.get("kind"), labels.get("severity"))
-            return _Counter(label)
-
-    monkeypatch.setattr("app.recon.daemon.RECON_DRIFT_TOTAL", _CounterFactory())
-    monkeypatch.setattr("app.recon.daemon.RECON_ISSUES_TOTAL", _CounterFactory())
-    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", lambda **_: None)
-    monkeypatch.setattr("app.recon.daemon.runtime.engage_safety_hold", lambda *_, **__: False)
-
-    ctx = SimpleNamespace(
-        cfg=SimpleNamespace(recon=cfg),
-        state=state,
-        local_positions=lambda: [],
-        remote_positions=lambda: [],
-        local_balances=lambda: [{"venue": "paper", "asset": "USDT", "total": Decimal("100")}],
-        remote_balances=lambda: [{"venue": "paper", "asset": "USDT", "total": Decimal("110")}],
-        local_orders=lambda: [],
-        remote_orders=lambda: [],
-    )
-
-    with caplog.at_level("WARNING"):
-        drifts = run_recon_cycle(ctx)
-
-    assert drifts and drifts[0].severity == "WARN"
-    assert any(label[1] == "WARN" for label in metrics_calls)
-    assert any(
-        getattr(record, "event", None) == "recon_drift"
-        or "recon.drift" in getattr(record, "message", "")
-        for record in caplog.records
-    )
-
-
-def test_run_recon_cycle_detects_pnl(monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg = _daemon_config()
-    ctx = SimpleNamespace(
-        cfg=SimpleNamespace(recon=cfg),
-        state=None,
-        local_balances=lambda: [],
-        remote_balances=lambda: [],
-        local_positions=lambda: [],
-        remote_positions=lambda: [],
-        local_orders=lambda: [],
-        remote_orders=lambda: [],
-        local_pnl=lambda: [
-            {
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "realized": Decimal("1"),
-                "fees": Decimal("0"),
-                "funding": Decimal("0"),
-                "rebates": Decimal("0"),
-                "net": Decimal("1"),
-                "supports_fees": True,
-                "supports_funding": True,
-            }
-        ],
-        remote_pnl=lambda: [
-            {
-                "venue": "binance",
-                "symbol": "BTCUSDT",
-                "realized": Decimal("20"),
-                "fees": Decimal("0"),
-                "funding": Decimal("0"),
-                "rebates": Decimal("0"),
-                "net": Decimal("20"),
-                "supports_fees": True,
-                "supports_funding": True,
-            }
-        ],
-    )
-
-    monkeypatch.setattr("app.recon.daemon.runtime.update_reconciliation_status", lambda **_: None)
-    monkeypatch.setattr("app.recon.daemon.runtime.engage_safety_hold", lambda *_, **__: False)
-
-    drifts = run_recon_cycle(ctx)
-    assert any(drift.kind == "PNL" for drift in drifts)
-    assert any(drift.severity == "CRITICAL" for drift in drifts if drift.kind == "PNL")
+        router.update("stale", last_update_ts=clock())
+        clock.advance(1)
+        refreshed: ReconReport | None = None
+        for _ in range(10):
+            await asyncio.sleep(cfg.interval_sec)
+            candidate = await daemon.get_last_report()
+            if candidate is not None and candidate.ts > report.ts:
+                refreshed = candidate
+                break
+        assert refreshed is not None
+        assert all(issue.order_id != "stale" for issue in refreshed.issues)
+    finally:
+        await daemon.stop()

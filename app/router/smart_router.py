@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, Iterable, Mapping, Sequence
+from typing import Dict, Iterable, Mapping, Protocol, Sequence
 
 import httpx
 
@@ -217,6 +217,23 @@ def _order_tracker_max_active() -> int:
     return value if value > 0 else TRACKER_MAX_ACTIVE
 
 
+class TrackedOrderLike(Protocol):
+    """Structural type for tracked order snapshots."""
+
+    order_id: str
+    state: OrderState
+    last_update_ts: float
+
+
+@dataclass(slots=True, frozen=True)
+class TrackedOrderSnapshot(TrackedOrderLike):
+    """Immutable view of a tracked order."""
+
+    order_id: str
+    state: OrderState
+    last_update_ts: float
+
+
 @dataclass(slots=True)
 class _ScoreResult:
     venue: str
@@ -294,6 +311,23 @@ class SmartRouter:
     # ------------------------------------------------------------------
     # Order lifecycle helpers
     # ------------------------------------------------------------------
+    def snapshot_tracked_orders(self) -> Iterable[TrackedOrderLike]:
+        """Return a safe snapshot of all tracked orders."""
+
+        tracked_orders = list(self._order_tracker._orders.values())
+        snapshots: list[TrackedOrderSnapshot] = []
+        for tracked in tracked_orders:
+            last_update_ns = tracked.updated_ns or tracked.created_ns
+            last_update_ts = float(last_update_ns) / NANOS_IN_SECOND
+            snapshots.append(
+                TrackedOrderSnapshot(
+                    order_id=tracked.coid,
+                    state=tracked.state,
+                    last_update_ts=last_update_ts,
+                )
+            )
+        return tuple(snapshots)
+
     def register_order(
         self,
         *,

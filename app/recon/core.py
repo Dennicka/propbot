@@ -4,10 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import math
 import logging
 import sqlite3
 import time
-from typing import Any, Iterable, Literal, Mapping, NamedTuple, Sequence
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Iterator,
+    Literal,
+    Mapping,
+    NamedTuple,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 import httpx
 
@@ -73,15 +85,22 @@ class ReconDrift:
     ts: float
 
 
-class ReconIssue(NamedTuple):
-    """Detected divergence between local state and the exchange."""
+@dataclass(slots=True)
+class ReconIssue:
+    """Detected divergence between local state and the exchange.
 
-    kind: str  # "POSITION" | "BALANCE" | "ORDER" | "PNL"
-    venue: str
-    symbol: str | None
-    severity: str  # "INFO" | "WARN" | "CRITICAL"
-    code: str
-    details: str
+    This dataclass keeps the original tuple fields while allowing additional
+    metadata for the lightweight order staleness checks.
+    """
+
+    kind: str  # "POSITION" | "BALANCE" | "ORDER" | "PNL" | custom values
+    venue: str | None = None
+    symbol: str | None = None
+    severity: str | None = None  # "INFO" | "WARN" | "CRITICAL"
+    code: str | None = None
+    details: Mapping[str, object] | str | None = None
+    order_id: str | None = None
+    age_sec: float | None = None
 
 
 class ReconResult(NamedTuple):
@@ -1468,10 +1487,144 @@ def _format_decimal(value: Decimal | None) -> str:
     return f"{value:f}"
 
 
+@runtime_checkable
+class TrackedOrderLike(Protocol):
+    """Protocol describing the router snapshot objects used by recon."""
+
+    order_id: str
+    state: Any
+    last_update_ts: float
+
+
+@dataclass(slots=True)
+class ReconConfig:
+    """Configuration for lightweight order staleness reconciliation."""
+
+    order_stale_sec: float = 5.0
+    interval_sec: float = 2.0
+    max_batch: int = 1000
+
+
+@dataclass(slots=True)
+class ReconReport:
+    """Report describing the outcome of a staleness sweep."""
+
+    ts: float
+    checked: int
+    issues: list[ReconIssue]
+
+
+class Reconciler:
+    """Lightweight reconciler that inspects tracked orders for staleness."""
+
+    _FINAL_STATES: frozenset[str] = frozenset(
+        {
+            "FILLED",
+            "CANCELED",
+            "REJECTED",
+            "EXPIRED",
+        }
+    )
+
+    def __init__(
+        self,
+        router: Any,
+        clock: Callable[[], float] = time.time,
+        cfg: ReconConfig | None = None,
+    ) -> None:
+        self._router = router
+        self._clock = clock
+        self._cfg = cfg or ReconConfig()
+
+    @property
+    def config(self) -> ReconConfig:
+        """Return the active reconciliation configuration."""
+
+        return self._cfg
+
+    def now(self) -> float:
+        """Return the current time according to the configured clock."""
+
+        return float(self._clock())
+
+    def snapshot_orders(self) -> Iterator[TrackedOrderLike]:
+        """Return a snapshot iterator of currently tracked orders."""
+
+        snapshot_fn = getattr(self._router, "snapshot_tracked_orders", None)
+        if snapshot_fn is None:
+            return iter(())
+        try:
+            snapshot_iterable = snapshot_fn()
+        except TypeError:
+            return iter(())
+        if snapshot_iterable is None:
+            return iter(())
+        return iter(tuple(snapshot_iterable))
+
+    def check_staleness(self, now: float | None = None) -> ReconReport:
+        """Inspect tracked orders and flag stale entries."""
+
+        current_ts = self.now() if now is None else float(now)
+        max_batch = self._cfg.max_batch if self._cfg.max_batch > 0 else None
+        checked = 0
+        issues: list[ReconIssue] = []
+
+        for index, order in enumerate(self.snapshot_orders()):
+            if max_batch is not None and index >= max_batch:
+                break
+            state_value = self._normalise_state(getattr(order, "state", None))
+            if state_value in self._FINAL_STATES:
+                continue
+            checked += 1
+            last_update = self._extract_last_update(getattr(order, "last_update_ts", None))
+            if last_update is None:
+                continue
+            age_sec = max(current_ts - last_update, 0.0)
+            if age_sec <= self._cfg.order_stale_sec:
+                continue
+            order_id = str(getattr(order, "order_id", "")) or "unknown"
+            issue_details: dict[str, object] = {
+                "state": state_value,
+                "last_update_ts": last_update,
+            }
+            issues.append(
+                ReconIssue(
+                    kind="stale-order",
+                    order_id=order_id,
+                    age_sec=age_sec,
+                    details=issue_details,
+                )
+            )
+
+        return ReconReport(ts=current_ts, checked=checked, issues=issues)
+
+    @staticmethod
+    def _extract_last_update(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            last_update = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(last_update) or math.isinf(last_update):
+            return None
+        return last_update
+
+    @staticmethod
+    def _normalise_state(state: Any) -> str:
+        if state is None:
+            return ""
+        value = getattr(state, "value", state)
+        return str(value).upper()
+
+
 __all__ = [
     "ReconDrift",
     "ReconIssue",
     "ReconResult",
+    "ReconConfig",
+    "ReconReport",
+    "Reconciler",
     "detect_balance_drifts",
     "detect_position_drifts",
     "detect_order_drifts",

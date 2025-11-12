@@ -14,7 +14,18 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import threading
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Sequence,
+    Tuple,
+)
 
 import httpx
 from requests import RequestException
@@ -50,6 +61,10 @@ from ..utils.chaos import (
 )
 
 
+if TYPE_CHECKING:
+    from ..recon.daemon import OrderReconDaemon
+
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -57,6 +72,9 @@ _SHUTDOWN_LOCK: asyncio.Lock | None = None
 _SHUTDOWN_STARTED = False
 _LAST_SHUTDOWN_RESULT: Dict[str, object] | None = None
 _SIGNAL_LOOP: asyncio.AbstractEventLoop | None = None
+
+_RECON_A_DAEMON: OrderReconDaemon | None = None
+_RECON_A_SCHEDULED = False
 
 
 DEFAULT_CONFIG_PATHS = {
@@ -154,6 +172,67 @@ def send_notifier_alert(kind: str, text: str, extra: Mapping[str, object] | None
 
 def _emit_ops_alert(kind: str, text: str, extra: Mapping[str, object] | None = None) -> None:
     send_notifier_alert(kind, text, extra)
+
+
+async def start_recon_a_daemon() -> None:
+    """Start the lightweight recon daemon when the feature flag is enabled."""
+
+    global _RECON_A_DAEMON
+    if _RECON_A_DAEMON is not None:
+        return
+    if not _env_flag("FF_RECON_A", False):
+        return
+    try:
+        from ..recon.core import ReconConfig, Reconciler
+        from ..recon.daemon import OrderReconDaemon
+        from ..router.smart_router import SmartRouter
+    except (ImportError, ModuleNotFoundError, AttributeError) as exc:  # pragma: no cover
+        LOGGER.debug(
+            "recon_a.bootstrap_unavailable",
+            extra={"event": "recon_a_bootstrap_unavailable"},
+            exc_info=exc,
+        )
+        return
+
+    router = SmartRouter()
+    reconciler = Reconciler(router=router, cfg=ReconConfig())
+    daemon = OrderReconDaemon(reconciler)
+    await daemon.start()
+    _RECON_A_DAEMON = daemon
+
+
+async def stop_recon_a_daemon() -> None:
+    """Stop the lightweight recon daemon if it is running."""
+
+    global _RECON_A_DAEMON, _RECON_A_SCHEDULED
+    daemon = _RECON_A_DAEMON
+    _RECON_A_SCHEDULED = False
+    if daemon is None:
+        return
+    await daemon.stop()
+    _RECON_A_DAEMON = None
+
+
+def schedule_recon_a_daemon(loop: asyncio.AbstractEventLoop | None = None) -> None:
+    """Schedule the recon daemon bootstrap on the provided loop."""
+
+    global _RECON_A_SCHEDULED
+    if _RECON_A_SCHEDULED or not _env_flag("FF_RECON_A", False):
+        return
+    if loop is None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                LOGGER.debug(
+                    "recon_a.loop_unavailable",
+                    extra={"event": "recon_a_loop_unavailable"},
+                )
+                return
+    loop.create_task(start_recon_a_daemon())
+    _RECON_A_SCHEDULED = True
 
 
 def _env_limit_map(name: str, *, normaliser) -> Dict[str, float]:
@@ -3125,6 +3204,8 @@ _persist_runtime_payload(
     }
 )
 
+schedule_recon_a_daemon()
+
 
 class HoldActiveError(RuntimeError):
     """Raised when execution should stop due to the global hold flag."""
@@ -3326,6 +3407,7 @@ async def on_shutdown(*, reason: str | None = None) -> Dict[str, object]:
                 },
                 exc_info=exc,
             )
+        stoppables.append(("recon_a_daemon", stop_recon_a_daemon))
         try:
             from .exchange_watchdog_runner import get_runner as get_watchdog_runner
 

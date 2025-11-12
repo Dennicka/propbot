@@ -29,12 +29,14 @@ from .core import (
     ReconDrift,
     ReconIssue,
     ReconResult,
+    ReconConfig,
+    ReconReport,
     detect_balance_drifts,
     detect_order_drifts,
     detect_pnl_drifts,
     detect_position_drifts,
 )
-from .core import _ledger_rows_from_pnl
+from .core import _ledger_rows_from_pnl, Reconciler as StalenessReconciler
 from .reconciler import Reconciler
 
 LOGGER = logging.getLogger(__name__)
@@ -933,9 +935,107 @@ def start_recon_daemon(ctx: object | None, cfg: object | None) -> ReconDaemon:
     return daemon
 
 
+class OrderReconDaemon:
+    """Periodic daemon for lightweight order staleness reconciliation."""
+
+    def __init__(self, reconciler: StalenessReconciler) -> None:
+        self._reconciler = reconciler
+        self._config: ReconConfig = reconciler.config
+        self._task: asyncio.Task[None] | None = None
+        self._stop_event = asyncio.Event()
+        self._lock = asyncio.Lock()
+        self._last_report: ReconReport | None = None
+
+    async def start(self) -> None:
+        """Start the reconciliation loop if not already running."""
+
+        if self._task and not self._task.done():
+            return
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._run_loop())
+
+    async def stop(self) -> None:
+        """Stop the reconciliation loop and wait for completion."""
+
+        if not self._task:
+            return
+        self._stop_event.set()
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:  # pragma: no cover - lifecycle cleanup
+            LOGGER.debug("recon_a.daemon_cancelled")
+        finally:
+            self._task = None
+
+    async def get_last_report(self) -> ReconReport | None:
+        """Return the last produced reconciliation report."""
+
+        async with self._lock:
+            return self._last_report
+
+    async def _run_loop(self) -> None:
+        interval = max(float(self._config.interval_sec), 0.1)
+        LOGGER.info(
+            "recon_a.daemon_start",
+            extra={"interval": interval, "order_stale_sec": self._config.order_stale_sec},
+        )
+        try:
+            while not self._stop_event.is_set():
+                started = time.perf_counter()
+                try:
+                    report = self._reconciler.check_staleness(self._reconciler.now())
+                except Exception:  # pragma: no cover - defensive
+                    LOGGER.exception(
+                        "recon_a.run_failed",
+                        extra={"event": "recon_a_run_failed"},
+                    )
+                    report = None
+                else:
+                    await self._store_report(report)
+                    self._log_report(report)
+                elapsed = time.perf_counter() - started
+                delay = max(interval - elapsed, 0.0)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            LOGGER.info("recon_a.daemon_stop")
+
+    async def _store_report(self, report: ReconReport) -> None:
+        async with self._lock:
+            self._last_report = report
+
+    @staticmethod
+    def _log_report(report: ReconReport) -> None:
+        LOGGER.info(
+            "recon_a.summary",
+            extra={"checked": report.checked, "issues": len(report.issues)},
+        )
+        for issue in report.issues:
+            details = issue.details
+            if isinstance(details, Mapping):
+                details_payload = dict(details)
+            elif details is None:
+                details_payload = {}
+            else:
+                details_payload = {"details": details}
+            LOGGER.warning(
+                "recon_a.issue",
+                extra={
+                    "kind": issue.kind,
+                    "order_id": issue.order_id,
+                    "age_sec": issue.age_sec,
+                    "details": details_payload,
+                },
+            )
+
+
 __all__ = [
     "ReconDaemon",
     "DaemonConfig",
+    "OrderReconDaemon",
     "run_recon_loop",
     "run_recon_cycle",
     "run_recon_cycle_async",
