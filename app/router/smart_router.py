@@ -13,7 +13,14 @@ import httpx
 
 from ..golden.logger import get_golden_logger
 from ..orders.idempotency import IdempoStore, make_coid
+from ..orders.quantization import as_dec, quantize_order
 from ..orders.state import OrderState, next_state
+from ..rules.pretrade import (
+    PretradeRejection,
+    SymbolSpecs,
+    get_pretrade_validator,
+    validate_pretrade,
+)
 from ..services.runtime import (
     get_liquidity_status,
     get_market_data,
@@ -50,6 +57,12 @@ def feature_enabled() -> bool:
     """Return True when smart router scoring is enabled."""
 
     return _feature_flag_enabled("FEATURE_SMART_ROUTER", False)
+
+
+def ff_pretrade() -> bool:
+    import os
+
+    return os.getenv("FF_PRETRADE_STRICT", "0").lower() in {"1", "true", "yes", "on"}
 
 
 def _manual_fee_table(config) -> FeeTable:
@@ -239,6 +252,13 @@ class SmartRouter:
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
         self._orders: Dict[str, _TrackedOrder] = {}
 
+    def _load_symbol_meta(self, venue: str, symbol: str) -> SymbolSpecs:
+        validator = get_pretrade_validator()
+        specs = validator.load_specs({"venue": venue, "symbol": symbol})
+        if specs is None:
+            return SymbolSpecs(symbol=str(symbol).upper(), tick=0.0, lot=0.0, min_notional=0.0)
+        return specs
+
     # ------------------------------------------------------------------
     # Order lifecycle helpers
     # ------------------------------------------------------------------
@@ -250,6 +270,7 @@ class SmartRouter:
         symbol: str,
         side: str,
         qty: float,
+        price: float | None = None,
         ts_ns: int,
         nonce: int,
     ) -> Dict[str, object]:
@@ -281,7 +302,43 @@ class SmartRouter:
                 response["qty"] = tracked.qty
             return response
 
-        qty_value = max(float(qty), 0.0)
+        side_lower = str(side or "").strip().lower()
+        price_value = float(price) if price is not None else None
+        if ff_pretrade():
+            meta = self._load_symbol_meta(venue, symbol)
+            try:
+                price_dec = as_dec(price, field="price", allow_none=True)
+                qty_dec = as_dec(qty, field="qty")
+                q_price, q_qty = quantize_order(side_lower, price_dec, qty_dec, meta)
+                validate_pretrade(side_lower, q_price, q_qty, meta)
+            except PretradeRejection as exc:
+                LOGGER.warning(
+                    "smart_router.pretrade_rejected",
+                    extra={
+                        "event": "smart_router_pretrade_rejected",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                            "side": side_lower,
+                            "reason": exc.reason,
+                        },
+                    },
+                )
+                self._idempo.expire(client_order_id)
+                return {
+                    "client_order_id": client_order_id,
+                    "status": "pretrade_rejected",
+                    "error": "pretrade rejected",
+                    "reason": exc.reason,
+                }
+            qty_value = float(q_qty)
+            price_value = float(q_price) if q_price is not None else price_value
+        else:
+            qty_value = max(float(qty), 0.0)
+
         tracked = self._orders.get(client_order_id)
         if tracked is None:
             tracked = _TrackedOrder(
@@ -315,11 +372,14 @@ class SmartRouter:
             raise
 
         tracked.filled_qty = min(tracked.filled_qty, tracked.qty)
-        return {
+        response: Dict[str, object] = {
             "client_order_id": client_order_id,
             "state": tracked.state,
             "qty": tracked.qty,
         }
+        if price_value is not None:
+            response["price"] = price_value
+        return response
 
     def process_order_event(
         self,
