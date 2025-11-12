@@ -33,6 +33,7 @@ from ..tca.cost_model import (
 )
 from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
+from ..risk.limits import RiskGovernor, load_config_from_env
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
@@ -252,6 +253,22 @@ class SmartRouter:
         self._order_tracker = OrderTracker(max_active=_order_tracker_max_active())
         self._order_tracker_ttl_sec = _order_tracker_ttl()
         self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
+        self._order_strategies: Dict[str, str] = {}
+        self._risk_governor: RiskGovernor | None = None
+        if _feature_flag_enabled("FF_RISK_LIMITS"):
+            try:
+                self._risk_governor = RiskGovernor(load_config_from_env())
+            except (ArithmeticError, ValueError) as exc:  # pragma: no cover - defensive
+                LOGGER.error(
+                    "smart_router.risk_config_failed",
+                    extra={
+                        "event": "smart_router_risk_config_failed",
+                        "component": "smart_router",
+                        "details": {},
+                    },
+                    exc_info=exc,
+                )
+                self._risk_governor = None
 
     def _load_symbol_meta(self, venue: str, symbol: str) -> Mapping[str, object]:
         cached = provider.get(venue, symbol)
@@ -295,6 +312,37 @@ class SmartRouter:
         """Register an outbound order intent and enforce idempotency."""
 
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
+        if self._risk_governor is not None:
+            price_for_risk = Decimal("0") if price is None else Decimal(str(price))
+            qty_for_risk = Decimal(str(qty))
+            ok, reason = self._risk_governor.allow_order(
+                venue,
+                symbol,
+                strategy,
+                price_for_risk,
+                qty_for_risk,
+            )
+            if not ok:
+                LOGGER.warning(
+                    "smart_router.risk_blocked",
+                    extra={
+                        "event": "smart_router_risk_blocked",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                            "reason": reason,
+                        },
+                    },
+                )
+                return {
+                    "client_order_id": client_order_id,
+                    "status": f"risk-blocked:{reason}",
+                    "reason": reason,
+                }
+
         if not self._idempo.should_send(client_order_id):
             tracked = self._order_tracker.get(client_order_id)
             completed = None if tracked is not None else self._completed_orders.get(client_order_id)
@@ -368,6 +416,7 @@ class SmartRouter:
             qty_value = max(float(qty), 0.0)
 
         self._completed_orders.pop(client_order_id, None)
+        self._order_strategies[client_order_id] = strategy
         qty_decimal = Decimal(str(qty_value))
         self._order_tracker.register_order(
             client_order_id,
@@ -399,6 +448,7 @@ class SmartRouter:
                 exc_info=exc,
             )
             self._idempo.expire(client_order_id)
+            self._order_strategies.pop(client_order_id, None)
             raise
 
         tracked = self._order_tracker.get(client_order_id)
@@ -461,6 +511,17 @@ class SmartRouter:
             raise
 
         updated = self._order_tracker.get(client_order_id)
+        risk_governor = self._risk_governor
+        strategy = self._order_strategies.get(client_order_id, "")
+        if risk_governor is not None and updated is not None:
+            venue = updated.venue
+            symbol = updated.symbol
+            if event_key == "reject":
+                risk_governor.on_reject(venue, symbol, strategy)
+            elif event_key == "ack":
+                risk_governor.on_ack(venue, symbol, strategy)
+            elif event_key == "filled":
+                risk_governor.on_filled(venue, symbol, strategy, Decimal("0"))
         if event_key == "ack":
             self._idempo.mark_ack(client_order_id)
         elif event_key == "partial_fill":
@@ -477,10 +538,15 @@ class SmartRouter:
         if updated is not None and self._order_tracker.is_terminal(new_state):
             snapshot = self._snapshot_from_tracked(updated)
             self._completed_orders[client_order_id] = (snapshot, now_ns)
+            self._order_strategies.pop(client_order_id, None)
 
         self._order_tracker.prune_terminal()
         self._order_tracker.prune_aged(now_ns, self._order_tracker_ttl_sec)
         self._prune_completed(now_ns)
+        if self._order_strategies:
+            for coid in list(self._order_strategies.keys()):
+                if self._order_tracker.get(coid) is None and coid not in self._completed_orders:
+                    self._order_strategies.pop(coid, None)
 
         return new_state
 

@@ -1,44 +1,160 @@
+from __future__ import annotations
+
 from decimal import Decimal
+from types import SimpleNamespace
 
-from app.config.trading_profiles import TradingProfile
-from app.services.risk_limits import check_daily_loss, check_global_notional, check_symbol_notional
+import pytest
+
+from app.risk.limits import RiskConfig, RiskGovernor
+from app.router.smart_router import SmartRouter
 
 
-def _profile() -> TradingProfile:
-    return TradingProfile(
-        name="test",
-        max_notional_per_order=Decimal("100"),
-        max_notional_per_symbol=Decimal("500"),
-        max_notional_global=Decimal("2000"),
-        daily_loss_limit=Decimal("200"),
-        env_tag="test",
-        allow_new_orders=True,
-        allow_closures_only=False,
+def test_notional_caps() -> None:
+    venue_cfg = RiskConfig(cap_per_venue={"binance": Decimal("1000")})
+    venue_governor = RiskGovernor(venue_cfg)
+    ok, reason = venue_governor.allow_order(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("100"),
+        Decimal("15"),
     )
+    assert not ok
+    assert reason == "venue_cap"
+    ok, reason = venue_governor.allow_order(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("100"),
+        Decimal("9"),
+    )
+    assert ok
+    assert reason == ""
+
+    symbol_cfg = RiskConfig(cap_per_symbol={("okx", "BTC-USDT"): Decimal("900")})
+    symbol_governor = RiskGovernor(symbol_cfg)
+    ok, reason = symbol_governor.allow_order(
+        "okx",
+        "BTC-USDT",
+        "beta",
+        Decimal("90"),
+        Decimal("11"),
+    )
+    assert not ok
+    assert reason == "symbol_cap"
+    ok, reason = symbol_governor.allow_order(
+        "okx",
+        "BTC-USDT",
+        "beta",
+        Decimal("90"),
+        Decimal("10"),
+    )
+    assert ok
+    assert reason == ""
+
+    strategy_cfg = RiskConfig(cap_per_strategy={"gamma": Decimal("800")})
+    strategy_governor = RiskGovernor(strategy_cfg)
+    ok, reason = strategy_governor.allow_order(
+        "bybit",
+        "BTCUSDT",
+        "gamma",
+        Decimal("100"),
+        Decimal("9"),
+    )
+    assert not ok
+    assert reason == "strategy_cap"
+    ok, reason = strategy_governor.allow_order(
+        "bybit",
+        "BTCUSDT",
+        "gamma",
+        Decimal("100"),
+        Decimal("7"),
+    )
+    assert ok
+    assert reason == ""
 
 
-def test_symbol_notional_within_limit() -> None:
-    profile = _profile()
-    result = check_symbol_notional("BTCUSDT", Decimal("250"), profile)
-    assert result.allowed is True
-    assert result.limit == Decimal("500")
+def test_daily_loss_limit_with_cooloff() -> None:
+    cfg = RiskConfig(
+        daily_loss_limit=Decimal("100"),
+        daily_cooloff_sec=60,
+    )
+    governor = RiskGovernor(cfg)
+    base_now = 1_700_000_000
+    governor.on_filled(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("-40"),
+        now_s=base_now,
+    )
+    governor.on_filled(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("-40"),
+        now_s=base_now + 10,
+    )
+    governor.on_filled(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("-40"),
+        now_s=base_now + 20,
+    )
+    ok, reason = governor.allow_order(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("100"),
+        Decimal("1"),
+        now_s=base_now + 30,
+    )
+    assert not ok
+    assert reason == "daily_cooloff"
+    ok, reason = governor.allow_order(
+        "binance",
+        "BTCUSDT",
+        "alpha",
+        Decimal("100"),
+        Decimal("1"),
+        now_s=base_now + 81,
+    )
+    assert ok
+    assert reason == ""
 
 
-def test_symbol_notional_exceeds_limit() -> None:
-    profile = _profile()
-    result = check_symbol_notional("BTCUSDT", Decimal("600"), profile)
-    assert result.allowed is False
+def test_consecutive_rejects_trigger_cooloff() -> None:
+    cfg = RiskConfig(max_consecutive_rejects=2, rejects_cooloff_sec=60)
+    governor = RiskGovernor(cfg)
+    base_now = 1_700_000_000
+    governor.on_reject("okx", "BTC-USDT", "beta", now_s=base_now)
+    governor.on_reject("okx", "BTC-USDT", "beta", now_s=base_now + 1)
+    ok, reason = governor.allow_order(
+        "okx",
+        "BTC-USDT",
+        "beta",
+        Decimal("50"),
+        Decimal("1"),
+        now_s=base_now + 2,
+    )
+    assert not ok
+    assert reason == "key_cooloff"
+    ok, reason = governor.allow_order(
+        "okx",
+        "BTC-USDT",
+        "beta",
+        Decimal("50"),
+        Decimal("1"),
+        now_s=base_now + 62,
+    )
+    assert ok
+    assert reason == ""
 
 
-def test_global_notional_limit() -> None:
-    profile = _profile()
-    assert check_global_notional(Decimal("1500"), profile).allowed is True
-    assert check_global_notional(Decimal("2500"), profile).allowed is False
-
-
-def test_daily_loss_guard() -> None:
-    profile = _profile()
-    ok = check_daily_loss(Decimal("150"), profile)
-    breach = check_daily_loss(Decimal("250"), profile)
-    assert ok.allowed is True
-    assert breach.allowed is False
+def test_risk_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FF_RISK_LIMITS", raising=False)
+    monkeypatch.setattr("app.router.smart_router.get_liquidity_status", lambda: {})
+    state = SimpleNamespace(config=SimpleNamespace(data=None))
+    router = SmartRouter(state=state, market_data=SimpleNamespace())
+    assert router._risk_governor is None
