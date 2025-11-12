@@ -38,7 +38,9 @@ def _spy_on_register(router: SmartRouter, monkeypatch: pytest.MonkeyPatch) -> li
     return calls
 
 
-def test_watchdog_unknown_allows_order(router: SmartRouter, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_watchdog_unknown_allows_order(
+    router: SmartRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = _spy_on_register(router, monkeypatch)
 
     response = router.register_order(
