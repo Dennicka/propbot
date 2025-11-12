@@ -19,6 +19,107 @@ from ..services.runtime import get_state, record_pretrade_block
 LOGGER = logging.getLogger(__name__)
 
 
+class PretradeRejection(Exception):
+    """Raised when strict pre-trade checks fail."""
+
+    def __init__(self, reason: str, *, details: Mapping[str, object] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.details = dict(details or {})
+
+
+def validate_pretrade(
+    side: str,
+    q_price: Decimal,
+    q_qty: Decimal,
+    meta: Mapping[str, object],
+) -> None:
+    """Validate quantised order parameters against venue limits."""
+
+    if q_price <= 0 or q_qty <= 0:
+        reason = "non_positive"
+        LOGGER.warning(
+            "pretrade.strict_validation_rejected",
+            extra={
+                "event": "pretrade_strict_validation_rejected",
+                "component": "pretrade",
+                "details": {
+                    "reason": reason,
+                    "side": side,
+                    "price": str(q_price),
+                    "qty": str(q_qty),
+                    "venue": meta.get("venue"),
+                    "symbol": meta.get("symbol"),
+                },
+            },
+        )
+        raise PretradeRejection(reason, details={"side": side})
+
+    def _maybe_meta(key: str) -> Decimal | None:
+        if key not in meta or meta[key] is None:
+            return None
+        try:
+            return Decimal(str(meta[key]))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            LOGGER.warning(
+                "pretrade.strict_validation_meta_invalid",
+                extra={
+                    "event": "pretrade_strict_validation_meta_invalid",
+                    "component": "pretrade",
+                    "details": {
+                        "key": key,
+                        "value": meta.get(key),
+                        "venue": meta.get("venue"),
+                        "symbol": meta.get("symbol"),
+                    },
+                },
+                exc_info=exc,
+            )
+            return None
+
+    min_qty = _maybe_meta("minQty")
+    if min_qty is not None and q_qty < min_qty:
+        reason = "minQty"
+        LOGGER.warning(
+            "pretrade.strict_validation_rejected",
+            extra={
+                "event": "pretrade_strict_validation_rejected",
+                "component": "pretrade",
+                "details": {
+                    "reason": reason,
+                    "side": side,
+                    "price": str(q_price),
+                    "qty": str(q_qty),
+                    "limit": str(min_qty),
+                    "venue": meta.get("venue"),
+                    "symbol": meta.get("symbol"),
+                },
+            },
+        )
+        raise PretradeRejection(reason, details={"limit": str(min_qty)})
+
+    min_notional = _maybe_meta("minNotional")
+    if min_notional is not None and q_price * q_qty < min_notional:
+        reason = "minNotional"
+        LOGGER.warning(
+            "pretrade.strict_validation_rejected",
+            extra={
+                "event": "pretrade_strict_validation_rejected",
+                "component": "pretrade",
+                "details": {
+                    "reason": reason,
+                    "side": side,
+                    "price": str(q_price),
+                    "qty": str(q_qty),
+                    "limit": str(min_notional),
+                    "venue": meta.get("venue"),
+                    "symbol": meta.get("symbol"),
+                },
+            },
+        )
+        raise PretradeRejection(reason, details={"limit": str(min_notional)})
+
+
 @dataclass(slots=True)
 class TimeWindow:
     """Represents a repeating time window in a specific timezone."""

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Iterable, Mapping, Sequence
+
+import httpx
 
 from .. import ledger
 from ..broker.router import ExecutionRouter
@@ -35,6 +38,45 @@ from .core import _ledger_rows_from_pnl
 from .reconciler import Reconciler
 
 LOGGER = logging.getLogger(__name__)
+
+
+_LEDGER_ERRORS: tuple[type[Exception], ...] = (
+    sqlite3.Error,
+    RuntimeError,
+    OSError,
+    ValueError,
+)
+_REMOTE_ERRORS: tuple[type[Exception], ...] = (
+    httpx.HTTPError,
+    RuntimeError,
+    ValueError,
+    KeyError,
+    TypeError,
+    AttributeError,
+    LookupError,
+    OSError,
+)
+_PNL_ERRORS: tuple[type[Exception], ...] = _LEDGER_ERRORS + (
+    InvalidOperation,
+    TypeError,
+    LookupError,
+)
+_PROVIDER_ERRORS: tuple[type[Exception], ...] = _REMOTE_ERRORS + (sqlite3.Error,)
+
+
+def _log_recon_failure(
+    message: str, *, level: int, exc: BaseException, details: Mapping[str, object]
+) -> None:
+    LOGGER.log(
+        level,
+        message,
+        extra={
+            "event": message,
+            "component": "recon",
+            "details": dict(details),
+        },
+        exc_info=exc,
+    )
 
 
 @dataclass(slots=True)
@@ -101,8 +143,13 @@ class ReconDaemon:
             started = time.perf_counter()
             try:
                 await self.run_once()
-            except Exception:  # pragma: no cover - defensive logging
-                LOGGER.exception("recon.daemon_cycle_failed")
+            except _REMOTE_ERRORS + _PNL_ERRORS as exc:  # pragma: no cover - defensive logging
+                _log_recon_failure(
+                    "recon.daemon_cycle_failed",
+                    level=logging.ERROR,
+                    exc=exc,
+                    details={"stage": "run_once"},
+                )
             elapsed = time.perf_counter() - started
             delay = max(self._config.interval_sec - elapsed, 0.5)
             try:
@@ -164,30 +211,36 @@ class ReconDaemon:
     async def _fetch_local_positions(self) -> Sequence[Mapping[str, object]]:
         try:
             return await asyncio.to_thread(ledger.fetch_positions)
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _LEDGER_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.local_positions_failed",
-                extra={"event": "recon_error", "error": str(exc)},
+                level=logging.ERROR,
+                exc=exc,
+                details={"source": "ledger.fetch_positions"},
             )
             return []
 
     async def _fetch_local_balances(self) -> Sequence[Mapping[str, object]]:
         try:
             return await asyncio.to_thread(ledger.fetch_balances)
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _LEDGER_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.local_balances_failed",
-                extra={"event": "recon_error", "error": str(exc)},
+                level=logging.ERROR,
+                exc=exc,
+                details={"source": "ledger.fetch_balances"},
             )
             return []
 
     async def _fetch_local_orders(self) -> Sequence[Mapping[str, object]]:
         try:
             return await asyncio.to_thread(ledger.fetch_open_orders)
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _LEDGER_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.local_orders_failed",
-                extra={"event": "recon_error", "error": str(exc)},
+                level=logging.ERROR,
+                exc=exc,
+                details={"source": "ledger.fetch_open_orders"},
             )
             return []
 
@@ -195,10 +248,12 @@ class ReconDaemon:
         since_ts = await asyncio.to_thread(_determine_pnl_since_ts)
         try:
             return await asyncio.to_thread(_build_local_pnl_snapshot, since_ts)
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _PNL_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.local_pnl_failed",
-                extra={"event": "recon_error", "error": str(exc)},
+                level=logging.ERROR,
+                exc=exc,
+                details={"source": "pnl_snapshot", "since": since_ts},
             )
             return []
 
@@ -206,10 +261,12 @@ class ReconDaemon:
         reconciler = Reconciler()
         try:
             return await asyncio.to_thread(reconciler.fetch_exchange_positions)
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.remote_positions_failed",
-                extra={"event": "recon_error", "error": str(exc)},
+                level=logging.WARNING,
+                exc=exc,
+                details={"source": "exchange.positions"},
             )
             return {}
 
@@ -232,7 +289,12 @@ class ReconDaemon:
             if isinstance(result, Exception):
                 LOGGER.warning(
                     "recon.remote_balances_error",
-                    extra={"event": "recon_error", "venue": venue, "error": str(result)},
+                    extra={
+                        "event": "recon.remote_balances_error",
+                        "component": "recon",
+                        "details": {"venue": venue, "error": str(result)},
+                    },
+                    exc_info=result,
                 )
                 continue
             balances.extend(result)
@@ -244,13 +306,19 @@ class ReconDaemon:
         except asyncio.TimeoutError:
             LOGGER.warning(
                 "recon.remote_balances_timeout",
-                extra={"event": "recon_error", "venue": venue, "category": "balances"},
+                extra={
+                    "event": "recon.remote_balances_timeout",
+                    "component": "recon",
+                    "details": {"venue": venue, "category": "balances"},
+                },
             )
             return []
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.remote_balances_failed",
-                extra={"event": "recon_error", "venue": venue, "error": str(exc)},
+                level=logging.WARNING,
+                exc=exc,
+                details={"venue": venue, "category": "balances"},
             )
             return []
         payload = response.get("balances") if isinstance(response, Mapping) else None
@@ -278,7 +346,12 @@ class ReconDaemon:
             if isinstance(result, Exception):
                 LOGGER.warning(
                     "recon.remote_orders_error",
-                    extra={"event": "recon_error", "venue": venue, "error": str(result)},
+                    extra={
+                        "event": "recon.remote_orders_error",
+                        "component": "recon",
+                        "details": {"venue": venue, "error": str(result)},
+                    },
+                    exc_info=result,
                 )
                 continue
             orders.extend(result)
@@ -290,13 +363,19 @@ class ReconDaemon:
         except asyncio.TimeoutError:
             LOGGER.warning(
                 "recon.remote_orders_timeout",
-                extra={"event": "recon_error", "venue": venue, "category": "orders"},
+                extra={
+                    "event": "recon.remote_orders_timeout",
+                    "component": "recon",
+                    "details": {"venue": venue, "category": "orders"},
+                },
             )
             return []
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.remote_orders_failed",
-                extra={"event": "recon_error", "venue": venue, "error": str(exc)},
+                level=logging.WARNING,
+                exc=exc,
+                details={"venue": venue, "category": "orders"},
             )
             return []
         if not isinstance(payload, Sequence):
@@ -326,7 +405,12 @@ class ReconDaemon:
             if isinstance(result, Exception):
                 LOGGER.warning(
                     "recon.remote_pnl_failed",
-                    extra={"event": "recon_error", "venue": venue, "error": str(result)},
+                    extra={
+                        "event": "recon.remote_pnl_failed",
+                        "component": "recon",
+                        "details": {"venue": venue, "error": str(result)},
+                    },
+                    exc_info=result,
                 )
                 continue
             snapshots.extend(result)
@@ -344,13 +428,19 @@ class ReconDaemon:
         except asyncio.TimeoutError:
             LOGGER.warning(
                 "recon.remote_pnl_timeout",
-                extra={"event": "recon_error", "venue": venue, "category": "fills"},
+                extra={
+                    "event": "recon.remote_pnl_timeout",
+                    "component": "recon",
+                    "details": {"venue": venue, "category": "fills"},
+                },
             )
             return []
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.remote_pnl_fetch_failed",
-                extra={"event": "recon_error", "venue": venue, "error": str(exc)},
+                level=logging.WARNING,
+                exc=exc,
+                details={"venue": venue, "category": "fills"},
             )
             return []
         fills: list[Mapping[str, object]] = []
@@ -369,10 +459,12 @@ class ReconDaemon:
                 supports_fees,
                 source.supports_funding,
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.warning(
+        except _PNL_ERRORS as exc:  # pragma: no cover - defensive
+            _log_recon_failure(
                 "recon.remote_pnl_snapshot_failed",
-                extra={"event": "recon_error", "venue": venue, "error": str(exc)},
+                level=logging.WARNING,
+                exc=exc,
+                details={"venue": venue, "category": "pnl_snapshot"},
             )
             return []
 
@@ -384,10 +476,12 @@ def _ctx_fetch(ctx, name: str, default):
     if callable(provider):
         try:
             return provider()
-        except Exception as exc:  # defensive: recon must proceed even if provider fails
-            LOGGER.exception(
+        except _PROVIDER_ERRORS as exc:  # defensive: recon must proceed even if provider fails
+            _log_recon_failure(
                 "recon.ctx_provider_failed",
-                extra={"provider": name, "error": str(exc)},
+                level=logging.WARNING,
+                exc=exc,
+                details={"provider": name},
             )
             return default() if callable(default) else default
     if provider is not None:
@@ -398,8 +492,13 @@ def _ctx_fetch(ctx, name: str, default):
 def _determine_pnl_since_ts() -> float | None:
     try:
         recent = ledger.fetch_recent_fills(200)
-    except Exception:  # pragma: no cover - defensive
-        LOGGER.warning("recon.local_recent_fills_failed", extra={"event": "recon_error"})
+    except _LEDGER_ERRORS as exc:  # pragma: no cover - defensive
+        _log_recon_failure(
+            "recon.local_recent_fills_failed",
+            level=logging.WARNING,
+            exc=exc,
+            details={"source": "ledger.fetch_recent_fills"},
+        )
         return None
     timestamps: list[float] = []
     for row in recent:

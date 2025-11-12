@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
-import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Dict, Iterable, Mapping, Sequence
 
+import httpx
+
 from ..golden.logger import get_golden_logger
+from ..orders.idempotency import IdempoStore, make_coid
+from ..orders.quantization import as_dec, quantize_order
+from ..orders.state import OrderState, next_state
+from ..rules.pretrade import PretradeRejection, validate_pretrade
 from ..services.runtime import (
     get_liquidity_status,
     get_market_data,
@@ -22,7 +29,11 @@ from ..tca.cost_model import (
     TierTable,
     effective_cost,
 )
-from ..utils.symbols import normalise_symbol
+from ..utils.symbols import (
+    normalise_symbol,
+    resolve_runtime_venue_id,
+    resolve_venue_symbol,
+)
 from ..util.venues import VENUE_ALIASES
 
 LOGGER = logging.getLogger(__name__)
@@ -48,6 +59,12 @@ def feature_enabled() -> bool:
     return _feature_flag_enabled("FEATURE_SMART_ROUTER", False)
 
 
+def ff_pretrade() -> bool:
+    """Feature flag for strict pre-trade validation."""
+
+    return _feature_flag_enabled("FF_PRETRADE_STRICT", False)
+
+
 def _manual_fee_table(config) -> FeeTable:
     derivatives_cfg = getattr(config, "derivatives", None)
     fees_cfg = getattr(derivatives_cfg, "fees", None) if derivatives_cfg else None
@@ -59,7 +76,16 @@ def _manual_fee_table(config) -> FeeTable:
         else:
             try:
                 items = manual_cfg.model_dump().items()  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - defensive
+            except (AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+                LOGGER.debug(
+                    "smart_router.manual_fee_serialise_failed",
+                    extra={
+                        "event": "smart_router_manual_fee_serialise_failed",
+                        "module": __name__,
+                        "details": {"config": type(manual_cfg).__name__},
+                    },
+                    exc_info=exc,
+                )
                 items = []
         for venue, payload in items:
             if isinstance(payload, Mapping):
@@ -82,7 +108,16 @@ def _tier_table_from_config(config) -> TierTable | None:
     else:
         try:
             items = tiers_cfg.model_dump().items()  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover - defensive
+        except (AttributeError, TypeError) as exc:  # pragma: no cover - defensive
+            LOGGER.debug(
+                "smart_router.tier_table_serialise_failed",
+                extra={
+                    "event": "smart_router_tier_table_serialise_failed",
+                    "module": __name__,
+                    "details": {"config": type(tiers_cfg).__name__},
+                },
+                exc_info=exc,
+            )
             items = []
     for venue, payload in items:
         tier_entries: list[Mapping[str, object]] = []
@@ -93,10 +128,14 @@ def _tier_table_from_config(config) -> TierTable | None:
                 else:
                     try:
                         tier_entries.append(entry.model_dump())  # type: ignore[attr-defined]
-                    except Exception as exc:  # noqa: BLE001
+                    except (AttributeError, TypeError) as exc:  # noqa: BLE001
                         LOGGER.warning(
-                            "smart_router: failed to serialise tier entry",
-                            extra={"venue": str(venue)},
+                            "smart_router.tier_entry_serialise_failed",
+                            extra={
+                                "event": "smart_router_tier_entry_serialise_failed",
+                                "module": __name__,
+                                "details": {"venue": str(venue)},
+                            },
                             exc_info=exc,
                         )
                         continue
@@ -166,10 +205,40 @@ class _ScoreResult:
     payload: Dict[str, object]
 
 
+@dataclass(slots=True)
+class _TrackedOrder:
+    strategy: str
+    venue: str
+    symbol: str
+    side: str
+    qty: float
+    price: float | None = None
+    state: OrderState = OrderState.NEW
+    filled_qty: float = 0.0
+
+    def snapshot(self) -> Dict[str, object]:
+        return {
+            "strategy": self.strategy,
+            "venue": self.venue,
+            "symbol": self.symbol,
+            "side": self.side,
+            "qty": self.qty,
+            "price": self.price,
+            "filled_qty": self.filled_qty,
+            "state": self.state,
+        }
+
+
 class SmartRouter:
     """Score venues using TCA, liquidity and latency inputs."""
 
-    def __init__(self, *, state=None, market_data=None) -> None:
+    def __init__(
+        self,
+        *,
+        state=None,
+        market_data=None,
+        idempo_store: IdempoStore | None = None,
+    ) -> None:
         self._state = state if state is not None else get_state()
         config = getattr(self._state, "config", None)
         self._config = getattr(config, "data", None)
@@ -182,12 +251,342 @@ class SmartRouter:
         self._latency_target_ms = _latency_target_ms(self._config) if self._config else 200.0
         self._latency_weight = _latency_weight_bps_per_ms()
         self._liquidity_snapshot = self._load_liquidity_snapshot()
+        self._idempo = idempo_store if idempo_store is not None else IdempoStore()
+        self._orders: Dict[str, _TrackedOrder] = {}
+
+    # ------------------------------------------------------------------
+    # Order lifecycle helpers
+    # ------------------------------------------------------------------
+    def register_order(
+        self,
+        *,
+        strategy: str,
+        venue: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        ts_ns: int,
+        nonce: int,
+        price: float | None = None,
+        meta: Mapping[str, object] | None = None,
+    ) -> Dict[str, object]:
+        """Register an outbound order intent and enforce idempotency."""
+
+        client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
+        if not self._idempo.should_send(client_order_id):
+            tracked = self._orders.get(client_order_id)
+            LOGGER.warning(
+                "smart_router.idempotent_skip",
+                extra={
+                    "event": "smart_router_idempotent_skip",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "strategy": strategy,
+                    },
+                },
+            )
+            response: Dict[str, object] = {
+                "client_order_id": client_order_id,
+                "status": "idempotent_skip",
+            }
+            if tracked is not None:
+                response["state"] = tracked.state
+                response["filled_qty"] = tracked.filled_qty
+                response["qty"] = tracked.qty
+                response["price"] = tracked.price
+            return response
+
+        price_value: float | None = float(price) if price is not None else None
+        quantized_price: Decimal | None = None
+        quantized_qty: Decimal | None = None
+        if ff_pretrade():
+            if price is None:
+                self._idempo.expire(client_order_id)
+                LOGGER.error(
+                    "smart_router.pretrade_missing_price",
+                    extra={
+                        "event": "smart_router_pretrade_missing_price",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                        },
+                    },
+                )
+                raise ValueError("price_required_for_pretrade")
+            symbol_meta = self._resolve_symbol_meta(venue, symbol, meta)
+            enriched_meta = dict(symbol_meta)
+            enriched_meta.setdefault("venue", venue)
+            enriched_meta.setdefault("symbol", symbol)
+            try:
+                price_dec = as_dec(price)
+                qty_dec = as_dec(qty)
+            except ValueError as exc:
+                self._idempo.expire(client_order_id)
+                LOGGER.error(
+                    "smart_router.pretrade_number_coerce_failed",
+                    extra={
+                        "event": "smart_router_pretrade_number_coerce_failed",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                        },
+                    },
+                    exc_info=exc,
+                )
+                raise
+            try:
+                quantized_price, quantized_qty = quantize_order(
+                    side, price_dec, qty_dec, enriched_meta
+                )
+                validate_pretrade(side, quantized_price, quantized_qty, enriched_meta)
+            except PretradeRejection as rejection:
+                self._idempo.expire(client_order_id)
+                LOGGER.warning(
+                    "smart_router.pretrade_rejected",
+                    extra={
+                        "event": "smart_router_pretrade_rejected",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                            "reason": rejection.reason,
+                        },
+                    },
+                )
+                return {
+                    "client_order_id": client_order_id,
+                    "status": "pretrade_rejected",
+                    "reason": rejection.reason,
+                }
+            except ValueError as exc:
+                self._idempo.expire(client_order_id)
+                LOGGER.error(
+                    "smart_router.pretrade_quantization_failed",
+                    extra={
+                        "event": "smart_router_pretrade_quantization_failed",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                        },
+                    },
+                    exc_info=exc,
+                )
+                raise
+            price_value = float(quantized_price)
+
+        qty_basis = quantized_qty if quantized_qty is not None else Decimal(str(qty))
+        qty_value = max(float(qty_basis), 0.0)
+        tracked = self._orders.get(client_order_id)
+        if tracked is None:
+            tracked = _TrackedOrder(
+                strategy=strategy,
+                venue=venue,
+                symbol=symbol,
+                side=side,
+                qty=qty_value,
+            )
+            self._orders[client_order_id] = tracked
+        else:
+            tracked.qty = qty_value
+        tracked.price = price_value
+
+        try:
+            tracked.state = next_state(tracked.state, "submit")
+        except ValueError as exc:  # pragma: no cover - defensive
+            LOGGER.error(
+                "smart_router.invalid_state_transition",
+                extra={
+                    "event": "smart_router_invalid_state_transition",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "current_state": tracked.state.value,
+                        "event": "submit",
+                    },
+                },
+                exc_info=exc,
+            )
+            self._idempo.expire(client_order_id)
+            raise
+
+        tracked.filled_qty = min(tracked.filled_qty, tracked.qty)
+        response: Dict[str, object] = {
+            "client_order_id": client_order_id,
+            "state": tracked.state,
+            "qty": tracked.qty,
+        }
+        if tracked.price is not None:
+            response["price"] = tracked.price
+        if quantized_qty is not None:
+            response["quantized_qty"] = float(quantized_qty)
+        if quantized_price is not None:
+            response["quantized_price"] = float(quantized_price)
+        return response
+
+    def process_order_event(
+        self,
+        *,
+        client_order_id: str,
+        event: str,
+        quantity: float | None = None,
+    ) -> OrderState:
+        """Apply an order lifecycle event and update idempotency state."""
+
+        tracked = self._orders.get(client_order_id)
+        if tracked is None:
+            LOGGER.error(
+                "smart_router.unknown_order_event",
+                extra={
+                    "event": "smart_router_unknown_order_event",
+                    "component": "smart_router",
+                    "details": {"client_order_id": client_order_id, "event": event},
+                },
+            )
+            raise KeyError(f"unknown client order id: {client_order_id}")
+
+        event_key = event.strip().lower()
+        if event_key == "expired":
+            event_key = "expire"
+        try:
+            new_state = next_state(tracked.state, event_key)
+        except ValueError as exc:
+            LOGGER.error(
+                "smart_router.invalid_state_transition",
+                extra={
+                    "event": "smart_router_invalid_state_transition",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "current_state": tracked.state.value,
+                        "event": event_key,
+                    },
+                },
+                exc_info=exc,
+            )
+            raise
+
+        if event_key == "ack":
+            self._idempo.mark_ack(client_order_id)
+        elif event_key == "partial_fill":
+            increment = self._coerce_positive(quantity)
+            tracked.filled_qty = min(tracked.qty, tracked.filled_qty + increment)
+            self._idempo.mark_fill(client_order_id, tracked.filled_qty)
+        elif event_key == "filled":
+            increment = self._coerce_positive(quantity)
+            if increment <= 0.0:
+                increment = max(tracked.qty - tracked.filled_qty, 0.0)
+            tracked.filled_qty = min(tracked.qty, tracked.filled_qty + increment)
+            self._idempo.mark_fill(client_order_id, tracked.filled_qty)
+        elif event_key == "canceled":
+            self._idempo.mark_cancel(client_order_id)
+        elif event_key in {"reject", "expired", "expire"}:
+            self._idempo.expire(client_order_id)
+
+        tracked.state = new_state
+        if new_state == OrderState.FILLED and tracked.qty > 0:
+            tracked.filled_qty = tracked.qty
+        return tracked.state
+
+    def get_order_snapshot(self, client_order_id: str) -> Dict[str, object]:
+        tracked = self._orders.get(client_order_id)
+        if tracked is None:
+            raise KeyError(f"unknown client order id: {client_order_id}")
+        return tracked.snapshot()
+
+    def _resolve_symbol_meta(
+        self,
+        venue: str,
+        symbol: str,
+        provided: Mapping[str, object] | None,
+    ) -> Mapping[str, object]:
+        if provided and isinstance(provided, Mapping):
+            return provided
+        runtime_id = resolve_runtime_venue_id(self._config, alias=venue)
+        derivatives = getattr(self._state, "derivatives", None)
+        venues = getattr(derivatives, "venues", {}) if derivatives else {}
+        runtime = venues.get(runtime_id) if runtime_id else None
+        if runtime is None:
+            return {}
+        client = getattr(runtime, "client", None)
+        if client is None:
+            return {}
+        venue_symbol = (
+            resolve_venue_symbol(self._config, venue_id=runtime_id, symbol=symbol) or symbol
+        )
+        getter = getattr(client, "get_symbol_specs", None)
+        if getter is None:
+            getter = getattr(client, "get_filters", None)
+        if getter is None:
+            return {}
+        try:
+            specs = getter(venue_symbol)
+        except (
+            KeyError,
+            LookupError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            LOGGER.warning(
+                "smart_router.symbol_meta_lookup_failed",
+                extra={
+                    "event": "smart_router_symbol_meta_lookup_failed",
+                    "component": "smart_router",
+                    "details": {
+                        "venue": venue,
+                        "symbol": symbol,
+                        "runtime_id": runtime_id,
+                        "venue_symbol": venue_symbol,
+                    },
+                },
+                exc_info=exc,
+            )
+            return {}
+        if not isinstance(specs, Mapping):
+            return {}
+        meta: Dict[str, object] = {}
+        for source, target in (
+            ("tick_size", "tickSize"),
+            ("tickSize", "tickSize"),
+            ("step_size", "stepSize"),
+            ("stepSize", "stepSize"),
+            ("min_notional", "minNotional"),
+            ("minNotional", "minNotional"),
+            ("min_qty", "minQty"),
+            ("minQty", "minQty"),
+        ):
+            if source in specs and specs[source] is not None:
+                meta[target] = specs[source]
+        return meta
 
     def _load_liquidity_snapshot(self) -> Dict[str, float]:
         snapshot: Dict[str, float] = {}
         try:
             liquidity_state = get_liquidity_status()
-        except Exception:  # pragma: no cover - defensive
+        except (RuntimeError, ValueError, TypeError) as exc:  # pragma: no cover - defensive
+            LOGGER.warning(
+                "smart_router.liquidity_snapshot_failed",
+                extra={
+                    "event": "smart_router_liquidity_snapshot_failed",
+                    "module": __name__,
+                    "details": {},
+                },
+                exc_info=exc,
+            )
             return snapshot
         per_venue = liquidity_state.get("per_venue") if isinstance(liquidity_state, Mapping) else {}
         if not isinstance(per_venue, Mapping):
@@ -287,8 +686,16 @@ class SmartRouter:
                 impact_model=self._impact_model,
                 book_liquidity_usdt=liquidity_value,
             )
-        except Exception as exc:  # pragma: no cover - defensive guard
-            LOGGER.debug("smart_router.tca_failed", extra={"venue": canonical, "error": str(exc)})
+        except (ValueError, TypeError, RuntimeError) as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning(
+                "smart_router.tca_failed",
+                extra={
+                    "event": "smart_router_tca_failed",
+                    "module": __name__,
+                    "details": {"venue": canonical, "symbol": symbol_norm},
+                },
+                exc_info=exc,
+            )
             return {
                 "venue": canonical,
                 "score": math.inf,
@@ -410,7 +817,23 @@ class SmartRouter:
     def _resolve_price(self, venue: str, symbol: str, side: str) -> float:
         try:
             book = self._market_data.top_of_book(venue, symbol)
-        except Exception:  # pragma: no cover - fallback
+        except (
+            KeyError,
+            LookupError,
+            RuntimeError,
+            ValueError,
+            OSError,
+            httpx.HTTPError,
+        ) as exc:  # pragma: no cover - fallback
+            LOGGER.debug(
+                "smart_router.price_lookup_failed",
+                extra={
+                    "event": "smart_router_price_lookup_failed",
+                    "module": __name__,
+                    "details": {"venue": venue, "symbol": symbol},
+                },
+                exc_info=exc,
+            )
             return 0.0
         bid = self._coerce_float(book.get("bid"))
         ask = self._coerce_float(book.get("ask"))
@@ -450,7 +873,23 @@ class SmartRouter:
                 return 0.0
         try:
             book = self._market_data.top_of_book(venue, symbol)
-        except Exception:  # pragma: no cover - fallback
+        except (
+            KeyError,
+            LookupError,
+            RuntimeError,
+            ValueError,
+            OSError,
+            httpx.HTTPError,
+        ) as exc:  # pragma: no cover - fallback
+            LOGGER.debug(
+                "smart_router.ws_latency_lookup_failed",
+                extra={
+                    "event": "smart_router_ws_latency_lookup_failed",
+                    "module": __name__,
+                    "details": {"venue": venue, "symbol": symbol},
+                },
+                exc_info=exc,
+            )
             return 0.0
         ts_value = self._coerce_float(book.get("ts"))
         if ts_value <= 0:
@@ -489,6 +928,16 @@ class SmartRouter:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _coerce_positive(value: float | None) -> float:
+        if value is None:
+            return 0.0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(numeric, 0.0)
 
 
 __all__ = ["SmartRouter", "feature_enabled"]
