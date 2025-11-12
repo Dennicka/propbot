@@ -15,12 +15,8 @@ from ..golden.logger import get_golden_logger
 from ..orders.idempotency import IdempoStore, make_coid
 from ..orders.quantization import as_dec, quantize_order
 from ..orders.state import OrderState, next_state
-from ..rules.pretrade import (
-    PretradeRejection,
-    SymbolSpecs,
-    get_pretrade_validator,
-    validate_pretrade,
-)
+from ..rules.pretrade import PretradeRejection, validate_pretrade
+from ..exchanges.metadata import provider
 from ..services.runtime import (
     get_liquidity_status,
     get_market_data,
@@ -252,12 +248,29 @@ class SmartRouter:
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
         self._orders: Dict[str, _TrackedOrder] = {}
 
-    def _load_symbol_meta(self, venue: str, symbol: str) -> SymbolSpecs:
-        validator = get_pretrade_validator()
-        specs = validator.load_specs({"venue": venue, "symbol": symbol})
-        if specs is None:
-            return SymbolSpecs(symbol=str(symbol).upper(), tick=0.0, lot=0.0, min_notional=0.0)
-        return specs
+    def _load_symbol_meta(self, venue: str, symbol: str) -> Mapping[str, object]:
+        cached = provider.get(venue, symbol)
+        if cached is None:
+            LOGGER.warning(
+                "smart_router.meta_missing",
+                extra={
+                    "event": "smart_router_meta_missing",
+                    "component": "smart_router",
+                    "details": {"venue": venue, "symbol": symbol},
+                },
+            )
+            raise PretradeRejection("no_meta")
+        symbol_upper = str(symbol).upper()
+        payload: dict[str, object] = {
+            "symbol": symbol_upper,
+            "tick_size": cached.tick_size,
+            "step_size": cached.step_size,
+            "min_notional": cached.min_notional,
+            "min_qty": cached.min_qty,
+            "tick": cached.tick_size,
+            "lot": cached.step_size,
+        }
+        return payload
 
     # ------------------------------------------------------------------
     # Order lifecycle helpers
@@ -305,8 +318,8 @@ class SmartRouter:
         side_lower = str(side or "").strip().lower()
         price_value = float(price) if price is not None else None
         if ff_pretrade():
-            meta = self._load_symbol_meta(venue, symbol)
             try:
+                meta = self._load_symbol_meta(venue, symbol)
                 price_dec = as_dec(price, field="price", allow_none=True)
                 qty_dec = as_dec(qty, field="qty")
                 q_price, q_qty = quantize_order(side_lower, price_dec, qty_dec, meta)
