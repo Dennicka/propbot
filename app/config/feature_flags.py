@@ -22,3 +22,11 @@ def risk_limits_on() -> bool:
         return v
     prof = os.getenv("DEFAULT_PROFILE", "").lower()
     return prof in {"paper", "testnet"}
+
+
+def md_watchdog_on() -> bool:
+    v = _env_on("FF_MD_WATCHDOG")
+    if v is not None:
+        return v
+    prof = os.getenv("DEFAULT_PROFILE", "").lower()
+    return prof in {"paper", "testnet"}
