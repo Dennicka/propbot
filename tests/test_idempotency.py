@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import time
+import types
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.orders.idempotency import IdempoStore, make_coid
+from app.orders.state import OrderState
+from app.router.smart_router import SmartRouter
 from app.utils.idem import IdempotencyCache
 
 
@@ -46,3 +52,118 @@ def test_duplicate_post_returns_cached_response(
     assert replay.json() == first.json()
     assert replay.headers.get("Idempotent-Replay") == "true"
     assert hold_mock.await_count == 1
+
+
+class _DummyMarketData:
+    def __init__(self) -> None:
+        now = time.time()
+        self._book = {
+            ("binance-um", "BTCUSDT"): {"bid": 100.0, "ask": 100.5, "ts": now},
+            ("okx-perp", "ETHUSDT"): {"bid": 99.5, "ask": 100.0, "ts": now},
+        }
+
+    def top_of_book(self, venue: str, symbol: str) -> dict:
+        key = (venue.lower(), symbol.upper())
+        if key not in self._book:
+            raise KeyError(key)
+        return dict(self._book[key])
+
+
+@pytest.fixture
+def router_setup(monkeypatch) -> tuple[SmartRouter, IdempoStore]:
+    state = types.SimpleNamespace(
+        control=types.SimpleNamespace(
+            post_only=False,
+            taker_fee_bps_binance=2.0,
+            taker_fee_bps_okx=2.0,
+            default_taker_fee_bps=2.0,
+        ),
+        config=types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                tca=types.SimpleNamespace(
+                    horizon_min=1.0,
+                    impact=types.SimpleNamespace(k=0.0),
+                    tiers={},
+                ),
+                derivatives=types.SimpleNamespace(
+                    arbitrage=types.SimpleNamespace(prefer_maker=False),
+                    fees=types.SimpleNamespace(manual={}),
+                ),
+            )
+        ),
+        derivatives=types.SimpleNamespace(venues={}),
+    )
+    market = _DummyMarketData()
+    store = IdempoStore(ttl_seconds=60)
+    monkeypatch.setattr("app.router.smart_router.get_state", lambda: state)
+    monkeypatch.setattr("app.router.smart_router.get_market_data", lambda: market)
+    monkeypatch.setattr("app.router.smart_router.get_liquidity_status", lambda: {})
+    router = SmartRouter(idempo_store=store)
+    return router, store
+
+
+def test_make_coid_is_stable() -> None:
+    base_args = ("alpha", "binance", "BTCUSDT", "buy", 1699999999123456789, 42)
+    coid_one = make_coid(*base_args)
+    coid_two = make_coid(*base_args)
+    assert coid_one == coid_two
+    assert len(coid_one) <= 32
+    varied = make_coid("alpha", "binance", "BTCUSDT", "buy", 1699999999123456789, 43)
+    assert varied != coid_one
+
+
+def test_should_send_respects_expiry(monkeypatch) -> None:
+    store = IdempoStore(ttl_seconds=0.01)
+    coid = make_coid("beta", "okx", "ETHUSDT", "sell", 123, 1)
+    assert store.should_send(coid)
+    assert not store.should_send(coid)
+    time.sleep(0.02)
+    store.expire(coid)
+    assert store.should_send(coid)
+
+
+def test_router_flow_enforces_idempotency(router_setup) -> None:
+    router, store = router_setup
+    submission = router.register_order(
+        strategy="gamma",
+        venue="binance",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=5.0,
+        ts_ns=1234567890,
+        nonce=7,
+    )
+    coid = submission["client_order_id"]
+    assert submission["state"] == OrderState.PENDING
+    assert not store.should_send(coid)
+
+    replay = router.register_order(
+        strategy="gamma",
+        venue="binance",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=5.0,
+        ts_ns=1234567890,
+        nonce=7,
+    )
+    assert replay["status"] == "idempotent_skip"
+    assert replay["state"] == OrderState.PENDING
+
+    assert router.process_order_event(client_order_id=coid, event="ack") == OrderState.ACK
+    assert (
+        router.process_order_event(client_order_id=coid, event="partial_fill", quantity=2.0)
+        == OrderState.PARTIAL
+    )
+    assert (
+        router.process_order_event(client_order_id=coid, event="partial_fill", quantity=1.5)
+        == OrderState.PARTIAL
+    )
+    assert (
+        router.process_order_event(client_order_id=coid, event="filled", quantity=1.5)
+        == OrderState.FILLED
+    )
+
+    snapshot = router.get_order_snapshot(coid)
+    assert snapshot["state"] == OrderState.FILLED
+    assert pytest.approx(snapshot["filled_qty"], rel=1e-9) == 5.0
+    assert not store.should_send(coid)

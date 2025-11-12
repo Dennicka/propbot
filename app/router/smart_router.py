@@ -12,6 +12,8 @@ from typing import Dict, Iterable, Mapping, Sequence
 import httpx
 
 from ..golden.logger import get_golden_logger
+from ..orders.idempotency import IdempoStore, make_coid
+from ..orders.state import OrderState, next_state
 from ..services.runtime import (
     get_liquidity_status,
     get_market_data,
@@ -190,10 +192,38 @@ class _ScoreResult:
     payload: Dict[str, object]
 
 
+@dataclass(slots=True)
+class _TrackedOrder:
+    strategy: str
+    venue: str
+    symbol: str
+    side: str
+    qty: float
+    state: OrderState = OrderState.NEW
+    filled_qty: float = 0.0
+
+    def snapshot(self) -> Dict[str, object]:
+        return {
+            "strategy": self.strategy,
+            "venue": self.venue,
+            "symbol": self.symbol,
+            "side": self.side,
+            "qty": self.qty,
+            "filled_qty": self.filled_qty,
+            "state": self.state,
+        }
+
+
 class SmartRouter:
     """Score venues using TCA, liquidity and latency inputs."""
 
-    def __init__(self, *, state=None, market_data=None) -> None:
+    def __init__(
+        self,
+        *,
+        state=None,
+        market_data=None,
+        idempo_store: IdempoStore | None = None,
+    ) -> None:
         self._state = state if state is not None else get_state()
         config = getattr(self._state, "config", None)
         self._config = getattr(config, "data", None)
@@ -206,6 +236,160 @@ class SmartRouter:
         self._latency_target_ms = _latency_target_ms(self._config) if self._config else 200.0
         self._latency_weight = _latency_weight_bps_per_ms()
         self._liquidity_snapshot = self._load_liquidity_snapshot()
+        self._idempo = idempo_store if idempo_store is not None else IdempoStore()
+        self._orders: Dict[str, _TrackedOrder] = {}
+
+    # ------------------------------------------------------------------
+    # Order lifecycle helpers
+    # ------------------------------------------------------------------
+    def register_order(
+        self,
+        *,
+        strategy: str,
+        venue: str,
+        symbol: str,
+        side: str,
+        qty: float,
+        ts_ns: int,
+        nonce: int,
+    ) -> Dict[str, object]:
+        """Register an outbound order intent and enforce idempotency."""
+
+        client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
+        if not self._idempo.should_send(client_order_id):
+            tracked = self._orders.get(client_order_id)
+            LOGGER.warning(
+                "smart_router.idempotent_skip",
+                extra={
+                    "event": "smart_router_idempotent_skip",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "venue": venue,
+                        "symbol": symbol,
+                        "strategy": strategy,
+                    },
+                },
+            )
+            response: Dict[str, object] = {
+                "client_order_id": client_order_id,
+                "status": "idempotent_skip",
+            }
+            if tracked is not None:
+                response["state"] = tracked.state
+                response["filled_qty"] = tracked.filled_qty
+                response["qty"] = tracked.qty
+            return response
+
+        qty_value = max(float(qty), 0.0)
+        tracked = self._orders.get(client_order_id)
+        if tracked is None:
+            tracked = _TrackedOrder(
+                strategy=strategy,
+                venue=venue,
+                symbol=symbol,
+                side=side,
+                qty=qty_value,
+            )
+            self._orders[client_order_id] = tracked
+        else:
+            tracked.qty = qty_value
+
+        try:
+            tracked.state = next_state(tracked.state, "submit")
+        except ValueError as exc:  # pragma: no cover - defensive
+            LOGGER.error(
+                "smart_router.invalid_state_transition",
+                extra={
+                    "event": "smart_router_invalid_state_transition",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "current_state": tracked.state.value,
+                        "event": "submit",
+                    },
+                },
+                exc_info=exc,
+            )
+            self._idempo.expire(client_order_id)
+            raise
+
+        tracked.filled_qty = min(tracked.filled_qty, tracked.qty)
+        return {
+            "client_order_id": client_order_id,
+            "state": tracked.state,
+            "qty": tracked.qty,
+        }
+
+    def process_order_event(
+        self,
+        *,
+        client_order_id: str,
+        event: str,
+        quantity: float | None = None,
+    ) -> OrderState:
+        """Apply an order lifecycle event and update idempotency state."""
+
+        tracked = self._orders.get(client_order_id)
+        if tracked is None:
+            LOGGER.error(
+                "smart_router.unknown_order_event",
+                extra={
+                    "event": "smart_router_unknown_order_event",
+                    "component": "smart_router",
+                    "details": {"client_order_id": client_order_id, "event": event},
+                },
+            )
+            raise KeyError(f"unknown client order id: {client_order_id}")
+
+        event_key = event.strip().lower()
+        if event_key == "expired":
+            event_key = "expire"
+        try:
+            new_state = next_state(tracked.state, event_key)
+        except ValueError as exc:
+            LOGGER.error(
+                "smart_router.invalid_state_transition",
+                extra={
+                    "event": "smart_router_invalid_state_transition",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "current_state": tracked.state.value,
+                        "event": event_key,
+                    },
+                },
+                exc_info=exc,
+            )
+            raise
+
+        if event_key == "ack":
+            self._idempo.mark_ack(client_order_id)
+        elif event_key == "partial_fill":
+            increment = self._coerce_positive(quantity)
+            tracked.filled_qty = min(tracked.qty, tracked.filled_qty + increment)
+            self._idempo.mark_fill(client_order_id, tracked.filled_qty)
+        elif event_key == "filled":
+            increment = self._coerce_positive(quantity)
+            if increment <= 0.0:
+                increment = max(tracked.qty - tracked.filled_qty, 0.0)
+            tracked.filled_qty = min(tracked.qty, tracked.filled_qty + increment)
+            self._idempo.mark_fill(client_order_id, tracked.filled_qty)
+        elif event_key == "canceled":
+            self._idempo.mark_cancel(client_order_id)
+        elif event_key in {"reject", "expired", "expire"}:
+            self._idempo.expire(client_order_id)
+
+        tracked.state = new_state
+        if new_state == OrderState.FILLED and tracked.qty > 0:
+            tracked.filled_qty = tracked.qty
+        return tracked.state
+
+    def get_order_snapshot(self, client_order_id: str) -> Dict[str, object]:
+        tracked = self._orders.get(client_order_id)
+        if tracked is None:
+            raise KeyError(f"unknown client order id: {client_order_id}")
+        return tracked.snapshot()
 
     def _load_liquidity_snapshot(self) -> Dict[str, float]:
         snapshot: Dict[str, float] = {}
@@ -562,6 +746,16 @@ class SmartRouter:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _coerce_positive(value: float | None) -> float:
+        if value is None:
+            return 0.0
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(numeric, 0.0)
 
 
 __all__ = ["SmartRouter", "feature_enabled"]
