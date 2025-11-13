@@ -25,6 +25,7 @@ from app.metrics.core import (
     histogram as metrics_histogram,
     write_metrics as metrics_write,
 )
+from app.risk.pnl_caps import CapsPolicy, DayStats, FillEvent, PnLAggregator, PnLCapsGuard
 
 from .cooldown import CooldownRegistry
 from ..golden.logger import get_golden_logger
@@ -87,6 +88,10 @@ _SOR_COMPUTE_HISTOGRAM = metrics_histogram("propbot_sor_compute_ms")
 _RISK_BUDGET_BLOCKS_TOTAL = metrics_counter("propbot_risk_budget_blocks_total", labels=("reason",))
 _RISK_TOTAL_NOTIONAL_GAUGE = metrics_gauge("propbot_risk_total_notional_usd", labels=("strategy",))
 _RISK_POSITIONS_OPEN_GAUGE = metrics_gauge("propbot_risk_positions_open", labels=("strategy",))
+_PNLCAP_BLOCKS_TOTAL = metrics_counter("propbot_pnlcap_blocks_total", labels=("reason", "strategy"))
+_PNLCAP_DAY_REALIZED = metrics_gauge("propbot_pnl_day_realized_usd", labels=("scope",))
+_PNLCAP_DAY_PEAK = metrics_gauge("propbot_pnl_day_peak_usd", labels=("scope",))
+_PNLCAP_COOLOFF = metrics_gauge("propbot_pnl_cooloff_sec", labels=("scope",))
 
 
 def _metrics_output_path() -> str:
@@ -415,6 +420,10 @@ class SmartRouter:
         self._timeouts_sweeping = False
         self._readiness_guard_enabled = _feature_flag_enabled("FF_READINESS_AGG_GUARD", False)
         self._readiness_agg = get_agg() if self._readiness_guard_enabled else None
+        self._pnl_policy = CapsPolicy()
+        self._pnl_agg = PnLAggregator(self._pnl_policy.tz)
+        self._pnl_guard = PnLCapsGuard(self._pnl_policy, self._pnl_agg)
+        self._pnl_metric_scopes: set[str] = set()
         if self._readiness_agg is not None:
             ttl_seconds = max(0, _env_int("READINESS_TTL_SEC", 30))
             required_raw = os.getenv("READINESS_REQUIRED")
@@ -891,6 +900,11 @@ class SmartRouter:
             if SafeMode.is_active():
                 metrics_reason = "safe-mode"
                 return {"ok": False, "reason": "safe-mode"}
+            block, detail = self._pnl_guard.should_block(strategy)
+            if block:
+                _PNLCAP_BLOCKS_TOTAL.labels(reason=detail, strategy=strategy).inc()
+                metrics_reason = "pnl-cap"
+                return {"ok": False, "reason": "pnl-cap", "detail": detail}
             profile = get_profile()
             guard_reason = None
             if is_live(profile):
@@ -1315,6 +1329,7 @@ class SmartRouter:
         client_order_id: str,
         event: str,
         quantity: float | None = None,
+        realized_pnl_usd: float | Decimal | None = None,
     ) -> OrderState:
         """Apply an order lifecycle event and update idempotency state."""
 
@@ -1400,6 +1415,7 @@ class SmartRouter:
         now_ns = time.time_ns()
         now_ts = float(now_ns) / NANOS_IN_SECOND
         qty_value = Decimal(str(quantity)) if quantity is not None else None
+        pnl_value = Decimal(str(realized_pnl_usd)) if realized_pnl_usd is not None else None
         try:
             new_state = self._order_tracker.apply_event(
                 client_order_id,
@@ -1453,6 +1469,7 @@ class SmartRouter:
                 risk_governor.on_ack(venue, symbol, strategy)
             elif event_key == "filled":
                 risk_governor.on_filled(venue, symbol, strategy, Decimal("0"))
+        pnl_metrics_updated = False
         if event_key in {"reject", "canceled", "expire", "filled", "fin"}:
             self._release_risk_budget(client_order_id)
         if event_key == "ack":
@@ -1465,6 +1482,17 @@ class SmartRouter:
         elif event_key == "filled":
             filled_qty = float(updated.filled) if updated is not None else 0.0
             self._idempo.mark_fill(client_order_id, filled_qty)
+            if pnl_value is not None:
+                symbol_value = str(updated.symbol) if updated is not None else ""
+                self._pnl_agg.on_fill(
+                    FillEvent(
+                        t=now_ts,
+                        strategy=strategy,
+                        symbol=symbol_value,
+                        realized_pnl_usd=pnl_value,
+                    )
+                )
+                pnl_metrics_updated = self._update_pnl_metrics(now_ts)
         elif event_key == "canceled":
             self._idempo.mark_cancel(client_order_id)
         elif event_key in {"reject", "expire"}:
@@ -1543,12 +1571,43 @@ class SmartRouter:
         if event_key == "filled":
             _ROUTER_FILLED_TOTAL.inc()
             metrics_updated = True
+            metrics_updated = metrics_updated or pnl_metrics_updated
         elif event_key in {"reject", "expire"}:
             _ROUTER_REJECTED_TOTAL.inc()
             metrics_updated = True
         if metrics_updated:
             metrics_write(_metrics_output_path())
         return new_state
+
+    def _update_pnl_metrics(self, now: float) -> bool:
+        if not self._pnl_policy.enabled:
+            return False
+        if self._pnl_policy.report_every > 0:
+            if now - self._pnl_policy._last_report_ts < float(self._pnl_policy.report_every):
+                return False
+        snapshot = self._pnl_agg.snapshot(now=now)
+        global_stats: DayStats = snapshot["global"]  # type: ignore[assignment]
+        per: Dict[str, DayStats] = snapshot["per_strat"]  # type: ignore[assignment]
+        current_scopes = {"global"}
+        _PNLCAP_DAY_REALIZED.labels(scope="global").set(float(global_stats.last))
+        _PNLCAP_DAY_PEAK.labels(scope="global").set(float(global_stats.peak))
+        remaining_global = max(0.0, float(global_stats.cooloff_until - now))
+        _PNLCAP_COOLOFF.labels(scope="global").set(remaining_global)
+        for strat, stats in per.items():
+            scope = str(strat)
+            current_scopes.add(scope)
+            _PNLCAP_DAY_REALIZED.labels(scope=scope).set(float(stats.last))
+            _PNLCAP_DAY_PEAK.labels(scope=scope).set(float(stats.peak))
+            remaining = max(0.0, float(stats.cooloff_until - now))
+            _PNLCAP_COOLOFF.labels(scope=scope).set(remaining)
+        stale = self._pnl_metric_scopes - current_scopes
+        for scope in stale:
+            _PNLCAP_DAY_REALIZED.labels(scope=scope).set(0.0)
+            _PNLCAP_DAY_PEAK.labels(scope=scope).set(0.0)
+            _PNLCAP_COOLOFF.labels(scope=scope).set(0.0)
+        self._pnl_metric_scopes = current_scopes
+        self._pnl_policy._last_report_ts = now
+        return True
 
     def get_order_snapshot(self, client_order_id: str) -> Dict[str, object]:
         tracked = self._order_tracker.get(client_order_id)
