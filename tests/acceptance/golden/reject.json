@@ -1,0 +1,9 @@
+{
+  "final_state": "REJECTED",
+  "blocked_reason": null,
+  "metrics_contains": [
+    "propbot_orders_submitted_total ",
+    "propbot_orders_rejected_total ",
+    "propbot_router_latency_ms_bucket{le=\"100\"} "
+  ]
+}

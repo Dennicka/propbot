@@ -1,0 +1,20 @@
+{
+  "ack_timeout": {
+    "final_state": "EXPIRED",
+    "blocked_reason": "ack-timeout",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"ack-timeout\"} ",
+      "propbot_orders_rejected_total ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} "
+    ]
+  },
+  "fill_timeout": {
+    "final_state": "EXPIRED",
+    "blocked_reason": "fill-timeout",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"fill-timeout\"} ",
+      "propbot_orders_rejected_total ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} "
+    ]
+  }
+}

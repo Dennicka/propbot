@@ -1,0 +1,47 @@
+{
+  "safe_mode": {
+    "final_state": "BLOCKED",
+    "blocked_reason": "safe-mode",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"safe-mode\"} ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} ",
+      "propbot_router_latency_ms_count "
+    ]
+  },
+  "dupe_intent": {
+    "final_state": "BLOCKED",
+    "blocked_reason": "dupe-intent",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"dupe-intent\"} ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} ",
+      "propbot_router_latency_ms_count "
+    ]
+  },
+  "cooldown": {
+    "final_state": "BLOCKED",
+    "blocked_reason": "cooldown",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"cooldown\"} ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} ",
+      "propbot_router_latency_ms_count "
+    ]
+  },
+  "live_guard": {
+    "final_state": "BLOCKED",
+    "blocked_reason": "live-guard",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"live-guard\"} ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} ",
+      "propbot_router_latency_ms_count "
+    ]
+  },
+  "stale_p95": {
+    "final_state": "BLOCKED",
+    "blocked_reason": "stale-p95",
+    "metrics_contains": [
+      "propbot_orders_blocked_total{reason=\"stale-p95\"} ",
+      "propbot_router_latency_ms_bucket{le=\"100\"} ",
+      "propbot_router_latency_ms_count "
+    ]
+  }
+}
