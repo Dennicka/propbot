@@ -15,6 +15,83 @@ from .state import OrderState
 
 LOGGER = logging.getLogger(__name__)
 
+stats: dict[str, int] = {
+    "touch": 0,
+    "dupe": 0,
+    "removed_ttl": 0,
+    "removed_size": 0,
+}
+
+
+class IntentWindow:
+    """Track recent intents to avoid submitting duplicates within a window."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: int = 3,
+        max_items: int = 100_000,
+    ) -> None:
+        self._ttl = float(ttl_seconds)
+        self._max_items = int(max_items)
+        self._entries: dict[str, float] = {}
+
+    def is_duplicate(self, key: str, now: float | None = None) -> bool:
+        reference = float(now) if now is not None else time.time()
+        ts = self._entries.get(key)
+        if ts is None:
+            return False
+        if self._ttl <= 0:
+            return False
+        if self._ttl > 0 and reference - ts > self._ttl:
+            self._entries.pop(key, None)
+            return False
+        stats["dupe"] += 1
+        return True
+
+    def touch(self, key: str, now: float | None = None) -> None:
+        reference = float(now) if now is not None else time.time()
+        self._entries[key] = reference
+        stats["touch"] += 1
+        self._enforce_capacity()
+
+    def cleanup(self, now: float | None = None) -> tuple[int, int]:
+        reference = float(now) if now is not None else time.time()
+        removed_ttl = 0
+        if self._ttl > 0:
+            cutoff = reference - self._ttl
+            expired = [key for key, ts in self._entries.items() if ts <= cutoff]
+            for key in expired:
+                self._entries.pop(key, None)
+            removed_ttl = len(expired)
+        removed_size = 0
+        if self._max_items > 0 and len(self._entries) > self._max_items:
+            excess = len(self._entries) - self._max_items
+            oldest = sorted(self._entries.items(), key=lambda item: item[1])[:excess]
+            for key, _ in oldest:
+                self._entries.pop(key, None)
+            removed_size = len(oldest)
+        if removed_ttl:
+            stats["removed_ttl"] += removed_ttl
+        if removed_size:
+            stats["removed_size"] += removed_size
+        return removed_ttl, removed_size
+
+    def _enforce_capacity(self) -> None:
+        if self._max_items <= 0 or len(self._entries) <= self._max_items:
+            return
+        excess = len(self._entries) - self._max_items
+        oldest = sorted(self._entries.items(), key=lambda item: item[1])[:excess]
+        for key, _ in oldest:
+            self._entries.pop(key, None)
+        removed = len(oldest)
+        if removed:
+            stats["removed_size"] += removed
+
+    def forget(self, key: str) -> None:
+        self._entries.pop(key, None)
+
+
 _PREFIX = "PB"
 _DEFAULT_TTL = 24 * 60 * 60  # 24 hours
 _DEFAULT_MAX_ENTRIES = 2048
@@ -183,4 +260,10 @@ def generate_key(intent: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-__all__ = ["IdempoStore", "make_coid", "generate_key"]
+__all__ = [
+    "IdempoStore",
+    "IntentWindow",
+    "generate_key",
+    "make_coid",
+    "stats",
+]
