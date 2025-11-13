@@ -314,11 +314,13 @@ class SmartRouter:
     def snapshot_tracked_orders(self) -> Iterable[TrackedOrderLike]:
         """Return a safe snapshot of all tracked orders."""
 
-        tracked_orders = list(self._order_tracker._orders.values())
+        tracked_orders = self._order_tracker.snapshot()
         snapshots: list[TrackedOrderSnapshot] = []
         for tracked in tracked_orders:
-            last_update_ns = tracked.updated_ns or tracked.created_ns
-            last_update_ts = float(last_update_ns) / NANOS_IN_SECOND
+            last_update_ts = float(tracked.updated_ts)
+            if last_update_ts <= 0.0:
+                fallback_ns = tracked.updated_ns or tracked.created_ns
+                last_update_ts = float(fallback_ns) / NANOS_IN_SECOND
             snapshots.append(
                 TrackedOrderSnapshot(
                     order_id=tracked.coid,
@@ -541,6 +543,7 @@ class SmartRouter:
         if event_key == "expired":
             event_key = "expire"
         now_ns = time.time_ns()
+        now_ts = float(now_ns) / NANOS_IN_SECOND
         qty_value = Decimal(str(quantity)) if quantity is not None else None
         try:
             new_state = self._order_tracker.apply_event(
@@ -594,10 +597,13 @@ class SmartRouter:
             snapshot = self._snapshot_from_tracked(updated)
             self._completed_orders[client_order_id] = (snapshot, now_ns)
             self._order_strategies.pop(client_order_id, None)
-            self._order_tracker.finalize(client_order_id, new_state)
+            self._order_tracker.mark_terminal(client_order_id, new_state, now_ts)
 
-        self._order_tracker.prune_terminal()
         self._order_tracker.prune_aged(now_ns, self._order_tracker_ttl_sec)
+        self._order_tracker.purge_terminated_older_than(
+            self._order_tracker_ttl_sec,
+            now_ts,
+        )
         self._prune_completed(now_ns)
         if self._order_strategies:
             for coid in list(self._order_strategies.keys()):
@@ -639,6 +645,13 @@ class SmartRouter:
         ]
         for coid in stale_ids:
             self._completed_orders.pop(coid, None)
+
+    def purge_terminal_orders(self, *, ttl_sec: int, now_ts: float | None = None) -> int:
+        """Purge terminal orders using the provided TTL."""
+
+        effective_now = float(now_ts) if now_ts is not None else time.time()
+        removed = self._order_tracker.purge_terminated_older_than(ttl_sec, effective_now)
+        return removed
 
     def _load_liquidity_snapshot(self) -> Dict[str, float]:
         snapshot: Dict[str, float] = {}

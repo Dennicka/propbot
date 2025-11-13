@@ -19,6 +19,8 @@ class FakeTrackedOrder:
 class FakeRouter:
     def __init__(self, orders: Iterable[FakeTrackedOrder]) -> None:
         self._orders = list(orders)
+        self.purged = 0
+        self.purge_calls = 0
 
     def snapshot_tracked_orders(self) -> Tuple[FakeTrackedOrder, ...]:
         return tuple(self._orders)
@@ -34,6 +36,30 @@ class FakeRouter:
                     order.state = state
                 break
 
+    def purge_terminal_orders(self, *, ttl_sec: int, now_ts: float | None = None) -> int:
+        threshold = float(now_ts) if now_ts is not None else 0.0
+        ttl = float(ttl_sec)
+        retained: list[FakeTrackedOrder] = []
+        removed = 0
+        for order in self._orders:
+            if (
+                order.state
+                in {
+                    OrderState.FILLED,
+                    OrderState.CANCELED,
+                    OrderState.REJECTED,
+                    OrderState.EXPIRED,
+                }
+                and threshold - order.last_update_ts > ttl
+            ):
+                removed += 1
+                continue
+            retained.append(order)
+        self._orders = retained
+        self.purged += removed
+        self.purge_calls += 1
+        return removed
+
 
 class FakeClock:
     def __init__(self, start: float) -> None:
@@ -47,6 +73,11 @@ class FakeClock:
 
     def advance(self, delta: float) -> None:
         self._value += delta
+
+
+@dataclass(slots=True)
+class ReconConfigWithGC(ReconConfig):
+    gc_ttl_sec: int = 300
 
 
 def _base_orders(now: float) -> list[FakeTrackedOrder]:
@@ -110,5 +141,37 @@ async def test_daemon_emits_reports_and_updates_state() -> None:
                 break
         assert refreshed is not None
         assert all(issue.order_id != "stale" for issue in refreshed.issues)
+    finally:
+        await daemon.stop()
+
+
+@pytest.mark.asyncio
+async def test_daemon_triggers_gc_for_terminal_orders() -> None:
+    start = 500.0
+    clock = FakeClock(start)
+    router = FakeRouter(
+        [
+            FakeTrackedOrder(
+                order_id="recent-final", state=OrderState.FILLED, last_update_ts=start - 10
+            ),
+            FakeTrackedOrder(
+                order_id="old-final", state=OrderState.CANCELED, last_update_ts=start - 400
+            ),
+            FakeTrackedOrder(order_id="active", state=OrderState.ACK, last_update_ts=start - 1),
+        ]
+    )
+    cfg = ReconConfigWithGC(order_stale_sec=5.0, interval_sec=0.01, gc_ttl_sec=100)
+    reconciler = Reconciler(router=router, clock=clock, cfg=cfg)
+    daemon = OrderReconDaemon(reconciler)
+
+    await daemon.start()
+    try:
+        await asyncio.sleep(cfg.interval_sec * 5)
+        assert router.purge_calls > 0
+        assert router.purged >= 1
+        remaining = {order.order_id for order in router.snapshot_tracked_orders()}
+        assert "old-final" not in remaining
+        assert "recent-final" in remaining
+        assert "active" in remaining
     finally:
         await daemon.stop()
