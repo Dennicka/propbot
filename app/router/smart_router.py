@@ -14,6 +14,7 @@ from typing import Dict, Iterable, Mapping, Protocol, Sequence
 import httpx
 
 import app.config.feature_flags as ff
+from app.db import ledger as ledger_db
 from app.health.aggregator import DEFAULT_REQUIRED_SIGNALS, get_agg
 from app.hedge.policy import HedgeLeg
 from app.market.watchdog import watchdog
@@ -416,6 +417,7 @@ class SmartRouter:
                 max_inmem=max_inmem,
             )
         self._outbox_keys: Dict[str, str] = {}
+        self._ledger_enabled = _feature_flag_enabled("FF_LEDGER", False)
         self._order_tracker_ttl_sec = tracker_ttl
         self._tracker_ttl_seconds = tracker_ttl_seconds()
         self._tracker_max_items = tracker_max_items()
@@ -1239,6 +1241,7 @@ class SmartRouter:
                 }
 
             qty_decimal = Decimal(str(qty_value))
+            px_decimal = Decimal("0") if price_value is None else Decimal(str(price_value))
 
             if self._outbox_enabled and self._outbox is not None:
                 last = self._outbox.last_by_intent(intent_key)
@@ -1259,7 +1262,6 @@ class SmartRouter:
                             "ok": False,
                             "reason": "outbox-inflight",
                         }
-                px_decimal = Decimal("0") if price_value is None else Decimal(str(price_value))
                 self._outbox.begin_pending(
                     intent_key=intent_key,
                     order_id=client_order_id,
@@ -1272,6 +1274,18 @@ class SmartRouter:
                 )
                 outbox_pending_recorded = True
                 self._outbox_keys[client_order_id] = intent_key
+
+            if self._ledger_enabled:
+                self._ledger_on_begin(
+                    order_id=client_order_id,
+                    intent_key=intent_key,
+                    strategy=strategy,
+                    symbol=symbol,
+                    venue=venue,
+                    side=side_lower,
+                    qty=qty_decimal,
+                    px=px_decimal,
+                )
 
             self._intent_window.touch(intent_key)
             self._log_intent_window_stats("touch", key=intent_key)
@@ -1518,6 +1532,8 @@ class SmartRouter:
             self._idempo.mark_ack(client_order_id)
             if self._outbox_enabled and self._outbox is not None:
                 self._outbox.mark_acked(client_order_id)
+            if self._ledger_enabled:
+                self._ledger_on_ack(client_order_id, "")
         elif event_key == "partial_fill":
             filled_qty = float(updated.filled) if updated is not None else 0.0
             self._idempo.mark_fill(client_order_id, filled_qty)
@@ -1535,6 +1551,16 @@ class SmartRouter:
                     )
                 )
                 pnl_metrics_updated = self._update_pnl_metrics(now_ts)
+            if self._ledger_enabled:
+                qty_for_fill = qty_value if qty_value is not None else Decimal("0")
+                realized = pnl_value if pnl_value is not None else Decimal("0")
+                self._ledger_on_fill(
+                    order_id=client_order_id,
+                    ts=now_ts,
+                    qty=qty_for_fill,
+                    px=Decimal("0"),
+                    realized_pnl_usd=realized,
+                )
         elif event_key == "canceled":
             self._idempo.mark_cancel(client_order_id)
         elif event_key in {"reject", "expire"}:
@@ -1547,6 +1573,10 @@ class SmartRouter:
                     reason=event_key,
                     now=now_ts,
                 )
+
+        if self._ledger_enabled and event_key in {"filled", "canceled", "reject", "expire", "fin"}:
+            status_value = self._ledger_status_for_event(event_key)
+            self._ledger_on_final(client_order_id, status_value)
 
         if (
             self._outbox_enabled
@@ -1718,6 +1748,83 @@ class SmartRouter:
         effective_now = float(now_ts) if now_ts is not None else time.time()
         removed = self._order_tracker.purge_terminated_older_than(ttl_sec, effective_now)
         return removed
+
+    def _ledger_on_begin(
+        self,
+        *,
+        order_id: str,
+        intent_key: str,
+        strategy: str,
+        symbol: str,
+        venue: str,
+        side: str,
+        qty: Decimal,
+        px: Decimal,
+    ) -> None:
+        if not self._ledger_enabled:
+            return
+        ledger_db.upsert_order_begin(
+            {
+                "order_id": order_id,
+                "intent_key": intent_key,
+                "strategy": strategy,
+                "symbol": symbol,
+                "venue": venue,
+                "side": side,
+                "qty": qty,
+                "px": px,
+            }
+        )
+
+    def _ledger_on_ack(self, order_id: str, exch_order_id: str) -> None:
+        if not self._ledger_enabled:
+            return
+        ledger_db.mark_order_acked(order_id, exch_order_id)
+
+    def _ledger_on_final(self, order_id: str, status: str) -> None:
+        if not self._ledger_enabled:
+            return
+        ledger_db.mark_order_final(order_id, status)
+
+    def _ledger_on_fill(
+        self,
+        *,
+        order_id: str,
+        ts: float,
+        qty: Decimal,
+        px: Decimal,
+        fee_usd: Decimal | None = None,
+        realized_pnl_usd: Decimal | None = None,
+    ) -> None:
+        if not self._ledger_enabled:
+            return
+        fee_value = fee_usd if fee_usd is not None else Decimal("0")
+        pnl_value = realized_pnl_usd if realized_pnl_usd is not None else Decimal("0")
+        ledger_db.append_fill(
+            order_id,
+            ts,
+            qty,
+            px,
+            fee_usd=fee_value,
+            realized_pnl_usd=pnl_value,
+        )
+
+    @staticmethod
+    def _ledger_status_for_event(event_key: str) -> str:
+        mapping = {
+            "filled": "FILLED",
+            "canceled": "CANCELED",
+            "cancelled": "CANCELED",
+            "reject": "REJECTED",
+            "rejected": "REJECTED",
+            "expire": "EXPIRED",
+            "expired": "EXPIRED",
+            "fin": "FINAL",
+        }
+        key = event_key.strip().lower()
+        if not key:
+            return "FINAL"
+        return mapping.get(key, key.upper())
 
     def _load_liquidity_snapshot(self) -> Dict[str, float]:
         snapshot: Dict[str, float] = {}
