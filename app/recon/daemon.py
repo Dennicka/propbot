@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable, Mapping, Sequence
 
@@ -16,6 +19,7 @@ import httpx
 
 from .. import ledger
 from ..broker.router import ExecutionRouter
+from ..market.watchdog import watchdog
 from ..metrics.recon import (
     RECON_AUTO_HOLD_COUNTER,
     RECON_DRIFT_TOTAL,
@@ -23,6 +27,7 @@ from ..metrics.recon import (
     RECON_LAST_RUN_TS,
     RECON_LAST_SEVERITY,
     RECON_LAST_STATUS,
+    export_recon_metrics,
 )
 from ..services import runtime
 from .core import (
@@ -41,6 +46,9 @@ from .reconciler import Reconciler
 
 LOGGER = logging.getLogger(__name__)
 _DEFAULT_GC_TTL_SEC = 300
+
+INTEGRITY_REPORT_PATH = Path("data/reports/recon_integrity.json")
+_MD_VENUES = ("binance", "okx", "bybit")
 
 
 _LEDGER_ERRORS: tuple[type[Exception], ...] = (
@@ -80,6 +88,93 @@ def _log_recon_failure(
         },
         exc_info=exc,
     )
+
+
+def _order_tracker_totals(router) -> tuple[int, int]:
+    tracker = getattr(router, "_order_tracker", None)
+    if tracker is None:
+        return 0, 0
+    snapshot_fn = getattr(tracker, "snapshot", None)
+    if snapshot_fn is None:
+        return 0, 0
+    try:
+        snapshot = snapshot_fn()
+    except TypeError:
+        return 0, 0
+    if not isinstance(snapshot, Mapping):
+        return 0, 0
+    tracked_raw = snapshot.get("tracked", 0)
+    try:
+        tracked_total = int(tracked_raw)
+    except (TypeError, ValueError):
+        tracked_total = 0
+    finalized_raw = snapshot.get("finalized", {})
+    finalized_total = 0
+    if isinstance(finalized_raw, Mapping):
+        for value in finalized_raw.values():
+            try:
+                finalized_total += int(value)
+            except (TypeError, ValueError):
+                continue
+    return tracked_total, finalized_total
+
+
+def _tracked_orders_by_venue(router) -> dict[str, int]:
+    snapshot_fn = getattr(router, "snapshot_tracked_orders", None)
+    if snapshot_fn is None:
+        return {}
+    try:
+        snapshot_iter = snapshot_fn()
+    except TypeError:
+        snapshot_iter = ()
+    if snapshot_iter is None:
+        return {}
+    counts: dict[str, int] = {}
+    for entry in snapshot_iter:
+        venue = getattr(entry, "venue", None)
+        if not venue:
+            continue
+        key = str(venue).strip().lower()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _build_integrity_snapshot(
+    report: ReconReport,
+    router,
+    anomalies: Mapping[str, int],
+) -> tuple[dict[str, object], dict[str, int], int, dict[str, int]]:
+    tracked_total, finalized_total = _order_tracker_totals(router)
+    per_venue = _tracked_orders_by_venue(router)
+    if tracked_total <= 0:
+        tracked_total = sum(per_venue.values())
+    if tracked_total <= 0:
+        try:
+            tracked_total = int(report.checked)
+        except (TypeError, ValueError):
+            tracked_total = 0
+    anomalies_payload = {str(k): int(v) for k, v in anomalies.items()}
+    md_snapshot = {venue: int(watchdog.get_p95(venue)) for venue in _MD_VENUES}
+    payload = {
+        "ts": datetime.fromtimestamp(report.ts, tz=timezone.utc).isoformat(),
+        "orders_open": int(tracked_total),
+        "orders_final": int(finalized_total),
+        "anomalies": anomalies_payload,
+        "md": {
+            "venues": {venue: {"stale_p95_ms": md_snapshot.get(venue, 0)} for venue in _MD_VENUES}
+        },
+    }
+    return payload, per_venue, finalized_total, md_snapshot
+
+
+def _write_integrity_report(payload: Mapping[str, object]) -> None:
+    INTEGRITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = INTEGRITY_REPORT_PATH.with_suffix(INTEGRITY_REPORT_PATH.suffix + ".tmp")
+    tmp_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, INTEGRITY_REPORT_PATH)
 
 
 @dataclass(slots=True)
@@ -1016,6 +1111,21 @@ class OrderReconDaemon:
             counters_snapshot = counters_obj.snapshot()
         else:
             counters_snapshot = {}
+        payload, per_venue, finalized_total, md_snapshot = _build_integrity_snapshot(
+            report,
+            router,
+            counters_snapshot,
+        )
+        _write_integrity_report(payload)
+        metric_open: dict[str, int] = {}
+        for venue in set(per_venue) | set(md_snapshot):
+            metric_open[venue] = int(per_venue.get(venue, 0))
+        export_recon_metrics(
+            orders_open=metric_open,
+            orders_final=finalized_total,
+            anomalies=counters_snapshot,
+            md_staleness_p95_ms=md_snapshot,
+        )
         LOGGER.info(
             "recon_a.summary",
             extra={
