@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import Counter as _Counter
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -17,6 +18,24 @@ LOGGER = logging.getLogger(__name__)
 TRACKER_TTL_SEC = 3600
 TRACKER_MAX_ACTIVE = 5000
 _NANOS_IN_SECOND = 1_000_000_000
+
+_DEFAULT_TRACKER_TTL_SECONDS = 60 * 30
+_DEFAULT_TRACKER_MAX_ITEMS = 10_000
+
+
+def _read_positive_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(value, 0)
+
+
+TRACKER_TTL_SECONDS = _read_positive_int("TRACKER_TTL_SECONDS", _DEFAULT_TRACKER_TTL_SECONDS)
+TRACKER_MAX_ITEMS = _read_positive_int("TRACKER_MAX_ITEMS", _DEFAULT_TRACKER_MAX_ITEMS)
 
 
 FINAL_STATES: frozenset[OrderState] = frozenset(
@@ -392,12 +411,89 @@ def reset_tracker_metrics() -> None:
     _TRACKER_METRICS.reset()
 
 
+def tracker_ttl_seconds() -> int:
+    """Return the configured TTL for tracker entries in seconds."""
+
+    return _read_positive_int("TRACKER_TTL_SECONDS", _DEFAULT_TRACKER_TTL_SECONDS)
+
+
+def tracker_max_items() -> int:
+    """Return the configured maximum number of tracker entries."""
+
+    return _read_positive_int("TRACKER_MAX_ITEMS", _DEFAULT_TRACKER_MAX_ITEMS)
+
+
+class TrackingCleaner:
+    """Utility helpers for pruning tracker entries."""
+
+    @staticmethod
+    def cleanup_by_ttl(
+        tracker: "OrderTracker",
+        *,
+        now_ts: float,
+        ttl_seconds: int,
+    ) -> list[tuple[str, OrderState]]:
+        if ttl_seconds <= 0:
+            return []
+        reference = float(now_ts)
+        ttl = float(ttl_seconds)
+        removed: list[tuple[str, OrderState]] = []
+        orders = tracker._orders  # noqa: SLF001 - internal coordination helper
+        for coid, tracked in tuple(orders.items()):
+            last_update = tracked.updated_ts or float(tracked.updated_ns) / _NANOS_IN_SECOND
+            if reference - last_update <= ttl:
+                continue
+            removed.append((coid, tracked.state))
+            orders.pop(coid, None)
+        if removed:
+            _TRACKER_METRICS.observe_tracked(len(orders))
+        return removed
+
+    @staticmethod
+    def cleanup_by_size(
+        tracker: "OrderTracker",
+        *,
+        max_items: int,
+    ) -> list[tuple[str, OrderState]]:
+        limit = max(int(max_items), 0)
+        orders = tracker._orders  # noqa: SLF001 - internal coordination helper
+        if not orders:
+            return []
+        if limit == 0:
+            removed = [(coid, tracked.state) for coid, tracked in orders.items()]
+            orders.clear()
+            _TRACKER_METRICS.observe_tracked(0)
+            return removed
+        if len(orders) <= limit:
+            return []
+        sorted_orders = sorted(
+            orders.items(),
+            key=lambda item: (
+                item[1].updated_ts or float(item[1].updated_ns) / _NANOS_IN_SECOND,
+                item[1].created_ns,
+            ),
+        )
+        to_remove = len(orders) - limit
+        removed: list[tuple[str, OrderState]] = []
+        for coid, tracked in sorted_orders[:to_remove]:
+            removed.append((coid, tracked.state))
+            orders.pop(coid, None)
+        if removed:
+            _TRACKER_METRICS.observe_tracked(len(orders))
+        return removed
+
+
 __all__ = [
     "OrderTracker",
     "TrackedOrder",
     "TrackedOrderSnapshot",
     "TRACKER_TTL_SEC",
     "TRACKER_MAX_ACTIVE",
+    "TRACKER_TTL_SECONDS",
+    "TRACKER_MAX_ITEMS",
+    "TrackingCleaner",
+    "tracker_max_items",
+    "tracker_ttl_seconds",
     "reset_tracker_metrics",
     "tracker_metrics_snapshot",
 ]
