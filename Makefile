@@ -169,3 +169,23 @@ release:
 	git tag -a v$(TAG) -m "Release v$(TAG)"
 	git push $(REMOTE) v$(TAG)
 	@echo "Release tag v$(TAG) pushed to $(REMOTE)."
+
+.PHONY: smoke-accept smoke-guard metrics-tail env-sample
+
+smoke-accept:
+	pytest -q tests/acceptance
+
+smoke-guard:
+	pytest -q tests/smoke
+
+metrics-tail:
+	@echo "METRICS_PATH=$${METRICS_PATH:-data/metrics/metrics.prom}"; \
+	tail -n 50 -f "$${METRICS_PATH:-data/metrics/metrics.prom}"
+
+env-sample:
+	@echo "# пример .env"; \
+	echo "EXEC_PROFILE=paper"; \
+	echo "SAFE_MODE=1"; \
+	echo "FF_PRETRADE_STRICT=1"; \
+	echo "FF_READINESS_AGG_GUARD=1"; \
+	echo "METRICS_PATH=data/metrics/metrics.prom"
