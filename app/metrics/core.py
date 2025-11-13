@@ -74,6 +74,12 @@ class GaugeChild:
     def set(self, value: float) -> None:
         self._parent._set(self._label_values, float(value))
 
+    def inc(self, value: float = 1.0) -> None:
+        self._parent._inc(self._label_values, float(value))
+
+    def dec(self, value: float = 1.0) -> None:
+        self._parent._inc(self._label_values, -float(value))
+
 
 class HistogramChild:
     def __init__(self, parent: Histogram, label_values: tuple[str, ...]):
@@ -162,6 +168,19 @@ class Gauge:
     def _set(self, label_values: tuple[str, ...], value: float) -> None:
         with self._lock:
             self._values[label_values] = value
+
+    def inc(self, value: float = 1.0) -> None:
+        self._inc((), float(value))
+
+    def dec(self, value: float = 1.0) -> None:
+        self._inc((), -float(value))
+
+    def _inc(self, label_values: tuple[str, ...], value: float) -> None:
+        if value == 0.0:
+            return
+        with self._lock:
+            current = self._values.get(label_values, 0.0)
+            self._values[label_values] = current + value
 
     def render(self) -> list[str]:
         lines = [f"# TYPE {self.name} gauge"]
