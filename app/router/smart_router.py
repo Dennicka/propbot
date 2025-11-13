@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -15,6 +16,7 @@ import httpx
 import app.config.feature_flags as ff
 from app.market.watchdog import watchdog
 
+from .cooldown import CooldownRegistry
 from ..golden.logger import get_golden_logger
 from ..orders.idempotency import (
     IdempoStore,
@@ -89,6 +91,33 @@ def feature_enabled() -> bool:
     """Return True when smart router scoring is enabled."""
 
     return _feature_flag_enabled("FEATURE_SMART_ROUTER", False)
+
+
+def _cooldown_default_ttl() -> int:
+    return max(0, _env_int("ROUTER_COOLDOWN_SEC_DEFAULT", 5))
+
+
+def _cooldown_reason_map() -> Dict[str, int]:
+    raw = os.getenv("ROUTER_COOLDOWN_REASON_MAP")
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        LOGGER.warning("invalid-json-env ROUTER_COOLDOWN_REASON_MAP=%r", raw)
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    mapping: Dict[str, int] = {}
+    for key, value in payload.items():
+        try:
+            ttl_value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if ttl_value < 0:
+            continue
+        mapping[str(key)] = ttl_value
+    return mapping
 
 
 def _manual_fee_table(config) -> FeeTable:
@@ -319,6 +348,10 @@ class SmartRouter:
             ttl_seconds=tracker_ttl,
             max_items=tracker_max,
         )
+        self._cooldown_default_ttl = float(_cooldown_default_ttl())
+        self._cooldown_reason_map = _cooldown_reason_map()
+        self._cooldown_enabled = _feature_flag_enabled("FF_ROUTER_COOLDOWN", False)
+        self._cooldown_registry = CooldownRegistry(default_ttl=int(self._cooldown_default_ttl))
         self._outbox_enabled = _feature_flag_enabled("FF_IDEMPOTENCY_OUTBOX", False)
         self._outbox: Outbox | None = Outbox() if self._outbox_enabled else None
         self._outbox_keys: Dict[str, str] = {}
@@ -651,6 +684,26 @@ class SmartRouter:
                     "reason": reason,
                 }
 
+        cooldown_key = self._cooldown_key(venue, symbol, strategy)
+        if self._cooldown_enabled:
+            remaining = self._cooldown_registry.remaining(cooldown_key)
+            if remaining > 0.0:
+                reason_hint = self._cooldown_registry.last_reason(cooldown_key) or "cooldown"
+                LOGGER.warning(
+                    "cooldown-block: key=%s remain=%.2fs reason=%s",
+                    cooldown_key,
+                    remaining,
+                    reason_hint,
+                )
+                self._idempo.expire(client_order_id)
+                return {
+                    "client_order_id": client_order_id,
+                    "status": "cooldown",
+                    "error": "router cooldown",
+                    "reason": reason_hint,
+                    "cooldown_remaining": remaining,
+                }
+
         if ff.md_watchdog_on():
             sample_ms = watchdog.staleness_ms(venue, symbol)
             p95_ms = watchdog.get_p95(venue)
@@ -750,6 +803,13 @@ class SmartRouter:
                         },
                     },
                 )
+                if exc.reason in self._cooldown_reason_map:
+                    self._apply_cooldown(
+                        venue=venue,
+                        symbol=symbol,
+                        strategy=strategy,
+                        reason=exc.reason,
+                    )
                 self._idempo.expire(client_order_id)
                 return {
                     "client_order_id": client_order_id,
@@ -1041,6 +1101,14 @@ class SmartRouter:
             self._idempo.mark_cancel(client_order_id)
         elif event_key in {"reject", "expire"}:
             self._idempo.expire(client_order_id)
+            if updated is not None:
+                self._apply_cooldown(
+                    venue=str(updated.venue),
+                    symbol=str(updated.symbol),
+                    strategy=strategy,
+                    reason=event_key,
+                    now=now_ts,
+                )
 
         if (
             self._outbox_enabled
@@ -1526,6 +1594,38 @@ class SmartRouter:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _cooldown_key(venue: str, symbol: str, strategy: str) -> str:
+        return f"{venue}|{symbol}|{strategy}"
+
+    def _apply_cooldown(
+        self,
+        *,
+        venue: str,
+        symbol: str,
+        strategy: str,
+        reason: str,
+        now: float | None = None,
+    ) -> None:
+        if not self._cooldown_enabled:
+            return
+        ttl_seconds = float(self._cooldown_reason_map.get(reason, self._cooldown_default_ttl))
+        if ttl_seconds < 0:
+            ttl_seconds = 0.0
+        key = self._cooldown_key(venue, symbol, strategy)
+        LOGGER.info(
+            "cooldown-set: key=%s ttl=%.2fs reason=%s",
+            key,
+            ttl_seconds,
+            reason or "",
+        )
+        self._cooldown_registry.hit(
+            key,
+            seconds=ttl_seconds,
+            reason=reason,
+            now=now,
+        )
 
 
 __all__ = ["SmartRouter", "feature_enabled"]
