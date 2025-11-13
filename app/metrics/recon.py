@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+from typing import Mapping
+
 from prometheus_client import Counter, Gauge
 
 __all__ = [
@@ -14,6 +18,7 @@ __all__ = [
     "RECON_LAST_STATUS",
     "RECON_LAST_SEVERITY",
     "PNL_LEDGER_REALIZED_TODAY",
+    "export_recon_metrics",
 ]
 
 RECON_ISSUES_TOTAL = Counter(
@@ -76,3 +81,35 @@ RECON_LAST_RUN_TS.set(0.0)
 for status in ("OK", "WARN", "CRITICAL"):
     RECON_LAST_STATUS.labels(status=status).set(1.0 if status == "OK" else 0.0)
 RECON_LAST_SEVERITY.set(0.0)
+
+
+def export_recon_metrics(
+    *,
+    orders_open: Mapping[str, int],
+    orders_final: int,
+    anomalies: Mapping[str, int],
+    md_staleness_p95_ms: Mapping[str, int],
+    path: str | os.PathLike[str] | None = None,
+) -> None:
+    """Export reconciliation integrity metrics in Prometheus text format."""
+
+    target = Path(path or "data/metrics/metrics.prom")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[str] = []
+
+    for venue, value in sorted(orders_open.items()):
+        lines.append(f'propbot_orders_open{{venue="{venue}"}} {int(value)}')
+
+    lines.append(f"propbot_orders_final_total {int(orders_final)}")
+
+    invalid_transition = int(anomalies.get("invalid_transition", 0))
+    lines.append(f'propbot_anomaly_total{{type="invalid_transition"}} {invalid_transition}')
+
+    for venue, value in sorted(md_staleness_p95_ms.items()):
+        lines.append(f'propbot_md_staleness_p95_ms{{venue="{venue}"}} {int(value)}')
+
+    payload = "\n".join(lines) + "\n"
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(tmp_path, target)

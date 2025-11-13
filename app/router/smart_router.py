@@ -433,6 +433,45 @@ class SmartRouter:
                     "reason": reason,
                 }
 
+        if ff.md_watchdog_on():
+            sample_ms = watchdog.staleness_ms(venue, symbol)
+            p95_ms = watchdog.get_p95(venue)
+            limit_ms = watchdog.stale_p95_limit_ms()
+            cooldown_active = watchdog.cooldown_active(venue)
+            gate_reason = None
+            if p95_ms > limit_ms:
+                watchdog.activate_cooldown(venue)
+                cooldown_active = True
+                gate_reason = "md_stale_p95"
+            elif cooldown_active:
+                gate_reason = "md_stale_cooldown"
+            if gate_reason is not None:
+                LOGGER.warning(
+                    "smart_router.md_stale_gate_blocked",
+                    extra={
+                        "event": "smart_router_md_stale_gate_blocked",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "strategy": strategy,
+                            "p95_ms": p95_ms,
+                            "limit_ms": limit_ms,
+                            "cooldown_active": cooldown_active,
+                            "sample_ms": sample_ms,
+                        },
+                    },
+                )
+                self._idempo.expire(client_order_id)
+                return {
+                    "client_order_id": client_order_id,
+                    "status": "marketdata_stale",
+                    "error": "market data stale",
+                    "reason": "marketdata_stale",
+                    "gate_reason": gate_reason,
+                }
+
         if not self._idempo.should_send(client_order_id):
             tracked = self._order_tracker.get(client_order_id)
             completed = None if tracked is not None else self._completed_orders.get(client_order_id)
