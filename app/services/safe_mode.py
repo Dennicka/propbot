@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
@@ -11,6 +12,20 @@ from typing import Any, Mapping
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+class SafeMode:
+    """Simple process-wide flag to disable order submissions."""
+
+    _active: bool = os.getenv("SAFE_MODE", "0").lower() in {"1", "true", "yes"}
+
+    @classmethod
+    def is_active(cls) -> bool:
+        return cls._active
+
+    @classmethod
+    def set(cls, value: bool) -> None:
+        cls._active = bool(value)
 
 
 class SafeModeState(str, Enum):
@@ -129,9 +144,11 @@ def reset_safe_mode_for_tests() -> None:
     global _STATUS
     with _STATE_LOCK:
         _STATUS = SafeModeStatus()
+    SafeMode.set(False)
 
 
 __all__ = [
+    "SafeMode",
     "SafeModeState",
     "SafeModeStatus",
     "enter_hold",
