@@ -125,7 +125,15 @@ def get_profile() -> TradingProfile:
                             "strict_flags": profile.strict_flags,
                         },
                     )
-    assert _PROFILE is not None
+    if _PROFILE is None:
+        LOGGER.error(
+            "runtime.profile_missing",
+            extra={
+                "event": "runtime_profile_missing",
+                "component": "runtime",
+            },
+        )
+        raise RuntimeError("Runtime profile not initialised")
     return _PROFILE
 
 
