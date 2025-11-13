@@ -1009,11 +1009,20 @@ class OrderReconDaemon:
         async with self._lock:
             self._last_report = report
 
-    @staticmethod
-    def _log_report(report: ReconReport) -> None:
+    def _log_report(self, report: ReconReport) -> None:
+        router = getattr(self._reconciler, "_router", None)
+        counters_obj = getattr(router, "audit_counters", None) if router is not None else None
+        if counters_obj is not None and hasattr(counters_obj, "snapshot"):
+            counters_snapshot = counters_obj.snapshot()
+        else:
+            counters_snapshot = {}
         LOGGER.info(
             "recon_a.summary",
-            extra={"checked": report.checked, "issues": len(report.issues)},
+            extra={
+                "checked": report.checked,
+                "issues": len(report.issues),
+                "counters": counters_snapshot,
+            },
         )
         for issue in report.issues:
             details = issue.details
@@ -1032,6 +1041,8 @@ class OrderReconDaemon:
                     "details": details_payload,
                 },
             )
+        if counters_obj is not None and hasattr(counters_obj, "reset"):
+            counters_obj.reset()
 
     def _run_gc(self, now_ts: float) -> None:
         ttl_sec = int(getattr(self._config, "gc_ttl_sec", _DEFAULT_GC_TTL_SEC))
