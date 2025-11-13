@@ -66,6 +66,8 @@ from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 from ..risk.limits import RiskGovernor, load_config_from_env
 from .timeouts import DeadlineTracker
+from ..sor.plan import Leg, RoutePlan
+from ..sor.select import Quote, select_best_pair
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
@@ -75,6 +77,10 @@ _ROUTER_BLOCKED_TOTAL = metrics_counter("propbot_orders_blocked_total", labels=(
 _ROUTER_FILLED_TOTAL = metrics_counter("propbot_orders_filled_total")
 _ROUTER_REJECTED_TOTAL = metrics_counter("propbot_orders_rejected_total")
 _ROUTER_LATENCY_HISTOGRAM = metrics_histogram("propbot_router_latency_ms")
+_SOR_EVALUATIONS_TOTAL = metrics_counter("propbot_sor_evaluations_total")
+_SOR_PLANS_TOTAL = metrics_counter("propbot_sor_plans_total")
+_SOR_BLOCKS_TOTAL = metrics_counter("propbot_sor_blocks_total", labels=("reason",))
+_SOR_COMPUTE_HISTOGRAM = metrics_histogram("propbot_sor_compute_ms")
 
 
 def _metrics_output_path() -> str:
@@ -427,6 +433,94 @@ class SmartRouter:
                 )
                 self._risk_governor = None
 
+    def _sor_enabled(self, strategy: str) -> bool:
+        if not _feature_flag_enabled("FF_SOR_V1", False):
+            return False
+        strategy_key = str(strategy or "").strip().lower()
+        return strategy_key in {"xarb", "inter_venue_arb"}
+
+    def _get_sor_quotes(self, symbol: str) -> Dict[str, Quote]:
+        source = self._market_data
+        payload: Dict[str, Quote] = {}
+        raw_quotes: object = None
+        if hasattr(source, "get_sor_quotes"):
+            getter = getattr(source, "get_sor_quotes")
+            if callable(getter):
+                raw_quotes = getter(symbol)
+        elif hasattr(source, "sor_quotes"):
+            maybe_attr = getattr(source, "sor_quotes")
+            if callable(maybe_attr):
+                raw_quotes = maybe_attr(symbol)
+            else:
+                raw_quotes = maybe_attr
+        elif isinstance(source, Mapping):
+            raw_quotes = source.get(symbol) if symbol in source else source
+        if not isinstance(raw_quotes, Mapping):
+            return payload
+        for venue, entry in raw_quotes.items():
+            if not isinstance(entry, Mapping):
+                continue
+            try:
+                bid = Decimal(str(entry["bid"]))
+                ask = Decimal(str(entry["ask"]))
+                ts_value = entry.get("ts_ms", entry.get("ts"))
+                ts_ms = int(ts_value) if ts_value is not None else 0
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                continue
+            symbol_value = str(entry.get("symbol", symbol))
+            payload[str(venue)] = Quote(
+                venue=str(venue),
+                symbol=symbol_value,
+                bid=bid,
+                ask=ask,
+                ts_ms=ts_ms,
+            )
+        return payload
+
+    def submit_intervenue_arb(
+        self,
+        *,
+        strategy: str,
+        symbol: str,
+        notional_usd: Decimal,
+        ts_ns: int,
+        nonce: int,
+    ) -> Dict[str, object]:
+        if not self._sor_enabled(strategy):
+            return {
+                "status": "disabled",
+                "reason": "sor-disabled",
+                "plan": None,
+            }
+        quotes = self._get_sor_quotes(symbol)
+        started = time.perf_counter()
+        _SOR_EVALUATIONS_TOTAL.inc()
+        plan, reason = select_best_pair(quotes, symbol, notional_usd)
+        elapsed_ms = max((time.perf_counter() - started) * 1000.0, 0.0)
+        _SOR_COMPUTE_HISTOGRAM.observe(elapsed_ms)
+        if plan is None:
+            block_reason = f"sor-block:{reason}"
+            _SOR_BLOCKS_TOTAL.labels(reason=reason).inc()
+            return {"status": "blocked", "reason": block_reason, "plan": None}
+
+        _SOR_PLANS_TOTAL.inc()
+        responses: list[Dict[str, object]] = []
+        for index, leg in enumerate(plan.legs):
+            side_value = "buy" if leg.side == "long" else "sell"
+            response = self.register_order(
+                strategy=strategy,
+                venue=leg.venue,
+                symbol=leg.symbol,
+                side=side_value,
+                qty=float(leg.qty),
+                price=float(leg.px_limit),
+                ts_ns=ts_ns + index,
+                nonce=nonce + index,
+                sor_intent_key=leg.intent_key,
+            )
+            responses.append(response)
+        return {"status": "ok", "plan": plan, "responses": responses}
+
     def _load_symbol_meta(self, venue: str, symbol: str) -> Mapping[str, object]:
         cached = provider.get(venue, symbol)
         if cached is None:
@@ -688,6 +782,7 @@ class SmartRouter:
         price: float | None = None,
         ts_ns: int,
         nonce: int,
+        sor_intent_key: str | None = None,
     ) -> Dict[str, object]:
         """Register an outbound order intent and enforce idempotency."""
 
@@ -953,7 +1048,7 @@ class SmartRouter:
                 "client_tag": None,
                 "parent_id": None,
             }
-            intent_key = generate_key(intent_payload)
+            intent_key = sor_intent_key or generate_key(intent_payload)
             if self._intent_window.is_duplicate(intent_key):
                 LOGGER.warning("dupe-intent key=%s", intent_key)
                 self._log_intent_window_stats("duplicate", key=intent_key)
