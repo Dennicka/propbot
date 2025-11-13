@@ -59,6 +59,7 @@ from ..utils.chaos import (
     configure as configure_chaos,
     resolve_settings as resolve_chaos_settings,
 )
+from ..config.profile import TradingProfile, load_profile_from_env
 
 
 if TYPE_CHECKING:
@@ -89,6 +90,43 @@ _UNSET = object()
 
 _STATE_LOCK = threading.RLock()
 _STUCK_RESOLVER_INSTANCE: object | None = None
+
+_PROFILE: TradingProfile | None = None
+
+
+def get_profile() -> TradingProfile:
+    """Return the cached trading profile for the current process."""
+
+    global _PROFILE
+    if _PROFILE is None:
+        with _STATE_LOCK:
+            if _PROFILE is None:
+                profile = load_profile_from_env()
+                _PROFILE = profile
+                LOGGER.info(
+                    "runtime.profile_selected",
+                    extra={
+                        "event": "runtime_profile_selected",
+                        "component": "runtime",
+                        "details": {
+                            "name": profile.name,
+                            "allow_trading": profile.allow_trading,
+                            "strict_flags": profile.strict_flags,
+                        },
+                    },
+                )
+                golden_logger = get_golden_logger()
+                if golden_logger.enabled:
+                    golden_logger.log(
+                        "runtime_profile_selected",
+                        {
+                            "profile": profile.name,
+                            "allow_trading": profile.allow_trading,
+                            "strict_flags": profile.strict_flags,
+                        },
+                    )
+    assert _PROFILE is not None
+    return _PROFILE
 
 
 def _resolve_config_path() -> str:

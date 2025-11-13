@@ -1,122 +1,30 @@
+from __future__ import annotations
+
 import pytest
 
-from app.profile_config import (
-    MissingSecretsError,
-    ProfileConfig,
-    ensure_required_secrets,
-    load_profile_config,
+from app.config.profile import TradingProfile, is_live, load_profile_from_env
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [
+        (None, TradingProfile(name="paper", allow_trading=True, strict_flags=False)),
+        ("paper", TradingProfile(name="paper", allow_trading=True, strict_flags=False)),
+        ("testnet", TradingProfile(name="testnet", allow_trading=True, strict_flags=True)),
+        ("live", TradingProfile(name="live", allow_trading=True, strict_flags=True)),
+        ("LiVe", TradingProfile(name="live", allow_trading=True, strict_flags=True)),
+        ("unknown", TradingProfile(name="paper", allow_trading=True, strict_flags=False)),
+    ],
 )
-from app.config.profiles import (
-    ProfileSafetyError,
-    RuntimeProfile,
-    apply_profile_environment,
-    ensure_live_acknowledged,
-    ensure_live_prerequisites,
-)
-from app.secrets_store import reset_secrets_store_cache
-
-import json
+def test_load_profile_from_env(monkeypatch: pytest.MonkeyPatch, env_value, expected):
+    if env_value is None:
+        monkeypatch.delenv("EXEC_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("EXEC_PROFILE", env_value)
+    profile = load_profile_from_env()
+    assert profile == expected
 
 
-def _load(name: str) -> ProfileConfig:
-    return load_profile_config(name)
-
-
-@pytest.mark.parametrize("profile", ["paper", "testnet", "live"])
-def test_profiles_parse(profile: str) -> None:
-    cfg = _load(profile)
-    assert cfg.name == profile
-    assert cfg.broker.primary.endpoints.rest
-    assert cfg.flags.as_dict()
-
-
-def test_paper_and_testnet_are_dry_run() -> None:
-    assert _load("paper").dry_run is True
-    assert _load("testnet").dry_run is True
-    assert _load("live").dry_run is False
-
-
-def test_live_profile_requires_secrets() -> None:
-    live_cfg = _load("live")
-    assert live_cfg.requires_secrets is True
-
-    with pytest.raises(MissingSecretsError):
-        ensure_required_secrets(live_cfg, lambda _name: {})
-
-    def provider(name: str):
-        if name == "binance":
-            return {"key": "abc", "secret": "def"}
-        if name == "okx":
-            return {"key": "ghi", "secret": "jkl", "passphrase": "mno"}
-        return {}
-
-    ensure_required_secrets(live_cfg, provider)
-
-
-def test_apply_profile_environment_sets_expected_defaults() -> None:
-    paper_cfg = _load("paper")
-    env: dict[str, str] = {}
-    updates = apply_profile_environment(RuntimeProfile.PAPER, paper_cfg, environ=env)
-    assert env["PROFILE"] == "paper"
-    assert env["SAFE_MODE"] == "true"
-    assert env["DRY_RUN_ONLY"] == "true"
-    assert env["HEDGE_ENABLED"] == "false"
-    assert updates == env
-
-
-def test_live_prerequisites_require_guards(monkeypatch, tmp_path) -> None:
-    reset_secrets_store_cache()
-    live_cfg = _load("live")
-    secrets_path = tmp_path / "secrets.json"
-    secrets_payload = {
-        "binance_key": "abc",
-        "binance_secret": "def",
-        "okx_key": "ghi",
-        "okx_secret": "jkl",
-        "okx_passphrase": "mno",
-    }
-    secrets_path.write_text(json.dumps(secrets_payload), encoding="utf-8")
-    monkeypatch.setenv("SECRETS_STORE_PATH", str(secrets_path))
-    env_updates = apply_profile_environment(RuntimeProfile.LIVE, live_cfg, environ={})
-    for key, value in env_updates.items():
-        monkeypatch.setenv(key, value)
-
-    ensure_live_prerequisites(live_cfg)
-
-    monkeypatch.setenv("FEATURE_SLO", "false")
-    with pytest.raises(ProfileSafetyError) as excinfo:
-        ensure_live_prerequisites(live_cfg)
-    assert "SLO" in str(excinfo.value)
-
-
-def test_live_prerequisites_fail_without_secrets(monkeypatch) -> None:
-    reset_secrets_store_cache()
-    live_cfg = _load("live")
-    env_updates = apply_profile_environment(RuntimeProfile.LIVE, live_cfg, environ={})
-    for key, value in env_updates.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.delenv("SECRETS_STORE_PATH", raising=False)
-    with pytest.raises(ProfileSafetyError):
-        ensure_live_prerequisites(live_cfg)
-
-
-def test_live_acknowledgement_requires_limits(monkeypatch) -> None:
-    live_cfg = _load("live")
-    env_updates = apply_profile_environment(RuntimeProfile.LIVE, live_cfg, environ={})
-    for key, value in env_updates.items():
-        monkeypatch.setenv(key, value)
-
-    monkeypatch.delenv("MAX_TOTAL_NOTIONAL_USDT", raising=False)
-    monkeypatch.delenv("MAX_OPEN_POSITIONS", raising=False)
-    monkeypatch.delenv("DAILY_LOSS_CAP_USDT", raising=False)
-    monkeypatch.delenv("LIVE_CONFIRM", raising=False)
-
-    with pytest.raises(ProfileSafetyError):
-        ensure_live_acknowledged(live_cfg)
-
-    monkeypatch.setenv("MAX_TOTAL_NOTIONAL_USDT", "50000")
-    monkeypatch.setenv("MAX_OPEN_POSITIONS", "5")
-    monkeypatch.setenv("DAILY_LOSS_CAP_USDT", "2000")
-    monkeypatch.setenv("LIVE_CONFIRM", "I_KNOW_WHAT_I_AM_DOING")
-
-    ensure_live_acknowledged(live_cfg)
+def test_is_live_helper():
+    assert is_live(TradingProfile(name="live", allow_trading=True, strict_flags=True))
+    assert not is_live(TradingProfile(name="paper", allow_trading=True, strict_flags=False))

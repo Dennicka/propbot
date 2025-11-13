@@ -23,9 +23,11 @@ from ..orders.state import OrderState, OrderStateError, next_state, validate_tra
 from ..orders.tracker import OrderTracker, TRACKER_MAX_ACTIVE, TRACKER_TTL_SEC
 from ..rules.pretrade import PretradeRejection, validate_pretrade
 from ..exchanges.metadata import provider
+from ..config.profile import is_live
 from ..services.runtime import (
     get_liquidity_status,
     get_market_data,
+    get_profile,
     get_state,
 )
 from ..tca.cost_model import (
@@ -402,6 +404,32 @@ class SmartRouter:
         """Register an outbound order intent and enforce idempotency."""
 
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
+        profile = get_profile()
+        guard_reason = None
+        if is_live(profile):
+            if os.getenv("LIVE_CONFIRM") != "I_UNDERSTAND":
+                guard_reason = "live-confirm-missing"
+            elif os.getenv("READINESS_OK") != "1":
+                guard_reason = "live-readiness-not-ok"
+            if guard_reason is not None:
+                LOGGER.warning(
+                    "smart_router.live_guard_blocked",
+                    extra={
+                        "event": "smart_router_live_guard_blocked",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "profile": profile.name,
+                            "reason": guard_reason,
+                        },
+                    },
+                )
+                return {
+                    "client_order_id": client_order_id,
+                    "status": guard_reason,
+                    "reason": guard_reason,
+                    "profile": profile.name,
+                }
         if self._risk_governor is not None:
             price_for_risk = Decimal("0") if price is None else Decimal(str(price))
             qty_for_risk = Decimal(str(qty))
