@@ -290,6 +290,49 @@ class SmartRouter:
     def _load_symbol_meta(self, venue: str, symbol: str) -> Mapping[str, object]:
         cached = provider.get(venue, symbol)
         if cached is None:
+            allowed_raw = os.getenv("TEST_ONLY_ROUTER_META", "").strip()
+            if allowed_raw:
+                allow_all = allowed_raw.lower() in {"1", "true", "yes", "on", "*", "all"}
+                allowed_pairs: set[tuple[str, str]] = set()
+                if not allow_all:
+                    for chunk in allowed_raw.split(","):
+                        entry = chunk.strip()
+                        if not entry:
+                            continue
+                        if ":" not in entry:
+                            continue
+                        venue_token, symbol_token = entry.split(":", 1)
+                        allowed_pairs.add(
+                            (venue_token.strip().lower(), symbol_token.strip().upper())
+                        )
+                venue_key = str(venue).strip().lower()
+                symbol_key = str(symbol).strip().upper()
+                if allow_all or (venue_key, symbol_key) in allowed_pairs:
+                    # if TEST_ONLY:
+                    tick_size = Decimal(os.getenv("TEST_ONLY_ROUTER_TICK_SIZE", "0.1"))
+                    step_size = Decimal(os.getenv("TEST_ONLY_ROUTER_STEP_SIZE", "0.001"))
+                    min_notional_env = os.getenv("TEST_ONLY_ROUTER_MIN_NOTIONAL")
+                    min_qty_env = os.getenv("TEST_ONLY_ROUTER_MIN_QTY")
+                    min_notional = (
+                        Decimal(min_notional_env)
+                        if min_notional_env is not None and min_notional_env.strip()
+                        else None
+                    )
+                    min_qty = (
+                        Decimal(min_qty_env)
+                        if min_qty_env is not None and min_qty_env.strip()
+                        else None
+                    )
+                    symbol_upper = str(symbol).upper()
+                    return {
+                        "symbol": symbol_upper,
+                        "tick_size": tick_size,
+                        "step_size": step_size,
+                        "min_notional": min_notional,
+                        "min_qty": min_qty,
+                        "tick": tick_size,
+                        "lot": step_size,
+                    }
             LOGGER.warning(
                 "smart_router.meta_missing",
                 extra={
