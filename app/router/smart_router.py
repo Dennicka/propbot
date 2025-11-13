@@ -18,7 +18,8 @@ from app.market.watchdog import watchdog
 from ..golden.logger import get_golden_logger
 from ..orders.idempotency import IdempoStore, make_coid
 from ..orders.quantization import as_dec, quantize_order
-from ..orders.state import OrderState
+from ..audit.counters import AuditCounters
+from ..orders.state import OrderState, OrderStateError, next_state, validate_transition
 from ..orders.tracker import OrderTracker, TRACKER_MAX_ACTIVE, TRACKER_TTL_SEC
 from ..rules.pretrade import PretradeRejection, validate_pretrade
 from ..exchanges.metadata import provider
@@ -268,6 +269,8 @@ class SmartRouter:
         self._order_tracker_ttl_sec = _order_tracker_ttl()
         self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
         self._order_strategies: Dict[str, str] = {}
+        self._audit_counters = AuditCounters()
+        self._last_events: Dict[str, str] = {}
         self._risk_governor: RiskGovernor | None = None
         if ff.risk_limits_on():
             try:
@@ -329,6 +332,17 @@ class SmartRouter:
                 )
             )
         return tuple(snapshots)
+
+    @property
+    def audit_counters(self) -> AuditCounters:
+        """Expose audit counters for reconciliation and reporting."""
+
+        return self._audit_counters
+
+    def audit_counters_snapshot(self) -> Dict[str, int]:
+        """Return a snapshot of anomaly counters."""
+
+        return self._audit_counters.snapshot()
 
     def register_order(
         self,
@@ -508,6 +522,8 @@ class SmartRouter:
             self._order_strategies.pop(client_order_id, None)
             raise
 
+        self._last_events[client_order_id] = "submit"
+
         tracked = self._order_tracker.get(client_order_id)
         response: Dict[str, object] = {
             "client_order_id": client_order_id,
@@ -528,20 +544,83 @@ class SmartRouter:
         """Apply an order lifecycle event and update idempotency state."""
 
         tracked = self._order_tracker.get(client_order_id)
+        event_key = event.strip().lower()
+        if event_key == "expired":
+            event_key = "expire"
         if tracked is None:
+            if event_key == "ack":
+                self._audit_counters.inc("ack_missing_register")
+                self._log_audit_anomaly(
+                    "ack_missing_register",
+                    client_order_id=client_order_id,
+                    event=event_key,
+                    state=None,
+                    details={},
+                )
             LOGGER.error(
                 "smart_router.unknown_order_event",
                 extra={
                     "event": "smart_router_unknown_order_event",
                     "component": "smart_router",
-                    "details": {"client_order_id": client_order_id, "event": event},
+                    "details": {"client_order_id": client_order_id, "event": event_key},
                 },
             )
             raise KeyError(f"unknown client order id: {client_order_id}")
 
-        event_key = event.strip().lower()
-        if event_key == "expired":
-            event_key = "expire"
+        previous_state = tracked.state
+        previous_event = self._last_events.get(client_order_id)
+        if previous_event == event_key and event_key != "partial_fill":
+            self._audit_counters.inc("duplicate_event")
+            self._log_audit_anomaly(
+                "duplicate_event",
+                client_order_id=client_order_id,
+                event=event_key,
+                state=previous_state,
+                details={"previous_event": previous_event},
+            )
+            return previous_state
+
+        if event_key in {"partial_fill", "filled"} and previous_state not in {
+            OrderState.ACK,
+            OrderState.PARTIAL,
+        }:
+            counter = "fill_without_ack" if event_key == "filled" else "out_of_order"
+            self._audit_counters.inc(counter)
+            self._log_audit_anomaly(
+                counter,
+                client_order_id=client_order_id,
+                event=event_key,
+                state=previous_state,
+                details={},
+            )
+            return previous_state
+
+        try:
+            candidate_state = next_state(previous_state, event_key)
+        except ValueError:
+            self._audit_counters.inc("invalid_transition")
+            self._log_audit_anomaly(
+                "invalid_transition",
+                client_order_id=client_order_id,
+                event=event_key,
+                state=previous_state,
+                details={"reason": "unknown_event"},
+            )
+            return previous_state
+
+        try:
+            validate_transition(previous_state, candidate_state)
+        except OrderStateError as exc:
+            self._audit_counters.inc("invalid_transition")
+            self._log_audit_anomaly(
+                "invalid_transition",
+                client_order_id=client_order_id,
+                event=event_key,
+                state=previous_state,
+                details={"target_state": candidate_state.value, "error": str(exc)},
+            )
+            return previous_state
+
         now_ns = time.time_ns()
         now_ts = float(now_ns) / NANOS_IN_SECOND
         qty_value = Decimal(str(quantity)) if quantity is not None else None
@@ -553,20 +632,30 @@ class SmartRouter:
                 now_ns,
             )
         except ValueError as exc:
-            LOGGER.error(
+            self._audit_counters.inc("invalid_transition")
+            self._log_audit_anomaly(
+                "invalid_transition",
+                client_order_id=client_order_id,
+                event=event_key,
+                state=previous_state,
+                details={"reason": "tracker_error"},
+            )
+            LOGGER.warning(
                 "smart_router.invalid_state_transition",
                 extra={
                     "event": "smart_router_invalid_state_transition",
                     "component": "smart_router",
                     "details": {
                         "client_order_id": client_order_id,
-                        "current_state": tracked.state.value,
+                        "current_state": previous_state.value,
                         "event": event_key,
                     },
                 },
                 exc_info=exc,
             )
-            raise
+            return previous_state
+
+        self._last_events[client_order_id] = event_key
 
         updated = self._order_tracker.get(client_order_id)
         risk_governor = self._risk_governor
@@ -598,6 +687,7 @@ class SmartRouter:
             self._completed_orders[client_order_id] = (snapshot, now_ns)
             self._order_strategies.pop(client_order_id, None)
             self._order_tracker.mark_terminal(client_order_id, new_state, now_ts)
+            self._last_events.pop(client_order_id, None)
 
         self._order_tracker.prune_aged(now_ns, self._order_tracker_ttl_sec)
         self._order_tracker.purge_terminated_older_than(
@@ -632,6 +722,34 @@ class SmartRouter:
             "filled_qty": float(tracked.filled),
             "state": tracked.state,
         }
+
+    def _log_audit_anomaly(
+        self,
+        kind: str,
+        *,
+        client_order_id: str,
+        event: str,
+        state: OrderState | None,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
+        payload: Dict[str, object] = {
+            "client_order_id": client_order_id,
+            "event": event,
+            "counters": self._audit_counters.snapshot(),
+        }
+        if state is not None:
+            payload["state"] = state.value
+        if details:
+            payload.update(details)
+        LOGGER.warning(
+            "smart_router.audit_%s",  # pragma: no cover - exercised in tests via snapshot
+            kind,
+            extra={
+                "event": f"smart_router_audit_{kind}",
+                "component": "smart_router",
+                "details": payload,
+            },
+        )
 
     def _prune_completed(self, now_ns: int) -> None:
         ttl_sec = self._order_tracker_ttl_sec
