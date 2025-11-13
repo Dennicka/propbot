@@ -25,7 +25,7 @@ venv:
 
 fmt:
 	python -m black .
-	python -m ruff check --fix .
+	python -m ruff --fix .
 
 lint:
 	$(VENV)/bin/ruff check app
