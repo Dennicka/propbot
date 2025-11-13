@@ -21,6 +21,7 @@ from app.metrics.core import (
     DEFAULT_METRICS_PATH as _DEFAULT_METRICS_PATH,
     METRICS_PATH_ENV as _METRICS_PATH_ENV,
     counter as metrics_counter,
+    gauge as metrics_gauge,
     histogram as metrics_histogram,
     write_metrics as metrics_write,
 )
@@ -65,6 +66,7 @@ from ..tca.cost_model import (
 )
 from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
+from ..risk.budgets import get_risk_budgets
 from ..risk.limits import RiskGovernor, load_config_from_env
 from .timeouts import DeadlineTracker
 from ..sor.plan import Leg, RoutePlan
@@ -82,6 +84,9 @@ _SOR_EVALUATIONS_TOTAL = metrics_counter("propbot_sor_evaluations_total")
 _SOR_PLANS_TOTAL = metrics_counter("propbot_sor_plans_total")
 _SOR_BLOCKS_TOTAL = metrics_counter("propbot_sor_blocks_total", labels=("reason",))
 _SOR_COMPUTE_HISTOGRAM = metrics_histogram("propbot_sor_compute_ms")
+_RISK_BUDGET_BLOCKS_TOTAL = metrics_counter("propbot_risk_budget_blocks_total", labels=("reason",))
+_RISK_TOTAL_NOTIONAL_GAUGE = metrics_gauge("propbot_risk_total_notional_usd", labels=("strategy",))
+_RISK_POSITIONS_OPEN_GAUGE = metrics_gauge("propbot_risk_positions_open", labels=("strategy",))
 
 
 def _metrics_output_path() -> str:
@@ -402,6 +407,9 @@ class SmartRouter:
         self._audit_counters = AuditCounters()
         self._last_events: Dict[str, str] = {}
         self._risk_governor: RiskGovernor | None = None
+        self._risk_budgets_enabled = _feature_flag_enabled("FF_RISK_BUDGETS", False)
+        self._risk_budgets = get_risk_budgets() if self._risk_budgets_enabled else None
+        self._risk_budget_seen_strategies: set[str] = set()
         self._timeouts_enabled = _feature_flag_enabled("FF_ORDER_TIMEOUTS", False)
         self._timeouts: DeadlineTracker | None = None
         self._timeouts_sweeping = False
@@ -612,6 +620,65 @@ class SmartRouter:
         }
         return payload
 
+    def _risk_budget_guard_enabled(self) -> bool:
+        return self._risk_budgets_enabled and self._risk_budgets is not None
+
+    def _update_risk_budget_metrics(self) -> None:
+        if not self._risk_budget_guard_enabled():
+            return
+        budgets = self._risk_budgets
+        if budgets is None:
+            return
+        snapshot = budgets.reg.snapshot()
+        totals: Dict[str, Decimal] = snapshot["total_by_strategy"]
+        positions: Dict[str, int] = snapshot["symbols_by_strategy"]
+        seen = set(self._risk_budget_seen_strategies)
+        for strategy in seen - totals.keys():
+            _RISK_TOTAL_NOTIONAL_GAUGE.labels(strategy=strategy).set(0.0)
+        for strategy in seen - positions.keys():
+            _RISK_POSITIONS_OPEN_GAUGE.labels(strategy=strategy).set(0.0)
+        for strategy, value in totals.items():
+            _RISK_TOTAL_NOTIONAL_GAUGE.labels(strategy=strategy).set(float(value))
+        for strategy, count in positions.items():
+            _RISK_POSITIONS_OPEN_GAUGE.labels(strategy=strategy).set(float(count))
+        self._risk_budget_seen_strategies = seen.union(totals.keys()).union(positions.keys())
+
+    def _risk_budget_cleanup(self, now: float | None = None) -> None:
+        if not self._risk_budget_guard_enabled():
+            return
+        budgets = self._risk_budgets
+        if budgets is None:
+            return
+        budgets.reg.cleanup(now=now)
+        self._update_risk_budget_metrics()
+
+    def _reserve_risk_budget(
+        self,
+        order_id: str,
+        strategy: str,
+        symbol: str,
+        notional_usd: Decimal,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        if not self._risk_budget_guard_enabled():
+            return False
+        budgets = self._risk_budgets
+        if budgets is None:
+            return False
+        budgets.reg.reserve(order_id, strategy, symbol, notional_usd, now=now)
+        self._update_risk_budget_metrics()
+        return True
+
+    def _release_risk_budget(self, order_id: str) -> None:
+        if not self._risk_budget_guard_enabled():
+            return
+        budgets = self._risk_budgets
+        if budgets is None:
+            return
+        budgets.reg.release(order_id)
+        self._update_risk_budget_metrics()
+
     # ------------------------------------------------------------------
     # Order lifecycle helpers
     # ------------------------------------------------------------------
@@ -683,6 +750,7 @@ class SmartRouter:
             self._handle_tracker_cleanup(removed_ttl, reason="ttl")
         if removed_size:
             self._handle_tracker_cleanup(removed_size, reason="size")
+        self._risk_budget_cleanup(now_ts)
 
     def cleanup_tracker_by_ttl(self, now_ts: float | None = None) -> int:
         """Remove tracker entries that exceeded the configured TTL."""
@@ -701,6 +769,8 @@ class SmartRouter:
         if not removed_ttl:
             return 0
         self._handle_tracker_cleanup(removed_ttl, reason="ttl")
+        reference_seconds = float(reference)
+        self._risk_budget_cleanup(reference_seconds)
         return len(removed_ttl)
 
     def cleanup_tracker_by_size(self) -> int:
@@ -717,9 +787,11 @@ class SmartRouter:
         if not removed_size:
             return 0
         self._handle_tracker_cleanup(removed_size, reason="size")
+        self._risk_budget_cleanup()
         return len(removed_size)
 
     def _discard_tracker_references(self, order_id: str) -> None:
+        self._release_risk_budget(order_id)
         self._forget_intent_key(order_id)
         self._order_strategies.pop(order_id, None)
         self._last_events.pop(order_id, None)
@@ -813,6 +885,7 @@ class SmartRouter:
         metrics_started = time.perf_counter()
         metrics_reason: str | None = None
         metrics_submitted = False
+        risk_budget_notional = Decimal("0")
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
         try:
             if SafeMode.is_active():
@@ -1037,6 +1110,44 @@ class SmartRouter:
             else:
                 qty_value = max(float(qty), 0.0)
 
+            if self._risk_budget_guard_enabled():
+                price_for_budget = (
+                    Decimal("0") if price_value is None else Decimal(str(price_value))
+                )
+                qty_for_budget = Decimal(str(qty_value))
+                risk_budget_notional = (price_for_budget * qty_for_budget).copy_abs()
+                budgets = self._risk_budgets
+                ok_budget = True
+                detail_budget = "ok"
+                if budgets is not None:
+                    ok_budget, detail_budget = budgets.can_accept(
+                        strategy, symbol, risk_budget_notional
+                    )
+                self._update_risk_budget_metrics()
+                if not ok_budget:
+                    LOGGER.warning(
+                        "smart_router.risk_budget_blocked",
+                        extra={
+                            "event": "smart_router_risk_budget_blocked",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "strategy": strategy,
+                                "symbol": symbol,
+                                "reason": detail_budget,
+                            },
+                        },
+                    )
+                    self._idempo.expire(client_order_id)
+                    _RISK_BUDGET_BLOCKS_TOTAL.labels(reason=detail_budget).inc()
+                    metrics_reason = "risk-budget"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": "risk_budget_blocked",
+                        "reason": "risk-budget",
+                        "detail": detail_budget,
+                    }
+
             if ff.md_watchdog_on() and watchdog.is_stale(venue, symbol):
                 LOGGER.warning(
                     "marketdata-stale: %s/%s",
@@ -1116,39 +1227,55 @@ class SmartRouter:
             existing_tracked = self._order_tracker.get(client_order_id)
             qty_decimal = Decimal(str(qty_value))
             register_ts = float(ts_ns) / NANOS_IN_SECOND
-            self._order_tracker.register_order(
-                client_order_id,
-                key=intent_key or "",
-                venue=venue,
-                symbol=symbol,
-                side=side,
-                qty=qty_decimal,
-                now_ns=ts_ns,
-                ts=register_ts,
-            )
-            try:
-                state = self._order_tracker.apply_event(
+            reserved_budget = False
+            if self._risk_budget_guard_enabled():
+                reserved_budget = self._reserve_risk_budget(
                     client_order_id,
-                    "submit",
-                    None,
-                    ts_ns,
+                    strategy,
+                    symbol,
+                    risk_budget_notional,
                 )
-            except ValueError as exc:  # pragma: no cover - defensive
-                LOGGER.error(
-                    "smart_router.invalid_state_transition",
-                    extra={
-                        "event": "smart_router_invalid_state_transition",
-                        "component": "smart_router",
-                        "details": {
-                            "client_order_id": client_order_id,
-                            "current_state": OrderState.NEW.value,
-                            "event": "submit",
+            state: OrderState | None = None
+            try:
+                self._order_tracker.register_order(
+                    client_order_id,
+                    key=intent_key or "",
+                    venue=venue,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty_decimal,
+                    now_ns=ts_ns,
+                    ts=register_ts,
+                )
+                try:
+                    state = self._order_tracker.apply_event(
+                        client_order_id,
+                        "submit",
+                        None,
+                        ts_ns,
+                    )
+                except ValueError as exc:  # pragma: no cover - defensive
+                    LOGGER.error(
+                        "smart_router.invalid_state_transition",
+                        extra={
+                            "event": "smart_router_invalid_state_transition",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "current_state": OrderState.NEW.value,
+                                "event": "submit",
+                            },
                         },
-                    },
-                    exc_info=exc,
-                )
-                self._idempo.expire(client_order_id)
-                self._order_strategies.pop(client_order_id, None)
+                        exc_info=exc,
+                    )
+                    self._idempo.expire(client_order_id)
+                    self._order_strategies.pop(client_order_id, None)
+                    if reserved_budget:
+                        self._release_risk_budget(client_order_id)
+                    raise
+            except Exception:
+                if reserved_budget:
+                    self._release_risk_budget(client_order_id)
                 raise
 
             self._last_events[client_order_id] = "submit"
@@ -1326,6 +1453,8 @@ class SmartRouter:
                 risk_governor.on_ack(venue, symbol, strategy)
             elif event_key == "filled":
                 risk_governor.on_filled(venue, symbol, strategy, Decimal("0"))
+        if event_key in {"reject", "canceled", "expire", "filled", "fin"}:
+            self._release_risk_budget(client_order_id)
         if event_key == "ack":
             self._idempo.mark_ack(client_order_id)
             if self._outbox_enabled and self._outbox is not None and outbox_key:
