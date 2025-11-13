@@ -20,7 +20,14 @@ from ..orders.idempotency import IdempoStore, make_coid
 from ..orders.quantization import as_dec, quantize_order
 from ..audit.counters import AuditCounters
 from ..orders.state import OrderState, OrderStateError, next_state, validate_transition
-from ..orders.tracker import OrderTracker, TRACKER_MAX_ACTIVE, TRACKER_TTL_SEC
+from ..orders.tracker import (
+    OrderTracker,
+    TRACKER_MAX_ACTIVE,
+    TRACKER_TTL_SEC,
+    TrackingCleaner,
+    tracker_max_items,
+    tracker_ttl_seconds,
+)
 from ..rules.pretrade import PretradeRejection, validate_pretrade
 from ..exchanges.metadata import provider
 from ..config.profile import is_live
@@ -270,6 +277,14 @@ class SmartRouter:
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
         self._order_tracker = OrderTracker(max_active=_order_tracker_max_active())
         self._order_tracker_ttl_sec = _order_tracker_ttl()
+        self._tracker_ttl_seconds = tracker_ttl_seconds()
+        self._tracker_max_items = tracker_max_items()
+        self._tracker_stats: Dict[str, int] = {
+            "seen": 0,
+            "removed_terminal": 0,
+            "removed_ttl": 0,
+            "removed_size": 0,
+        }
         self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
         self._order_strategies: Dict[str, str] = {}
         self._audit_counters = AuditCounters()
@@ -389,6 +404,78 @@ class SmartRouter:
         """Return a snapshot of anomaly counters."""
 
         return self._audit_counters.snapshot()
+
+    def get_tracker_stats(self) -> Dict[str, int]:
+        """Return tracker cleanup statistics."""
+
+        return dict(self._tracker_stats)
+
+    def cleanup_tracker_by_ttl(self, now_ts: float | None = None) -> int:
+        """Remove tracker entries that exceeded the configured TTL."""
+
+        ttl_seconds = tracker_ttl_seconds()
+        if ttl_seconds != self._tracker_ttl_seconds:
+            self._tracker_ttl_seconds = ttl_seconds
+        if self._tracker_ttl_seconds <= 0:
+            return 0
+        reference = float(now_ts) if now_ts is not None else time.time()
+        removed = TrackingCleaner.cleanup_by_ttl(
+            self._order_tracker,
+            now_ts=reference,
+            ttl_seconds=self._tracker_ttl_seconds,
+        )
+        if not removed:
+            return 0
+        for order_id, state in removed:
+            self._discard_tracker_references(order_id)
+            self._log_tracker_removal(order_id=order_id, state=state, reason="ttl")
+        self._tracker_stats["removed_ttl"] += len(removed)
+        return len(removed)
+
+    def cleanup_tracker_by_size(self) -> int:
+        """Ensure tracker entries do not exceed the configured capacity."""
+
+        max_items = tracker_max_items()
+        if max_items != self._tracker_max_items:
+            self._tracker_max_items = max_items
+        removed = TrackingCleaner.cleanup_by_size(
+            self._order_tracker,
+            max_items=self._tracker_max_items,
+        )
+        if not removed:
+            return 0
+        for order_id, state in removed:
+            self._discard_tracker_references(order_id)
+            self._log_tracker_removal(order_id=order_id, state=state, reason="size")
+        self._tracker_stats["removed_size"] += len(removed)
+        return len(removed)
+
+    def _discard_tracker_references(self, order_id: str) -> None:
+        self._order_strategies.pop(order_id, None)
+        self._last_events.pop(order_id, None)
+        self._completed_orders.pop(order_id, None)
+
+    def _log_tracker_removal(
+        self,
+        *,
+        order_id: str,
+        state: OrderState | None,
+        reason: str,
+    ) -> None:
+        details: Dict[str, object] = {
+            "client_order_id": order_id,
+            "reason": reason,
+        }
+        if state is not None:
+            details["state"] = state.value if isinstance(state, OrderState) else str(state)
+        LOGGER.debug(
+            "smart_router.order_tracker_cleanup",
+            extra={
+                "event": "smart_router_order_tracker_cleanup",
+                "component": "smart_router",
+                "details": details,
+            },
+        )
 
     def register_order(
         self,
@@ -601,6 +688,7 @@ class SmartRouter:
 
         self._completed_orders.pop(client_order_id, None)
         self._order_strategies[client_order_id] = strategy
+        existing_tracked = self._order_tracker.get(client_order_id)
         qty_decimal = Decimal(str(qty_value))
         self._order_tracker.register_order(
             client_order_id,
@@ -636,6 +724,13 @@ class SmartRouter:
             raise
 
         self._last_events[client_order_id] = "submit"
+
+        if existing_tracked is None:
+            self._tracker_stats["seen"] += 1
+
+        register_ts = float(ts_ns) / NANOS_IN_SECOND
+        self.cleanup_tracker_by_ttl(register_ts)
+        self.cleanup_tracker_by_size()
 
         tracked = self._order_tracker.get(client_order_id)
         response: Dict[str, object] = {
@@ -796,17 +891,33 @@ class SmartRouter:
             self._idempo.expire(client_order_id)
 
         if updated is not None and self._order_tracker.is_terminal(new_state):
+            updated.updated_ts = now_ts
+            updated.updated_ns = now_ns
             snapshot = self._snapshot_from_tracked(updated)
             self._completed_orders[client_order_id] = (snapshot, now_ns)
             self._order_strategies.pop(client_order_id, None)
-            self._order_tracker.mark_terminal(client_order_id, new_state, now_ts)
+            LOGGER.info(
+                "smart_router.order_tracker_terminal_cleanup",
+                extra={
+                    "event": "smart_router_order_tracker_terminal_cleanup",
+                    "component": "smart_router",
+                    "details": {
+                        "client_order_id": client_order_id,
+                        "state": new_state.value,
+                    },
+                },
+            )
+            if self._order_tracker.finalize(client_order_id, new_state):
+                self._tracker_stats["removed_terminal"] += 1
+                self._log_tracker_removal(
+                    order_id=client_order_id,
+                    state=new_state,
+                    reason="terminal",
+                )
             self._last_events.pop(client_order_id, None)
 
-        self._order_tracker.prune_aged(now_ns, self._order_tracker_ttl_sec)
-        self._order_tracker.purge_terminated_older_than(
-            self._order_tracker_ttl_sec,
-            now_ts,
-        )
+        self.cleanup_tracker_by_ttl(now_ts)
+        self.cleanup_tracker_by_size()
         self._prune_completed(now_ns)
         if self._order_strategies:
             for coid in list(self._order_strategies.keys()):
