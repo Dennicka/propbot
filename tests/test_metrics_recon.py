@@ -14,13 +14,11 @@ def test_export_recon_metrics(tmp_path: Path) -> None:
         path=target,
     )
 
-    lines = target.read_text(encoding="utf-8").splitlines()
-    assert lines == [
-        'propbot_orders_open{venue="binance"} 3',
-        'propbot_orders_open{venue="okx"} 2',
-        "propbot_orders_final_total 7",
-        'propbot_anomaly_total{type="invalid_transition"} 5',
-        'propbot_md_staleness_p95_ms{venue="binance"} 1200',
-        'propbot_md_staleness_p95_ms{venue="bybit"} 0',
-        'propbot_md_staleness_p95_ms{venue="okx"} 800',
-    ]
+    payload = target.read_text(encoding="utf-8")
+    assert 'propbot_orders_open{venue="binance"} 3' in payload
+    assert 'propbot_orders_open{venue="okx"} 2' in payload
+    assert "propbot_orders_final_total 7" in payload
+    assert 'propbot_anomaly_total{type="invalid_transition"} 5' in payload
+    assert 'propbot_md_staleness_p95_ms{venue="binance"} 1200' in payload
+    assert 'propbot_md_staleness_p95_ms{venue="bybit"} 0' in payload
+    assert 'propbot_md_staleness_p95_ms{venue="okx"} 800' in payload

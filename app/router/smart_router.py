@@ -15,6 +15,13 @@ import httpx
 
 import app.config.feature_flags as ff
 from app.market.watchdog import watchdog
+from app.metrics.core import (
+    DEFAULT_METRICS_PATH as _DEFAULT_METRICS_PATH,
+    METRICS_PATH_ENV as _METRICS_PATH_ENV,
+    counter as metrics_counter,
+    histogram as metrics_histogram,
+    write_metrics as metrics_write,
+)
 
 from .cooldown import CooldownRegistry
 from ..golden.logger import get_golden_logger
@@ -61,6 +68,16 @@ from .timeouts import DeadlineTracker
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
+
+_ROUTER_SUBMITTED_TOTAL = metrics_counter("propbot_orders_submitted_total")
+_ROUTER_BLOCKED_TOTAL = metrics_counter("propbot_orders_blocked_total", labels=("reason",))
+_ROUTER_FILLED_TOTAL = metrics_counter("propbot_orders_filled_total")
+_ROUTER_REJECTED_TOTAL = metrics_counter("propbot_orders_rejected_total")
+_ROUTER_LATENCY_HISTOGRAM = metrics_histogram("propbot_router_latency_ms")
+
+
+def _metrics_output_path() -> str:
+    return os.getenv(_METRICS_PATH_ENV, _DEFAULT_METRICS_PATH)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -630,6 +647,10 @@ class SmartRouter:
             for order_id, reason in due.items():
                 LOGGER.warning("order-timeout: %s reason=%s", order_id, reason)
                 try:
+                    _ROUTER_BLOCKED_TOTAL.labels(reason=reason).inc()
+                except ValueError:
+                    _ROUTER_BLOCKED_TOTAL.labels(reason=str(reason)).inc()
+                try:
                     self.process_order_event(client_order_id=order_id, event="expired")
                 except KeyError:
                     LOGGER.debug("order-timeout: unknown-order %s", order_id)
@@ -652,335 +673,361 @@ class SmartRouter:
     ) -> Dict[str, object]:
         """Register an outbound order intent and enforce idempotency."""
 
+        metrics_started = time.perf_counter()
+        metrics_reason: str | None = None
+        metrics_submitted = False
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
-        if SafeMode.is_active():
-            return {"ok": False, "reason": "safe-mode"}
-        profile = get_profile()
-        guard_reason = None
-        if is_live(profile):
-            if os.getenv("LIVE_CONFIRM") != "I_UNDERSTAND":
-                guard_reason = "live-confirm-missing"
-            elif os.getenv("READINESS_OK") != "1":
-                guard_reason = "live-readiness-not-ok"
-            if guard_reason is not None:
-                LOGGER.warning(
-                    "smart_router.live_guard_blocked",
-                    extra={
-                        "event": "smart_router_live_guard_blocked",
-                        "component": "smart_router",
-                        "details": {
-                            "client_order_id": client_order_id,
-                            "profile": profile.name,
-                            "reason": guard_reason,
+        try:
+            if SafeMode.is_active():
+                metrics_reason = "safe-mode"
+                return {"ok": False, "reason": "safe-mode"}
+            profile = get_profile()
+            guard_reason = None
+            if is_live(profile):
+                if os.getenv("LIVE_CONFIRM") != "I_UNDERSTAND":
+                    guard_reason = "live-confirm-missing"
+                elif os.getenv("READINESS_OK") != "1":
+                    guard_reason = "live-readiness-not-ok"
+                if guard_reason is not None:
+                    LOGGER.warning(
+                        "smart_router.live_guard_blocked",
+                        extra={
+                            "event": "smart_router_live_guard_blocked",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "profile": profile.name,
+                                "reason": guard_reason,
+                            },
                         },
-                    },
+                    )
+                    metrics_reason = "live-guard"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": guard_reason,
+                        "reason": guard_reason,
+                        "profile": profile.name,
+                    }
+            if self._risk_governor is not None:
+                price_for_risk = Decimal("0") if price is None else Decimal(str(price))
+                qty_for_risk = Decimal(str(qty))
+                ok, reason = self._risk_governor.allow_order(
+                    venue,
+                    symbol,
+                    strategy,
+                    price_for_risk,
+                    qty_for_risk,
                 )
-                return {
-                    "client_order_id": client_order_id,
-                    "status": guard_reason,
-                    "reason": guard_reason,
-                    "profile": profile.name,
-                }
-        if self._risk_governor is not None:
-            price_for_risk = Decimal("0") if price is None else Decimal(str(price))
-            qty_for_risk = Decimal(str(qty))
-            ok, reason = self._risk_governor.allow_order(
-                venue,
-                symbol,
-                strategy,
-                price_for_risk,
-                qty_for_risk,
-            )
-            if not ok:
+                if not ok:
+                    LOGGER.warning(
+                        "smart_router.risk_blocked",
+                        extra={
+                            "event": "smart_router_risk_blocked",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "venue": venue,
+                                "symbol": symbol,
+                                "strategy": strategy,
+                                "reason": reason,
+                            },
+                        },
+                    )
+                    metrics_reason = "risk"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": f"risk-blocked:{reason}",
+                        "reason": reason,
+                    }
+
+            cooldown_key = self._cooldown_key(venue, symbol, strategy)
+            if self._cooldown_enabled:
+                remaining = self._cooldown_registry.remaining(cooldown_key)
+                if remaining > 0.0:
+                    reason_hint = self._cooldown_registry.last_reason(cooldown_key) or "cooldown"
+                    LOGGER.warning(
+                        "cooldown-block: key=%s remain=%.2fs reason=%s",
+                        cooldown_key,
+                        remaining,
+                        reason_hint,
+                    )
+                    self._idempo.expire(client_order_id)
+                    metrics_reason = "cooldown"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": "cooldown",
+                        "error": "router cooldown",
+                        "reason": reason_hint,
+                        "cooldown_remaining": remaining,
+                    }
+
+            if ff.md_watchdog_on():
+                sample_ms = watchdog.staleness_ms(venue, symbol)
+                p95_ms = watchdog.get_p95(venue)
+                limit_ms = watchdog.stale_p95_limit_ms()
+                cooldown_active = watchdog.cooldown_active(venue)
+                gate_reason = None
+                if p95_ms > limit_ms:
+                    watchdog.activate_cooldown(venue)
+                    cooldown_active = True
+                    gate_reason = "md_stale_p95"
+                elif cooldown_active:
+                    gate_reason = "md_stale_cooldown"
+                if gate_reason is not None:
+                    LOGGER.warning(
+                        "smart_router.md_stale_gate_blocked",
+                        extra={
+                            "event": "smart_router_md_stale_gate_blocked",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "venue": venue,
+                                "symbol": symbol,
+                                "strategy": strategy,
+                                "p95_ms": p95_ms,
+                                "limit_ms": limit_ms,
+                                "cooldown_active": cooldown_active,
+                                "sample_ms": sample_ms,
+                            },
+                        },
+                    )
+                    self._idempo.expire(client_order_id)
+                    metrics_reason = "stale-p95"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": "marketdata_stale",
+                        "error": "market data stale",
+                        "reason": "marketdata_stale",
+                        "gate_reason": gate_reason,
+                    }
+
+            if not self._idempo.should_send(client_order_id):
+                tracked = self._order_tracker.get(client_order_id)
+                completed = (
+                    None if tracked is not None else self._completed_orders.get(client_order_id)
+                )
                 LOGGER.warning(
-                    "smart_router.risk_blocked",
+                    "smart_router.idempotent_skip",
                     extra={
-                        "event": "smart_router_risk_blocked",
+                        "event": "smart_router_idempotent_skip",
                         "component": "smart_router",
                         "details": {
                             "client_order_id": client_order_id,
                             "venue": venue,
                             "symbol": symbol,
                             "strategy": strategy,
-                            "reason": reason,
                         },
                     },
                 )
-                return {
+                response: Dict[str, object] = {
                     "client_order_id": client_order_id,
-                    "status": f"risk-blocked:{reason}",
-                    "reason": reason,
+                    "status": "idempotent_skip",
                 }
+                if tracked is not None:
+                    response["state"] = tracked.state
+                    response["filled_qty"] = float(tracked.filled)
+                    response["qty"] = float(tracked.qty)
+                elif completed is not None:
+                    snapshot, _ = completed
+                    response.update(
+                        {
+                            "state": snapshot["state"],
+                            "filled_qty": snapshot["filled_qty"],
+                            "qty": snapshot["qty"],
+                        }
+                    )
+                metrics_reason = "dupe-intent"
+                return response
 
-        cooldown_key = self._cooldown_key(venue, symbol, strategy)
-        if self._cooldown_enabled:
-            remaining = self._cooldown_registry.remaining(cooldown_key)
-            if remaining > 0.0:
-                reason_hint = self._cooldown_registry.last_reason(cooldown_key) or "cooldown"
-                LOGGER.warning(
-                    "cooldown-block: key=%s remain=%.2fs reason=%s",
-                    cooldown_key,
-                    remaining,
-                    reason_hint,
-                )
-                self._idempo.expire(client_order_id)
-                return {
-                    "client_order_id": client_order_id,
-                    "status": "cooldown",
-                    "error": "router cooldown",
-                    "reason": reason_hint,
-                    "cooldown_remaining": remaining,
-                }
+            side_lower = str(side or "").strip().lower()
+            price_value = float(price) if price is not None else None
+            if ff.pretrade_strict_on():
+                try:
+                    meta = self._load_symbol_meta(venue, symbol)
+                    price_dec = as_dec(price, field="price", allow_none=True)
+                    qty_dec = as_dec(qty, field="qty")
+                    q_price, q_qty = quantize_order(side_lower, price_dec, qty_dec, meta)
+                    validate_pretrade(side_lower, q_price, q_qty, meta)
+                except PretradeRejection as exc:
+                    LOGGER.warning(
+                        "smart_router.pretrade_rejected",
+                        extra={
+                            "event": "smart_router_pretrade_rejected",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "venue": venue,
+                                "symbol": symbol,
+                                "strategy": strategy,
+                                "side": side_lower,
+                                "reason": exc.reason,
+                            },
+                        },
+                    )
+                    if exc.reason in self._cooldown_reason_map:
+                        self._apply_cooldown(
+                            venue=venue,
+                            symbol=symbol,
+                            strategy=strategy,
+                            reason=exc.reason,
+                        )
+                    self._idempo.expire(client_order_id)
+                    metrics_reason = "pretrade"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": "pretrade_rejected",
+                        "error": "pretrade rejected",
+                        "reason": exc.reason,
+                    }
+                qty_value = float(q_qty)
+                price_value = float(q_price) if q_price is not None else price_value
+            else:
+                qty_value = max(float(qty), 0.0)
 
-        if ff.md_watchdog_on():
-            sample_ms = watchdog.staleness_ms(venue, symbol)
-            p95_ms = watchdog.get_p95(venue)
-            limit_ms = watchdog.stale_p95_limit_ms()
-            cooldown_active = watchdog.cooldown_active(venue)
-            gate_reason = None
-            if p95_ms > limit_ms:
-                watchdog.activate_cooldown(venue)
-                cooldown_active = True
-                gate_reason = "md_stale_p95"
-            elif cooldown_active:
-                gate_reason = "md_stale_cooldown"
-            if gate_reason is not None:
+            if ff.md_watchdog_on() and watchdog.is_stale(venue, symbol):
                 LOGGER.warning(
-                    "smart_router.md_stale_gate_blocked",
+                    "marketdata-stale: %s/%s",
+                    venue,
+                    symbol,
                     extra={
-                        "event": "smart_router_md_stale_gate_blocked",
+                        "event": "smart_router_marketdata_stale",
                         "component": "smart_router",
                         "details": {
                             "client_order_id": client_order_id,
                             "venue": venue,
                             "symbol": symbol,
                             "strategy": strategy,
-                            "p95_ms": p95_ms,
-                            "limit_ms": limit_ms,
-                            "cooldown_active": cooldown_active,
-                            "sample_ms": sample_ms,
                         },
                     },
                 )
                 self._idempo.expire(client_order_id)
+                metrics_reason = "stale-p95"
                 return {
                     "client_order_id": client_order_id,
                     "status": "marketdata_stale",
                     "error": "market data stale",
                     "reason": "marketdata_stale",
-                    "gate_reason": gate_reason,
                 }
 
-        if not self._idempo.should_send(client_order_id):
-            tracked = self._order_tracker.get(client_order_id)
-            completed = None if tracked is not None else self._completed_orders.get(client_order_id)
-            LOGGER.warning(
-                "smart_router.idempotent_skip",
-                extra={
-                    "event": "smart_router_idempotent_skip",
-                    "component": "smart_router",
-                    "details": {
-                        "client_order_id": client_order_id,
-                        "venue": venue,
-                        "symbol": symbol,
-                        "strategy": strategy,
-                    },
-                },
-            )
-            response: Dict[str, object] = {
-                "client_order_id": client_order_id,
-                "status": "idempotent_skip",
+            intent_payload = {
+                "venue": venue,
+                "symbol": symbol,
+                "side": side,
+                "price": price_value,
+                "qty": qty_value,
+                "strategy": strategy,
+                "client_tag": None,
+                "parent_id": None,
             }
-            if tracked is not None:
-                response["state"] = tracked.state
-                response["filled_qty"] = float(tracked.filled)
-                response["qty"] = float(tracked.qty)
-            elif completed is not None:
-                snapshot, _ = completed
-                response.update(
-                    {
-                        "state": snapshot["state"],
-                        "filled_qty": snapshot["filled_qty"],
-                        "qty": snapshot["qty"],
+            intent_key = generate_key(intent_payload)
+            if self._intent_window.is_duplicate(intent_key):
+                LOGGER.warning("dupe-intent key=%s", intent_key)
+                self._log_intent_window_stats("duplicate", key=intent_key)
+                self._run_intent_window_cleanup()
+                if self._outbox_enabled and self._outbox is not None:
+                    LOGGER.info("duplicate-intent-skip %s", intent_key)
+                    self._outbox_cleanup()
+                    metrics_reason = "dupe-intent"
+                    return {
+                        "client_order_id": client_order_id,
+                        "status": "duplicate_intent",
+                        "reason": "dupe-intent",
                     }
-                )
-            return response
-
-        side_lower = str(side or "").strip().lower()
-        price_value = float(price) if price is not None else None
-        if ff.pretrade_strict_on():
-            try:
-                meta = self._load_symbol_meta(venue, symbol)
-                price_dec = as_dec(price, field="price", allow_none=True)
-                qty_dec = as_dec(qty, field="qty")
-                q_price, q_qty = quantize_order(side_lower, price_dec, qty_dec, meta)
-                validate_pretrade(side_lower, q_price, q_qty, meta)
-            except PretradeRejection as exc:
-                LOGGER.warning(
-                    "smart_router.pretrade_rejected",
-                    extra={
-                        "event": "smart_router_pretrade_rejected",
-                        "component": "smart_router",
-                        "details": {
-                            "client_order_id": client_order_id,
-                            "venue": venue,
-                            "symbol": symbol,
-                            "strategy": strategy,
-                            "side": side_lower,
-                            "reason": exc.reason,
-                        },
-                    },
-                )
-                if exc.reason in self._cooldown_reason_map:
-                    self._apply_cooldown(
-                        venue=venue,
-                        symbol=symbol,
-                        strategy=strategy,
-                        reason=exc.reason,
-                    )
-                self._idempo.expire(client_order_id)
+                metrics_reason = "dupe-intent"
                 return {
                     "client_order_id": client_order_id,
                     "status": "pretrade_rejected",
                     "error": "pretrade rejected",
-                    "reason": exc.reason,
-                }
-            qty_value = float(q_qty)
-            price_value = float(q_price) if q_price is not None else price_value
-        else:
-            qty_value = max(float(qty), 0.0)
-
-        if ff.md_watchdog_on() and watchdog.is_stale(venue, symbol):
-            LOGGER.warning(
-                "marketdata-stale: %s/%s",
-                venue,
-                symbol,
-                extra={
-                    "event": "smart_router_marketdata_stale",
-                    "component": "smart_router",
-                    "details": {
-                        "client_order_id": client_order_id,
-                        "venue": venue,
-                        "symbol": symbol,
-                        "strategy": strategy,
-                    },
-                },
-            )
-            self._idempo.expire(client_order_id)
-            return {
-                "client_order_id": client_order_id,
-                "status": "marketdata_stale",
-                "error": "market data stale",
-                "reason": "marketdata_stale",
-            }
-
-        intent_payload = {
-            "venue": venue,
-            "symbol": symbol,
-            "side": side,
-            "price": price_value,
-            "qty": qty_value,
-            "strategy": strategy,
-            "client_tag": None,
-            "parent_id": None,
-        }
-        intent_key = generate_key(intent_payload)
-        if self._intent_window.is_duplicate(intent_key):
-            LOGGER.warning("dupe-intent key=%s", intent_key)
-            self._log_intent_window_stats("duplicate", key=intent_key)
-            self._run_intent_window_cleanup()
-            if self._outbox_enabled and self._outbox is not None:
-                LOGGER.info("duplicate-intent-skip %s", intent_key)
-                self._outbox_cleanup()
-                return {
-                    "client_order_id": client_order_id,
-                    "status": "duplicate_intent",
                     "reason": "dupe-intent",
                 }
-            return {
-                "client_order_id": client_order_id,
-                "status": "pretrade_rejected",
-                "error": "pretrade rejected",
-                "reason": "dupe-intent",
-            }
 
-        if self._outbox_enabled and self._outbox is not None:
-            if not self._outbox.should_send(intent_key):
-                LOGGER.info("duplicate-intent-skip %s", intent_key)
-                self._outbox_cleanup()
-                self._run_intent_window_cleanup()
-                return {
-                    "client_order_id": client_order_id,
-                    "status": "duplicate_intent",
-                    "reason": "duplicate_intent",
-                }
-            self._outbox_keys[client_order_id] = intent_key
-
-        self._intent_window.touch(intent_key)
-        self._log_intent_window_stats("touch", key=intent_key)
-        self._intent_keys[client_order_id] = intent_key
-
-        self._completed_orders.pop(client_order_id, None)
-        self._order_strategies[client_order_id] = strategy
-        existing_tracked = self._order_tracker.get(client_order_id)
-        qty_decimal = Decimal(str(qty_value))
-        register_ts = float(ts_ns) / NANOS_IN_SECOND
-        self._order_tracker.register_order(
-            client_order_id,
-            key=intent_key or "",
-            venue=venue,
-            symbol=symbol,
-            side=side,
-            qty=qty_decimal,
-            now_ns=ts_ns,
-            ts=register_ts,
-        )
-        try:
-            state = self._order_tracker.apply_event(
-                client_order_id,
-                "submit",
-                None,
-                ts_ns,
-            )
-        except ValueError as exc:  # pragma: no cover - defensive
-            LOGGER.error(
-                "smart_router.invalid_state_transition",
-                extra={
-                    "event": "smart_router_invalid_state_transition",
-                    "component": "smart_router",
-                    "details": {
+            if self._outbox_enabled and self._outbox is not None:
+                if not self._outbox.should_send(intent_key):
+                    LOGGER.info("duplicate-intent-skip %s", intent_key)
+                    self._outbox_cleanup()
+                    self._run_intent_window_cleanup()
+                    metrics_reason = "dupe-intent"
+                    return {
                         "client_order_id": client_order_id,
-                        "current_state": OrderState.NEW.value,
-                        "event": "submit",
-                    },
-                },
-                exc_info=exc,
+                        "status": "duplicate_intent",
+                        "reason": "duplicate_intent",
+                    }
+                self._outbox_keys[client_order_id] = intent_key
+
+            self._intent_window.touch(intent_key)
+            self._log_intent_window_stats("touch", key=intent_key)
+            self._intent_keys[client_order_id] = intent_key
+
+            self._completed_orders.pop(client_order_id, None)
+            self._order_strategies[client_order_id] = strategy
+            existing_tracked = self._order_tracker.get(client_order_id)
+            qty_decimal = Decimal(str(qty_value))
+            register_ts = float(ts_ns) / NANOS_IN_SECOND
+            self._order_tracker.register_order(
+                client_order_id,
+                key=intent_key or "",
+                venue=venue,
+                symbol=symbol,
+                side=side,
+                qty=qty_decimal,
+                now_ns=ts_ns,
+                ts=register_ts,
             )
-            self._idempo.expire(client_order_id)
-            self._order_strategies.pop(client_order_id, None)
-            raise
+            try:
+                state = self._order_tracker.apply_event(
+                    client_order_id,
+                    "submit",
+                    None,
+                    ts_ns,
+                )
+            except ValueError as exc:  # pragma: no cover - defensive
+                LOGGER.error(
+                    "smart_router.invalid_state_transition",
+                    extra={
+                        "event": "smart_router_invalid_state_transition",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "current_state": OrderState.NEW.value,
+                            "event": "submit",
+                        },
+                    },
+                    exc_info=exc,
+                )
+                self._idempo.expire(client_order_id)
+                self._order_strategies.pop(client_order_id, None)
+                raise
 
-        self._last_events[client_order_id] = "submit"
+            self._last_events[client_order_id] = "submit"
 
-        if existing_tracked is None:
-            self._tracker_stats["seen"] += 1
+            if existing_tracked is None:
+                self._tracker_stats["seen"] += 1
 
-        self._run_tracker_cleanup(register_ts)
-        self._outbox_cleanup()
-        self._run_intent_window_cleanup(register_ts)
+            self._run_tracker_cleanup(register_ts)
+            self._outbox_cleanup()
+            self._run_intent_window_cleanup(register_ts)
 
-        tracked = self._order_tracker.get(client_order_id)
-        if self._timeouts is not None:
-            self._timeouts.on_submit(client_order_id)
-            self._run_order_timeouts()
-        response: Dict[str, object] = {
-            "client_order_id": client_order_id,
-            "state": state,
-            "qty": float(tracked.qty) if tracked is not None else qty_value,
-        }
-        if price_value is not None:
-            response["price"] = price_value
-        return response
+            tracked = self._order_tracker.get(client_order_id)
+            if self._timeouts is not None:
+                self._timeouts.on_submit(client_order_id)
+                self._run_order_timeouts()
+            response: Dict[str, object] = {
+                "client_order_id": client_order_id,
+                "state": state,
+                "qty": float(tracked.qty) if tracked is not None else qty_value,
+            }
+            if price_value is not None:
+                response["price"] = price_value
+            metrics_submitted = True
+            return response
+        finally:
+            elapsed_ms = max((time.perf_counter() - metrics_started) * 1000.0, 0.0)
+            _ROUTER_LATENCY_HISTOGRAM.observe(elapsed_ms)
+            if metrics_reason is not None:
+                _ROUTER_BLOCKED_TOTAL.labels(reason=metrics_reason).inc()
+            if metrics_submitted:
+                _ROUTER_SUBMITTED_TOTAL.inc()
+            metrics_write(_metrics_output_path())
 
     def process_order_event(
         self,
@@ -1210,6 +1257,15 @@ class SmartRouter:
                     self._order_strategies.pop(coid, None)
 
         self._run_order_timeouts(now_ts)
+        metrics_updated = False
+        if event_key == "filled":
+            _ROUTER_FILLED_TOTAL.inc()
+            metrics_updated = True
+        elif event_key in {"reject", "expire"}:
+            _ROUTER_REJECTED_TOTAL.inc()
+            metrics_updated = True
+        if metrics_updated:
+            metrics_write(_metrics_output_path())
         return new_state
 
     def get_order_snapshot(self, client_order_id: str) -> Dict[str, object]:

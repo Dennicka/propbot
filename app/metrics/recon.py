@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Mapping
 
-from prometheus_client import Counter, Gauge
+from .core import (
+    DEFAULT_METRICS_PATH,
+    counter,
+    gauge,
+    write_metrics,
+)
 
 __all__ = [
     "RECON_DIFF_NOTIONAL_GAUGE",
@@ -21,55 +25,44 @@ __all__ = [
     "export_recon_metrics",
 ]
 
-RECON_ISSUES_TOTAL = Counter(
+RECON_ISSUES_TOTAL = counter(
     "propbot_recon_issues_total",
-    "Count of reconciliation issues grouped by kind and severity.",
-    ("kind", "code", "severity"),
+    labels=("kind", "code", "severity"),
 )
 
-RECON_DRIFT_TOTAL = Counter(
+RECON_DRIFT_TOTAL = counter(
     "propbot_recon_drift_total",
-    "Count of reconciliation drifts by kind and severity.",
-    ("kind", "severity"),
+    labels=("kind", "severity"),
 )
 
-RECON_LAST_RUN_TS = Gauge(
-    "propbot_recon_last_run_ts",
-    "Unix timestamp of the last completed reconciliation run.",
-)
+RECON_LAST_RUN_TS = gauge("propbot_recon_last_run_ts")
 
-RECON_LAST_STATUS = Gauge(
+RECON_LAST_STATUS = gauge(
     "propbot_recon_last_status",
-    "Latest reconciliation status classification.",
-    ("status",),
+    labels=("status",),
 )
 
-RECON_LAST_SEVERITY = Gauge(
-    "propbot_recon_last_severity",
-    "Numeric encoding of the last reconciliation severity (0=OK,1=WARN,2=CRITICAL).",
-)
+RECON_LAST_SEVERITY = gauge("propbot_recon_last_severity")
 
-RECON_DIFF_NOTIONAL_GAUGE = Gauge(
+RECON_DIFF_NOTIONAL_GAUGE = gauge(
     "propbot_recon_diff_notional_usd",
-    "Absolute reconciliation delta in USD (or native units if price unavailable).",
-    ("venue", "symbol", "status"),
+    labels=("venue", "symbol", "status"),
 )
 
-RECON_STATUS_GAUGE = Gauge(
+RECON_STATUS_GAUGE = gauge(
     "propbot_recon_status",
-    "Current reconciliation state per venue.",
-    ("venue", "status"),
+    labels=("venue", "status"),
 )
 
-RECON_AUTO_HOLD_COUNTER = Counter(
-    "propbot_recon_auto_hold_triggered_total",
-    "Number of times reconciliation triggered an automatic HOLD.",
-)
+RECON_AUTO_HOLD_COUNTER = counter("propbot_recon_auto_hold_triggered_total")
 
-PNL_LEDGER_REALIZED_TODAY = Gauge(
-    "pnl_ledger_realized_today_usd",
-    "Realised PnL recorded by the ledger for the current UTC day.",
-)
+PNL_LEDGER_REALIZED_TODAY = gauge("pnl_ledger_realized_today_usd")
+
+ORDERS_OPEN_GAUGE = gauge("propbot_orders_open", labels=("venue",))
+ORDERS_FINAL_GAUGE = gauge("propbot_orders_final_total")
+ANOMALIES_GAUGE = gauge("propbot_anomaly_total", labels=("type",))
+MD_STALENESS_GAUGE = gauge("propbot_md_staleness_p95_ms", labels=("venue",))
+RECON_REPORTS_TOTAL = counter("propbot_recon_reports_total")
 
 for venue in ("unknown",):  # pre-warm default labels for exporters
     for status in ("OK", "WARN", "CRITICAL"):
@@ -91,25 +84,23 @@ def export_recon_metrics(
     md_staleness_p95_ms: Mapping[str, int],
     path: str | os.PathLike[str] | None = None,
 ) -> None:
-    """Export reconciliation integrity metrics in Prometheus text format."""
+    """Export reconciliation integrity metrics via the shared registry."""
 
-    target = Path(path or "data/metrics/metrics.prom")
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    lines: list[str] = []
-
+    total_open = 0
     for venue, value in sorted(orders_open.items()):
-        lines.append(f'propbot_orders_open{{venue="{venue}"}} {int(value)}')
+        total_open += int(value)
+        ORDERS_OPEN_GAUGE.labels(venue=str(venue)).set(float(value))
+    ORDERS_OPEN_GAUGE.labels(venue="all").set(float(total_open))
 
-    lines.append(f"propbot_orders_final_total {int(orders_final)}")
+    ORDERS_FINAL_GAUGE.set(float(orders_final))
 
-    invalid_transition = int(anomalies.get("invalid_transition", 0))
-    lines.append(f'propbot_anomaly_total{{type="invalid_transition"}} {invalid_transition}')
+    for kind, value in sorted(anomalies.items()):
+        ANOMALIES_GAUGE.labels(type=str(kind)).set(float(value))
 
     for venue, value in sorted(md_staleness_p95_ms.items()):
-        lines.append(f'propbot_md_staleness_p95_ms{{venue="{venue}"}} {int(value)}')
+        MD_STALENESS_GAUGE.labels(venue=str(venue)).set(float(value))
 
-    payload = "\n".join(lines) + "\n"
-    tmp_path = target.with_suffix(target.suffix + ".tmp")
-    tmp_path.write_text(payload, encoding="utf-8")
-    os.replace(tmp_path, target)
+    RECON_REPORTS_TOTAL.inc()
+
+    target_path = path or os.getenv("METRICS_PATH", DEFAULT_METRICS_PATH)
+    write_metrics(target_path)
