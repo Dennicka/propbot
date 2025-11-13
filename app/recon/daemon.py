@@ -40,6 +40,7 @@ from .core import _ledger_rows_from_pnl, Reconciler as StalenessReconciler
 from .reconciler import Reconciler
 
 LOGGER = logging.getLogger(__name__)
+_DEFAULT_GC_TTL_SEC = 300
 
 
 _LEDGER_ERRORS: tuple[type[Exception], ...] = (
@@ -994,6 +995,7 @@ class OrderReconDaemon:
                 else:
                     await self._store_report(report)
                     self._log_report(report)
+                    self._run_gc(report.ts)
                 elapsed = time.perf_counter() - started
                 delay = max(interval - elapsed, 0.0)
                 try:
@@ -1030,6 +1032,22 @@ class OrderReconDaemon:
                     "details": details_payload,
                 },
             )
+
+    def _run_gc(self, now_ts: float) -> None:
+        ttl_sec = int(getattr(self._config, "gc_ttl_sec", _DEFAULT_GC_TTL_SEC))
+        if ttl_sec <= 0:
+            return
+        router = getattr(self._reconciler, "_router", None)
+        if router is None:
+            return
+        purge_fn = getattr(router, "purge_terminal_orders", None)
+        if purge_fn is None:
+            return
+        try:
+            removed = purge_fn(ttl_sec=ttl_sec, now_ts=now_ts)
+        except TypeError:
+            removed = purge_fn(ttl_sec, now_ts)
+        LOGGER.info("recon.gc_removed=%d", removed, extra={"removed": removed})
 
 
 __all__ = [

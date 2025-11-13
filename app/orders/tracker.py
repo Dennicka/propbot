@@ -6,7 +6,7 @@ import logging
 from collections import Counter as _Counter
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Tuple
 
 from prometheus_client import Counter, Gauge
 
@@ -17,6 +17,16 @@ LOGGER = logging.getLogger(__name__)
 TRACKER_TTL_SEC = 3600
 TRACKER_MAX_ACTIVE = 5000
 _NANOS_IN_SECOND = 1_000_000_000
+
+
+FINAL_STATES: frozenset[OrderState] = frozenset(
+    {
+        OrderState.FILLED,
+        OrderState.CANCELED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+    }
+)
 
 
 class _TrackerMetrics:
@@ -99,6 +109,23 @@ class TrackedOrder:
     state: OrderState = OrderState.NEW
     created_ns: int = 0
     updated_ns: int = 0
+    updated_ts: float = 0.0
+
+
+@dataclass(slots=True, frozen=True)
+class TrackedOrderSnapshot:
+    """Immutable view of a tracked order."""
+
+    coid: str
+    venue: str
+    symbol: str
+    side: str
+    qty: Decimal
+    filled: Decimal
+    state: OrderState
+    created_ns: int
+    updated_ns: int
+    updated_ts: float
 
 
 class OrderTracker:
@@ -148,6 +175,7 @@ class OrderTracker:
                 },
             )
             return
+        now_ts = float(now_ns) / _NANOS_IN_SECOND
         tracked = TrackedOrder(
             coid=coid,
             venue=venue,
@@ -156,6 +184,7 @@ class OrderTracker:
             qty=qty_value,
             created_ns=now_ns,
             updated_ns=now_ns,
+            updated_ts=now_ts,
         )
         self._orders[coid] = tracked
         self._enforce_capacity()
@@ -206,16 +235,32 @@ class OrderTracker:
             tracked.filled = tracked.qty
         tracked.state = new_state
         tracked.updated_ns = now_ns
+        tracked.updated_ts = float(now_ns) / _NANOS_IN_SECOND
         return tracked.state
 
     @staticmethod
     def is_terminal(state: OrderState) -> bool:
-        return state in {
-            OrderState.FILLED,
-            OrderState.CANCELED,
-            OrderState.REJECTED,
-            OrderState.EXPIRED,
-        }
+        return state in FINAL_STATES
+
+    def mark_terminal(self, coid: str, state: OrderState, ts: float) -> bool:
+        """Mark an order as terminal without removing it from the tracker."""
+
+        tracked = self._orders.get(coid)
+        if tracked is None:
+            return False
+        if not self.is_terminal(state):
+            raise ValueError(f"state {state!s} is not terminal")
+        previous_state = tracked.state
+        tracked.state = state
+        tracked.updated_ts = max(float(ts), float(tracked.created_ns) / _NANOS_IN_SECOND)
+        updated_ns = int(max(tracked.updated_ts, 0.0) * _NANOS_IN_SECOND)
+        if updated_ns >= tracked.created_ns:
+            tracked.updated_ns = updated_ns
+        if state is OrderState.FILLED:
+            tracked.filled = tracked.qty
+        if not self.is_terminal(previous_state):
+            _TRACKER_METRICS.observe_finalized(state)
+        return True
 
     def finalize(self, coid: str, state: OrderState) -> bool:
         """Remove a finalized order and emit telemetry.
@@ -271,6 +316,45 @@ class OrderTracker:
             _TRACKER_METRICS.observe_tracked(len(self._orders))
         return removed
 
+    def purge_terminated_older_than(self, ttl_sec: int, now: float) -> int:
+        """Remove terminal orders older than the provided TTL."""
+
+        if ttl_sec <= 0 or not self._orders:
+            return 0
+        removed = 0
+        reference = float(now)
+        ttl = float(ttl_sec)
+        for coid, tracked in tuple(self._orders.items()):
+            if not self.is_terminal(tracked.state):
+                continue
+            last_update = tracked.updated_ts or float(tracked.updated_ns) / _NANOS_IN_SECOND
+            if reference - last_update <= ttl:
+                continue
+            self._orders.pop(coid, None)
+            removed += 1
+        if removed:
+            _TRACKER_METRICS.observe_tracked(len(self._orders))
+        return removed
+
+    def snapshot(self) -> Tuple[TrackedOrderSnapshot, ...]:
+        """Return an immutable snapshot of the current tracked orders."""
+
+        return tuple(
+            TrackedOrderSnapshot(
+                coid=item.coid,
+                venue=item.venue,
+                symbol=item.symbol,
+                side=item.side,
+                qty=item.qty,
+                filled=item.filled,
+                state=item.state,
+                created_ns=item.created_ns,
+                updated_ns=item.updated_ns,
+                updated_ts=item.updated_ts,
+            )
+            for item in self._orders.values()
+        )
+
     def _enforce_capacity(self) -> None:
         if len(self._orders) <= self._max_active:
             return
@@ -311,6 +395,7 @@ def reset_tracker_metrics() -> None:
 __all__ = [
     "OrderTracker",
     "TrackedOrder",
+    "TrackedOrderSnapshot",
     "TRACKER_TTL_SEC",
     "TRACKER_MAX_ACTIVE",
     "reset_tracker_metrics",
