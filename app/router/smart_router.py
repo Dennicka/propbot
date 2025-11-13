@@ -30,6 +30,7 @@ from ..services.runtime import (
     get_profile,
     get_state,
 )
+from ..services.safe_mode import SafeMode
 from ..tca.cost_model import (
     FeeInfo,
     FeeTable,
@@ -404,6 +405,8 @@ class SmartRouter:
         """Register an outbound order intent and enforce idempotency."""
 
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
+        if SafeMode.is_active():
+            return {"ok": False, "reason": "safe-mode"}
         profile = get_profile()
         guard_reason = None
         if is_live(profile):
