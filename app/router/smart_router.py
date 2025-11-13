@@ -16,7 +16,13 @@ import app.config.feature_flags as ff
 from app.market.watchdog import watchdog
 
 from ..golden.logger import get_golden_logger
-from ..orders.idempotency import IdempoStore, generate_key, make_coid
+from ..orders.idempotency import (
+    IdempoStore,
+    IntentWindow,
+    generate_key,
+    make_coid,
+    stats as intent_stats,
+)
 from ..orders.quantization import as_dec, quantize_order
 from ..orders.outbox import Outbox
 from ..audit.counters import AuditCounters
@@ -52,6 +58,17 @@ from ..risk.limits import RiskGovernor, load_config_from_env
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        LOGGER.warning("invalid-int-env %s=%r", name, raw)
+        return default
 
 
 def _maybe_float(value: object) -> float | None:
@@ -289,6 +306,12 @@ class SmartRouter:
         self._latency_weight = _latency_weight_bps_per_ms()
         self._liquidity_snapshot = self._load_liquidity_snapshot()
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
+        window_default_ttl = 3 if self._config is not None else 0
+        window_ttl = max(0, _env_int("IDEMPOTENCY_WINDOW_SEC", window_default_ttl))
+        window_max = max(0, _env_int("IDEMPOTENCY_MAX_KEYS", 100_000))
+        self._intent_window = IntentWindow(ttl_seconds=window_ttl, max_items=window_max)
+        self._intent_window_ttl = float(window_ttl)
+        self._intent_keys: Dict[str, str] = {}
         tracker_ttl = _order_tracker_ttl()
         tracker_max = _order_tracker_max_items()
         self._order_tracker = OrderTracker(
@@ -500,6 +523,7 @@ class SmartRouter:
         return len(removed_size)
 
     def _discard_tracker_references(self, order_id: str) -> None:
+        self._forget_intent_key(order_id)
         self._order_strategies.pop(order_id, None)
         self._last_events.pop(order_id, None)
         self._completed_orders.pop(order_id, None)
@@ -530,6 +554,28 @@ class SmartRouter:
     def _outbox_cleanup(self) -> None:
         if self._outbox_enabled and self._outbox is not None:
             self._outbox.cleanup()
+
+    def _log_intent_window_stats(self, action: str, *, key: str | None = None) -> None:
+        LOGGER.info(
+            "intent-window.%s key=%s touch=%d dupe=%d removed_ttl=%d removed_size=%d",
+            action,
+            key or "",
+            intent_stats["touch"],
+            intent_stats["dupe"],
+            intent_stats["removed_ttl"],
+            intent_stats["removed_size"],
+        )
+
+    def _run_intent_window_cleanup(self, now: float | None = None) -> None:
+        removed_ttl, removed_size = self._intent_window.cleanup(now)
+        if removed_ttl or removed_size:
+            LOGGER.info("idem.cleanup ttl=%d size=%d", removed_ttl, removed_size)
+            self._log_intent_window_stats("cleanup")
+
+    def _forget_intent_key(self, order_id: str) -> None:
+        intent_key = self._intent_keys.pop(order_id, None)
+        if intent_key:
+            self._intent_window.forget(intent_key)
 
     def register_order(
         self,
@@ -740,28 +786,51 @@ class SmartRouter:
                 "reason": "marketdata_stale",
             }
 
-        intent_key: str | None = None
-        if self._outbox_enabled and self._outbox is not None:
-            intent_payload = {
-                "venue": venue,
-                "symbol": symbol,
-                "side": side,
-                "price": price_value,
-                "qty": qty_value,
-                "strategy": strategy,
-                "client_tag": None,
-                "parent_id": None,
+        intent_payload = {
+            "venue": venue,
+            "symbol": symbol,
+            "side": side,
+            "price": price_value,
+            "qty": qty_value,
+            "strategy": strategy,
+            "client_tag": None,
+            "parent_id": None,
+        }
+        intent_key = generate_key(intent_payload)
+        if self._intent_window.is_duplicate(intent_key):
+            LOGGER.warning("dupe-intent key=%s", intent_key)
+            self._log_intent_window_stats("duplicate", key=intent_key)
+            self._run_intent_window_cleanup()
+            if self._outbox_enabled and self._outbox is not None:
+                LOGGER.info("duplicate-intent-skip %s", intent_key)
+                self._outbox_cleanup()
+                return {
+                    "client_order_id": client_order_id,
+                    "status": "duplicate_intent",
+                    "reason": "dupe-intent",
+                }
+            return {
+                "client_order_id": client_order_id,
+                "status": "pretrade_rejected",
+                "error": "pretrade rejected",
+                "reason": "dupe-intent",
             }
-            intent_key = generate_key(intent_payload)
+
+        if self._outbox_enabled and self._outbox is not None:
             if not self._outbox.should_send(intent_key):
                 LOGGER.info("duplicate-intent-skip %s", intent_key)
                 self._outbox_cleanup()
+                self._run_intent_window_cleanup()
                 return {
                     "client_order_id": client_order_id,
                     "status": "duplicate_intent",
                     "reason": "duplicate_intent",
                 }
             self._outbox_keys[client_order_id] = intent_key
+
+        self._intent_window.touch(intent_key)
+        self._log_intent_window_stats("touch", key=intent_key)
+        self._intent_keys[client_order_id] = intent_key
 
         self._completed_orders.pop(client_order_id, None)
         self._order_strategies[client_order_id] = strategy
@@ -810,6 +879,7 @@ class SmartRouter:
 
         self._run_tracker_cleanup(register_ts)
         self._outbox_cleanup()
+        self._run_intent_window_cleanup(register_ts)
 
         tracked = self._order_tracker.get(client_order_id)
         response: Dict[str, object] = {
@@ -987,6 +1057,7 @@ class SmartRouter:
             snapshot = self._snapshot_from_tracked(updated)
             self._completed_orders[client_order_id] = (snapshot, now_ns)
             self._order_strategies.pop(client_order_id, None)
+            self._forget_intent_key(client_order_id)
             LOGGER.info(
                 "smart_router.order_tracker_terminal_cleanup",
                 extra={
@@ -1022,6 +1093,7 @@ class SmartRouter:
 
         self._run_tracker_cleanup(now_ts)
         self._outbox_cleanup()
+        self._run_intent_window_cleanup(now_ts)
         self._prune_completed(now_ns)
         if self._order_strategies:
             for coid in list(self._order_strategies.keys()):
