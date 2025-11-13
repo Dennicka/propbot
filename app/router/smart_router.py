@@ -16,8 +16,9 @@ import app.config.feature_flags as ff
 from app.market.watchdog import watchdog
 
 from ..golden.logger import get_golden_logger
-from ..orders.idempotency import IdempoStore, make_coid
+from ..orders.idempotency import IdempoStore, generate_key, make_coid
 from ..orders.quantization import as_dec, quantize_order
+from ..orders.outbox import Outbox
 from ..audit.counters import AuditCounters
 from ..orders.state import OrderState, OrderStateError, next_state, validate_transition
 from ..orders.tracker import (
@@ -276,6 +277,9 @@ class SmartRouter:
         self._liquidity_snapshot = self._load_liquidity_snapshot()
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
         self._order_tracker = OrderTracker(max_active=_order_tracker_max_active())
+        self._outbox_enabled = _feature_flag_enabled("FF_IDEMPOTENCY_OUTBOX", False)
+        self._outbox: Outbox | None = Outbox() if self._outbox_enabled else None
+        self._outbox_keys: Dict[str, str] = {}
         self._order_tracker_ttl_sec = _order_tracker_ttl()
         self._tracker_ttl_seconds = tracker_ttl_seconds()
         self._tracker_max_items = tracker_max_items()
@@ -454,6 +458,7 @@ class SmartRouter:
         self._order_strategies.pop(order_id, None)
         self._last_events.pop(order_id, None)
         self._completed_orders.pop(order_id, None)
+        self._outbox_keys.pop(order_id, None)
 
     def _log_tracker_removal(
         self,
@@ -476,6 +481,10 @@ class SmartRouter:
                 "details": details,
             },
         )
+
+    def _outbox_cleanup(self) -> None:
+        if self._outbox_enabled and self._outbox is not None:
+            self._outbox.cleanup()
 
     def register_order(
         self,
@@ -686,6 +695,28 @@ class SmartRouter:
                 "reason": "marketdata_stale",
             }
 
+        if self._outbox_enabled and self._outbox is not None:
+            intent_payload = {
+                "venue": venue,
+                "symbol": symbol,
+                "side": side,
+                "price": price_value,
+                "qty": qty_value,
+                "strategy": strategy,
+                "client_tag": None,
+                "parent_id": None,
+            }
+            intent_key = generate_key(intent_payload)
+            if not self._outbox.should_send(intent_key):
+                LOGGER.info("duplicate-intent-skip %s", intent_key)
+                self._outbox_cleanup()
+                return {
+                    "client_order_id": client_order_id,
+                    "status": "duplicate_intent",
+                    "reason": "duplicate_intent",
+                }
+            self._outbox_keys[client_order_id] = intent_key
+
         self._completed_orders.pop(client_order_id, None)
         self._order_strategies[client_order_id] = strategy
         existing_tracked = self._order_tracker.get(client_order_id)
@@ -731,6 +762,7 @@ class SmartRouter:
         register_ts = float(ts_ns) / NANOS_IN_SECOND
         self.cleanup_tracker_by_ttl(register_ts)
         self.cleanup_tracker_by_size()
+        self._outbox_cleanup()
 
         tracked = self._order_tracker.get(client_order_id)
         response: Dict[str, object] = {
@@ -777,6 +809,7 @@ class SmartRouter:
 
         previous_state = tracked.state
         previous_event = self._last_events.get(client_order_id)
+        outbox_key = self._outbox_keys.get(client_order_id) if self._outbox_enabled else None
         if previous_event == event_key and event_key != "partial_fill":
             self._audit_counters.inc("duplicate_event")
             self._log_audit_anomaly(
@@ -879,6 +912,8 @@ class SmartRouter:
                 risk_governor.on_filled(venue, symbol, strategy, Decimal("0"))
         if event_key == "ack":
             self._idempo.mark_ack(client_order_id)
+            if self._outbox_enabled and self._outbox is not None and outbox_key:
+                self._outbox.mark_acked(outbox_key)
         elif event_key == "partial_fill":
             filled_qty = float(updated.filled) if updated is not None else 0.0
             self._idempo.mark_fill(client_order_id, filled_qty)
@@ -889,6 +924,15 @@ class SmartRouter:
             self._idempo.mark_cancel(client_order_id)
         elif event_key in {"reject", "expire"}:
             self._idempo.expire(client_order_id)
+
+        if (
+            self._outbox_enabled
+            and self._outbox is not None
+            and outbox_key
+            and event_key in {"filled", "canceled", "reject", "expire"}
+        ):
+            self._outbox.mark_terminal(outbox_key)
+            self._outbox_keys.pop(client_order_id, None)
 
         if updated is not None and self._order_tracker.is_terminal(new_state):
             updated.updated_ts = now_ts
@@ -918,6 +962,7 @@ class SmartRouter:
 
         self.cleanup_tracker_by_ttl(now_ts)
         self.cleanup_tracker_by_size()
+        self._outbox_cleanup()
         self._prune_completed(now_ns)
         if self._order_strategies:
             for coid in list(self._order_strategies.keys()):

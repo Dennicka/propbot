@@ -8,6 +8,8 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+from typing import Any, Mapping
 
 from .state import OrderState
 
@@ -16,6 +18,7 @@ LOGGER = logging.getLogger(__name__)
 _PREFIX = "PB"
 _DEFAULT_TTL = 24 * 60 * 60  # 24 hours
 _DEFAULT_MAX_ENTRIES = 2048
+_DECIMAL_QUANT = Decimal("1e-8")
 
 
 @dataclass(slots=True)
@@ -148,4 +151,36 @@ class IdempoStore:
             self._entries.popitem(last=False)
 
 
-__all__ = ["IdempoStore", "make_coid"]
+def generate_key(intent: Mapping[str, Any]) -> str:
+    """Return a stable identifier for an order intent."""
+
+    def _normalise_string(value: Any, *, lower: bool = False) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text.lower() if lower else text
+
+    def _normalise_decimal(value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            dec_value = Decimal(str(value)).quantize(_DECIMAL_QUANT, rounding=ROUND_HALF_EVEN)
+        except (InvalidOperation, ValueError) as exc:  # pragma: no cover - defensive
+            raise ValueError(f"invalid numeric value: {value!r}") from exc
+        return format(dec_value, ".8f")
+
+    fields = (
+        _normalise_string(intent.get("venue")),
+        _normalise_string(intent.get("symbol")),
+        _normalise_string(intent.get("side"), lower=True),
+        _normalise_decimal(intent.get("price")),
+        _normalise_decimal(intent.get("qty")),
+        _normalise_string(intent.get("strategy"), lower=True),
+        _normalise_string(intent.get("client_tag")),
+        _normalise_string(intent.get("parent_id")),
+    )
+    payload = repr(fields).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+__all__ = ["IdempoStore", "make_coid", "generate_key"]
