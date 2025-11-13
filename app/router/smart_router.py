@@ -15,6 +15,7 @@ import httpx
 
 import app.config.feature_flags as ff
 from app.health.aggregator import DEFAULT_REQUIRED_SIGNALS, get_agg
+from app.hedge.policy import HedgeLeg
 from app.market.watchdog import watchdog
 from app.metrics.core import (
     DEFAULT_METRICS_PATH as _DEFAULT_METRICS_PATH,
@@ -520,6 +521,29 @@ class SmartRouter:
             )
             responses.append(response)
         return {"status": "ok", "plan": plan, "responses": responses}
+
+    def submit_hedge_leg(self, leg: HedgeLeg) -> Dict[str, object]:
+        """Submit a single hedge leg using router protections."""
+
+        ts_ns = time.time_ns()
+        response = self.register_order(
+            strategy="auto_hedge",
+            venue=leg.venue,
+            symbol=leg.symbol,
+            side=leg.side,
+            qty=float(leg.qty),
+            price=float(leg.px_limit),
+            ts_ns=ts_ns,
+            nonce=0,
+            sor_intent_key=leg.intent_key,
+        )
+        status_value = str(response.get("status", "")).strip().lower()
+        ok = not status_value or status_value == "ok"
+        if ok:
+            reason = str(response.get("reason", "ok")) or "ok"
+            return {"ok": True, "reason": reason}
+        reason = str(response.get("reason") or status_value or "unknown")
+        return {"ok": False, "reason": reason}
 
     def _load_symbol_meta(self, venue: str, symbol: str) -> Mapping[str, object]:
         cached = provider.get(venue, symbol)
