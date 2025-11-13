@@ -57,6 +57,7 @@ from ..tca.cost_model import (
 from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 from ..risk.limits import RiskGovernor, load_config_from_env
+from .timeouts import DeadlineTracker
 
 LOGGER = logging.getLogger(__name__)
 NANOS_IN_SECOND = 1_000_000_000
@@ -366,6 +367,16 @@ class SmartRouter:
         self._audit_counters = AuditCounters()
         self._last_events: Dict[str, str] = {}
         self._risk_governor: RiskGovernor | None = None
+        self._timeouts_enabled = _feature_flag_enabled("FF_ORDER_TIMEOUTS", False)
+        self._timeouts: DeadlineTracker | None = None
+        self._timeouts_sweeping = False
+        if self._timeouts_enabled:
+            ack_timeout = _env_int("SUBMIT_ACK_TIMEOUT_SEC", 3)
+            fill_timeout = _env_int("FILL_TIMEOUT_SEC", 30)
+            self._timeouts = DeadlineTracker(
+                ack_sec=ack_timeout,
+                fill_sec=fill_timeout,
+            )
         if ff.risk_limits_on():
             try:
                 self._risk_governor = RiskGovernor(load_config_from_env())
@@ -609,6 +620,23 @@ class SmartRouter:
         intent_key = self._intent_keys.pop(order_id, None)
         if intent_key:
             self._intent_window.forget(intent_key)
+
+    def _run_order_timeouts(self, now: float | None = None) -> None:
+        if self._timeouts is None or self._timeouts_sweeping:
+            return
+        self._timeouts_sweeping = True
+        try:
+            due = self._timeouts.due_to_expire(now)
+            for order_id, reason in due.items():
+                LOGGER.warning("order-timeout: %s reason=%s", order_id, reason)
+                try:
+                    self.process_order_event(client_order_id=order_id, event="expired")
+                except KeyError:
+                    LOGGER.debug("order-timeout: unknown-order %s", order_id)
+                finally:
+                    self._timeouts.done(order_id)
+        finally:
+            self._timeouts_sweeping = False
 
     def register_order(
         self,
@@ -942,6 +970,9 @@ class SmartRouter:
         self._run_intent_window_cleanup(register_ts)
 
         tracked = self._order_tracker.get(client_order_id)
+        if self._timeouts is not None:
+            self._timeouts.on_submit(client_order_id)
+            self._run_order_timeouts()
         response: Dict[str, object] = {
             "client_order_id": client_order_id,
             "state": state,
@@ -1075,6 +1106,14 @@ class SmartRouter:
 
         self._last_events[client_order_id] = event_key
 
+        if self._timeouts is not None:
+            if event_key == "ack":
+                self._timeouts.on_ack(client_order_id)
+            elif event_key == "partial_fill":
+                self._timeouts.on_fill_progress(client_order_id)
+            elif event_key == "filled":
+                self._timeouts.done(client_order_id)
+
         updated = self._order_tracker.get(client_order_id)
         risk_governor = self._risk_governor
         strategy = self._order_strategies.get(client_order_id, "")
@@ -1126,6 +1165,8 @@ class SmartRouter:
             self._completed_orders[client_order_id] = (snapshot, now_ns)
             self._order_strategies.pop(client_order_id, None)
             self._forget_intent_key(client_order_id)
+            if self._timeouts is not None:
+                self._timeouts.done(client_order_id)
             LOGGER.info(
                 "smart_router.order_tracker_terminal_cleanup",
                 extra={
@@ -1168,6 +1209,7 @@ class SmartRouter:
                 if self._order_tracker.get(coid) is None and coid not in self._completed_orders:
                     self._order_strategies.pop(coid, None)
 
+        self._run_order_timeouts(now_ts)
         return new_state
 
     def get_order_snapshot(self, client_order_id: str) -> Dict[str, object]:
