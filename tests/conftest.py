@@ -19,6 +19,29 @@ os.environ.setdefault("OPS_APPROVALS_FILE", "/tmp/propbot-tests-approvals.json")
 os.environ.setdefault("DAILY_REPORTS_PATH", "/tmp/propbot-tests-daily.json")
 os.environ.setdefault("CAPITAL_STATE_PATH", "/tmp/propbot-tests-capital.json")
 
+
+@pytest.fixture(autouse=True)
+def enable_feature_flags(monkeypatch):
+    """Ensure critical feature flags are enabled during tests."""
+
+    flags = {
+        "FF_PRETRADE_STRICT": "1",
+        "FF_RISK_LIMITS": "1",
+        "TEST_ONLY_ROUTER_META": "test-venue:BTCUSDT,binance:BTCUSDT",
+    }
+    previous: dict[str, str | None] = {key: os.environ.get(key) for key in flags}
+    for key, value in flags.items():
+        monkeypatch.setenv(key, value)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
+
+
 from app import ledger
 from app.main import app
 from app.runtime import leader_lock
