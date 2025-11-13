@@ -37,7 +37,7 @@ from ..orders.idempotency import (
     stats as intent_stats,
 )
 from ..orders.quantization import as_dec, quantize_order
-from ..orders.outbox import Outbox
+from ..outbox.journal import OutboxJournal
 from ..audit.counters import AuditCounters
 from ..orders.state import OrderState, OrderStateError, next_state, validate_transition
 from ..orders.tracker import (
@@ -80,6 +80,7 @@ _ROUTER_SUBMITTED_TOTAL = metrics_counter("propbot_orders_submitted_total")
 _ROUTER_BLOCKED_TOTAL = metrics_counter("propbot_orders_blocked_total", labels=("reason",))
 _ROUTER_FILLED_TOTAL = metrics_counter("propbot_orders_filled_total")
 _ROUTER_REJECTED_TOTAL = metrics_counter("propbot_orders_rejected_total")
+_OUTBOX_BLOCKS_TOTAL = metrics_counter("propbot_outbox_blocks_total", labels=("reason",))
 _ROUTER_LATENCY_HISTOGRAM = metrics_histogram("propbot_router_latency_ms")
 _SOR_EVALUATIONS_TOTAL = metrics_counter("propbot_sor_evaluations_total")
 _SOR_PLANS_TOTAL = metrics_counter("propbot_sor_plans_total")
@@ -399,7 +400,21 @@ class SmartRouter:
         self._cooldown_enabled = _feature_flag_enabled("FF_ROUTER_COOLDOWN", False)
         self._cooldown_registry = CooldownRegistry(default_ttl=int(self._cooldown_default_ttl))
         self._outbox_enabled = _feature_flag_enabled("FF_IDEMPOTENCY_OUTBOX", False)
-        self._outbox: Outbox | None = Outbox() if self._outbox_enabled else None
+        self._outbox_dupe_window_sec = max(0, _env_int("OUTBOX_DUPE_WINDOW_SEC", 10))
+        self._outbox_retry_sec = max(0, _env_int("OUTBOX_RETRY_SEC", 5))
+        self._outbox: OutboxJournal | None = None
+        if self._outbox_enabled:
+            outbox_path = os.getenv("OUTBOX_PATH", "data/journal/outbox.jsonl")
+            rotate_mb = max(0, _env_int("OUTBOX_ROTATE_MB", 8))
+            flush_every = max(1, _env_int("OUTBOX_FLUSH_EVERY", 1))
+            max_inmem = max(0, _env_int("OUTBOX_MAX_INMEM", 200_000))
+            self._outbox = OutboxJournal(
+                outbox_path,
+                rotate_mb=rotate_mb,
+                flush_every=flush_every,
+                dupe_window_sec=self._outbox_dupe_window_sec,
+                max_inmem=max_inmem,
+            )
         self._outbox_keys: Dict[str, str] = {}
         self._order_tracker_ttl_sec = tracker_ttl
         self._tracker_ttl_seconds = tracker_ttl_seconds()
@@ -830,8 +845,11 @@ class SmartRouter:
         )
 
     def _outbox_cleanup(self) -> None:
-        if self._outbox_enabled and self._outbox is not None:
-            self._outbox.cleanup()
+        if not self._outbox_enabled or self._outbox is None:
+            return
+        cleanup = getattr(self._outbox, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
 
     def _log_intent_window_stats(self, action: str, *, key: str | None = None) -> None:
         LOGGER.info(
@@ -896,6 +914,7 @@ class SmartRouter:
         metrics_submitted = False
         risk_budget_notional = Decimal("0")
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
+        outbox_pending_recorded = False
         try:
             if SafeMode.is_active():
                 metrics_reason = "safe-mode"
@@ -1219,17 +1238,39 @@ class SmartRouter:
                     "reason": "dupe-intent",
                 }
 
+            qty_decimal = Decimal(str(qty_value))
+
             if self._outbox_enabled and self._outbox is not None:
-                if not self._outbox.should_send(intent_key):
-                    LOGGER.info("duplicate-intent-skip %s", intent_key)
-                    self._outbox_cleanup()
-                    self._run_intent_window_cleanup()
-                    metrics_reason = "dupe-intent"
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": "duplicate_intent",
-                        "reason": "duplicate_intent",
-                    }
+                last = self._outbox.last_by_intent(intent_key)
+                now_value = time.time()
+                if last is not None:
+                    last_ts, last_status, _ = last
+                    if last_status in {"PENDING", "ACKED"} and (now_value - last_ts) <= float(
+                        self._outbox_dupe_window_sec
+                    ):
+                        LOGGER.info("duplicate-intent-skip %s", intent_key)
+                        self._outbox_cleanup()
+                        self._run_intent_window_cleanup()
+                        metrics_reason = "outbox-inflight"
+                        _OUTBOX_BLOCKS_TOTAL.labels(reason="inflight").inc()
+                        return {
+                            "client_order_id": client_order_id,
+                            "status": "duplicate_intent",
+                            "ok": False,
+                            "reason": "outbox-inflight",
+                        }
+                px_decimal = Decimal("0") if price_value is None else Decimal(str(price_value))
+                self._outbox.begin_pending(
+                    intent_key=intent_key,
+                    order_id=client_order_id,
+                    strategy=strategy,
+                    symbol=symbol,
+                    venue=venue,
+                    side=side_lower,
+                    qty=qty_decimal,
+                    px=px_decimal,
+                )
+                outbox_pending_recorded = True
                 self._outbox_keys[client_order_id] = intent_key
 
             self._intent_window.touch(intent_key)
@@ -1239,7 +1280,6 @@ class SmartRouter:
             self._completed_orders.pop(client_order_id, None)
             self._order_strategies[client_order_id] = strategy
             existing_tracked = self._order_tracker.get(client_order_id)
-            qty_decimal = Decimal(str(qty_value))
             register_ts = float(ts_ns) / NANOS_IN_SECOND
             reserved_budget = False
             if self._risk_budget_guard_enabled():
@@ -1287,7 +1327,9 @@ class SmartRouter:
                     if reserved_budget:
                         self._release_risk_budget(client_order_id)
                     raise
-            except Exception:
+            except Exception as exc:
+                if self._outbox_enabled and self._outbox is not None and outbox_pending_recorded:
+                    self._outbox.mark_failed(client_order_id, reason=str(exc))
                 if reserved_budget:
                     self._release_risk_budget(client_order_id)
                 raise
@@ -1474,8 +1516,8 @@ class SmartRouter:
             self._release_risk_budget(client_order_id)
         if event_key == "ack":
             self._idempo.mark_ack(client_order_id)
-            if self._outbox_enabled and self._outbox is not None and outbox_key:
-                self._outbox.mark_acked(outbox_key)
+            if self._outbox_enabled and self._outbox is not None:
+                self._outbox.mark_acked(client_order_id)
         elif event_key == "partial_fill":
             filled_qty = float(updated.filled) if updated is not None else 0.0
             self._idempo.mark_fill(client_order_id, filled_qty)
@@ -1509,10 +1551,9 @@ class SmartRouter:
         if (
             self._outbox_enabled
             and self._outbox is not None
-            and outbox_key
             and event_key in {"filled", "canceled", "reject", "expire"}
         ):
-            self._outbox.mark_terminal(outbox_key)
+            self._outbox.mark_final(client_order_id, reason=event_key)
             self._outbox_keys.pop(client_order_id, None)
 
         if updated is not None and self._order_tracker.is_terminal(new_state):
