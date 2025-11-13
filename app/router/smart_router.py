@@ -14,6 +14,7 @@ from typing import Dict, Iterable, Mapping, Protocol, Sequence
 import httpx
 
 import app.config.feature_flags as ff
+from app.health.aggregator import DEFAULT_REQUIRED_SIGNALS, get_agg
 from app.market.watchdog import watchdog
 from app.metrics.core import (
     DEFAULT_METRICS_PATH as _DEFAULT_METRICS_PATH,
@@ -103,6 +104,16 @@ def _feature_flag_enabled(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_required_signals(raw: str | None, fallback: set[str]) -> set[str]:
+    if raw is None:
+        return set(fallback)
+    tokens = [chunk.strip() for chunk in raw.split(",")]
+    filtered = [chunk for chunk in tokens if chunk]
+    if not filtered:
+        return set(fallback)
+    return {token for token in filtered}
 
 
 def feature_enabled() -> bool:
@@ -387,6 +398,13 @@ class SmartRouter:
         self._timeouts_enabled = _feature_flag_enabled("FF_ORDER_TIMEOUTS", False)
         self._timeouts: DeadlineTracker | None = None
         self._timeouts_sweeping = False
+        self._readiness_guard_enabled = _feature_flag_enabled("FF_READINESS_AGG_GUARD", False)
+        self._readiness_agg = get_agg() if self._readiness_guard_enabled else None
+        if self._readiness_agg is not None:
+            ttl_seconds = max(0, _env_int("READINESS_TTL_SEC", 30))
+            required_raw = os.getenv("READINESS_REQUIRED")
+            required = _parse_required_signals(required_raw, set(DEFAULT_REQUIRED_SIGNALS))
+            self._readiness_agg.configure(ttl_seconds=ttl_seconds, required=required)
         if self._timeouts_enabled:
             ack_timeout = _env_int("SUBMIT_ACK_TIMEOUT_SEC", 3)
             fill_timeout = _env_int("FILL_TIMEOUT_SEC", 30)
@@ -708,6 +726,22 @@ class SmartRouter:
                         "reason": guard_reason,
                         "profile": profile.name,
                     }
+            if self._readiness_agg is not None:
+                ready, detail = self._readiness_agg.is_ready()
+                if not ready:
+                    LOGGER.warning(
+                        "smart_router.readiness_guard_blocked",
+                        extra={
+                            "event": "smart_router_readiness_guard_blocked",
+                            "component": "smart_router",
+                            "details": {
+                                "client_order_id": client_order_id,
+                                "detail": detail,
+                            },
+                        },
+                    )
+                    metrics_reason = "readiness-agg"
+                    return {"ok": False, "reason": "readiness-agg", "detail": detail}
             if self._risk_governor is not None:
                 price_for_risk = Decimal("0") if price is None else Decimal(str(price))
                 qty_for_risk = Decimal(str(qty))
