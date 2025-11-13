@@ -7,7 +7,8 @@ import os
 from collections import Counter as _Counter
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Iterable, Tuple
+from time import time
+from typing import Dict, Iterable, Optional, Tuple
 
 from prometheus_client import Counter, Gauge
 
@@ -19,8 +20,8 @@ TRACKER_TTL_SEC = 3600
 TRACKER_MAX_ACTIVE = 5000
 _NANOS_IN_SECOND = 1_000_000_000
 
-_DEFAULT_TRACKER_TTL_SECONDS = 60 * 30
-_DEFAULT_TRACKER_MAX_ITEMS = 10_000
+_DEFAULT_TRACKER_TTL_SECONDS = 3_600
+_DEFAULT_TRACKER_MAX_ITEMS = 20_000
 
 
 def _read_positive_int(name: str, default: int) -> int:
@@ -117,6 +118,27 @@ def _to_decimal(value: Decimal | float | int | str | None) -> Decimal:
         raise
 
 
+def _coerce_state(value: OrderState | str) -> OrderState:
+    if isinstance(value, OrderState):
+        return value
+    key = str(value).strip().upper()
+    if not key:
+        raise ValueError("state must be a non-empty string")
+    try:
+        return OrderState(key)
+    except ValueError as exc:
+        LOGGER.error(
+            "order_tracker.invalid_state",
+            extra={
+                "event": "order_tracker_invalid_state",
+                "component": "orders_tracker",
+                "details": {"state": key},
+            },
+            exc_info=exc,
+        )
+        raise
+
+
 @dataclass(slots=True)
 class TrackedOrder:
     coid: str
@@ -129,6 +151,7 @@ class TrackedOrder:
     created_ns: int = 0
     updated_ns: int = 0
     updated_ts: float = 0.0
+    key: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -150,9 +173,25 @@ class TrackedOrderSnapshot:
 class OrderTracker:
     """Maintain a compact mapping of order states."""
 
-    def __init__(self, *, max_active: int = TRACKER_MAX_ACTIVE) -> None:
+    def __init__(
+        self,
+        *,
+        max_active: int | None = None,
+        ttl_seconds: int = TRACKER_TTL_SECONDS,
+        max_items: int = TRACKER_MAX_ITEMS,
+    ) -> None:
         self._orders: Dict[str, TrackedOrder] = {}
-        self._max_active = max_active if max_active > 0 else TRACKER_MAX_ACTIVE
+        effective_max_active = TRACKER_MAX_ACTIVE if max_active is None else max(max_active, 0)
+        self._max_active = effective_max_active or TRACKER_MAX_ACTIVE
+        self._ttl_seconds = max(int(ttl_seconds), 0)
+        self._max_items = max(int(max_items), 0)
+        self.stats: Dict[str, int] = {
+            "added": 0,
+            "updates": 0,
+            "removed_terminal": 0,
+            "removed_ttl": 0,
+            "removed_size": 0,
+        }
         _TRACKER_METRICS.observe_tracked(len(self._orders))
 
     def __len__(self) -> int:
@@ -161,25 +200,30 @@ class OrderTracker:
     def get(self, coid: str) -> TrackedOrder | None:
         return self._orders.get(coid)
 
-    def register_order(
-        self,
-        coid: str,
-        *,
-        venue: str,
-        symbol: str,
-        side: str,
-        qty: Decimal,
-        now_ns: int,
-    ) -> None:
+    def register_order(self, coid: str, key: str = "", **ctx) -> None:
         """Register a new order for lifecycle tracking.
 
         Duplicate registrations are ignored to guarantee idempotency.
         """
 
-        qty_value = _to_decimal(qty)
+        existing = self._orders.get(coid)
+        venue = str(ctx.get("venue", getattr(existing, "venue", "")))
+        symbol = str(ctx.get("symbol", getattr(existing, "symbol", "")))
+        side = str(ctx.get("side", getattr(existing, "side", "")))
+        qty_raw = ctx.get("qty", ctx.get("quantity", Decimal("0")))
+        qty_value = _to_decimal(qty_raw)
         if qty_value < Decimal("0"):
             qty_value = Decimal("0")
-        existing = self._orders.get(coid)
+        ts_value = ctx.get("ts")
+        now_ns = ctx.get("now_ns")
+        if ts_value is not None:
+            now_ts = float(ts_value)
+        elif now_ns is not None:
+            now_ts = float(now_ns) / _NANOS_IN_SECOND
+        else:
+            now_ts = time()
+        if now_ns is None:
+            now_ns = int(now_ts * _NANOS_IN_SECOND)
         if existing is not None:
             LOGGER.warning(
                 "order_tracker.duplicate_registration",
@@ -194,7 +238,6 @@ class OrderTracker:
                 },
             )
             return
-        now_ts = float(now_ns) / _NANOS_IN_SECOND
         tracked = TrackedOrder(
             coid=coid,
             venue=venue,
@@ -204,9 +247,11 @@ class OrderTracker:
             created_ns=now_ns,
             updated_ns=now_ns,
             updated_ts=now_ts,
+            key=key,
         )
         self._orders[coid] = tracked
         self._enforce_capacity()
+        self.stats["added"] += 1
         _TRACKER_METRICS.observe_tracked(len(self._orders))
 
     def apply_event(
@@ -256,6 +301,67 @@ class OrderTracker:
         tracked.updated_ns = now_ns
         tracked.updated_ts = float(now_ns) / _NANOS_IN_SECOND
         return tracked.state
+
+    def process_order_event(
+        self,
+        coid: str,
+        new_state: OrderState | str,
+        **ctx,
+    ) -> None:
+        state = _coerce_state(new_state)
+        ts_value = ctx.get("ts")
+        now_ns = ctx.get("now_ns")
+        if ts_value is not None:
+            now_ts = float(ts_value)
+        elif now_ns is not None:
+            now_ts = float(now_ns) / _NANOS_IN_SECOND
+        else:
+            now_ts = time()
+        if now_ns is None:
+            now_ns = int(now_ts * _NANOS_IN_SECOND)
+        entry = self._orders.get(coid)
+        if state in FINAL_STATES:
+            if entry is not None:
+                entry.state = state
+                entry.updated_ts = now_ts
+                entry.updated_ns = now_ns
+                entry.venue = str(ctx.get("venue", entry.venue))
+                entry.symbol = str(ctx.get("symbol", entry.symbol))
+                entry.side = str(ctx.get("side", entry.side))
+                entry.key = str(ctx.get("key", entry.key))
+            removed = self.finalize(coid, state)
+            if not removed and entry is not None:
+                self._orders.pop(coid, None)
+                _TRACKER_METRICS.observe_tracked(len(self._orders))
+            self.stats["removed_terminal"] += 1
+            return
+        if entry is None:
+            qty_value = _to_decimal(ctx.get("qty", ctx.get("quantity", Decimal("0"))))
+            if qty_value < Decimal("0"):
+                qty_value = Decimal("0")
+            entry = TrackedOrder(
+                coid=coid,
+                venue=str(ctx.get("venue", "")),
+                symbol=str(ctx.get("symbol", "")),
+                side=str(ctx.get("side", "")),
+                qty=qty_value,
+                state=state,
+                created_ns=now_ns,
+                updated_ns=now_ns,
+                updated_ts=now_ts,
+                key=str(ctx.get("key", "")),
+            )
+            self._orders[coid] = entry
+            self._enforce_capacity()
+            _TRACKER_METRICS.observe_tracked(len(self._orders))
+        entry.state = state
+        entry.updated_ts = now_ts
+        entry.updated_ns = now_ns
+        entry.venue = str(ctx.get("venue", entry.venue))
+        entry.symbol = str(ctx.get("symbol", entry.symbol))
+        entry.side = str(ctx.get("side", entry.side))
+        entry.key = str(ctx.get("key", entry.key))
+        self.stats["updates"] += 1
 
     @staticmethod
     def is_terminal(state: OrderState) -> bool:
@@ -354,6 +460,47 @@ class OrderTracker:
         if removed:
             _TRACKER_METRICS.observe_tracked(len(self._orders))
         return removed
+
+    def cleanup(
+        self,
+        now: Optional[float] = None,
+        *,
+        ttl_seconds: Optional[int] = None,
+        max_items: Optional[int] = None,
+    ) -> tuple[list[tuple[str, OrderState]], list[tuple[str, OrderState]]]:
+        reference = float(now) if now is not None else time()
+        if ttl_seconds is None:
+            ttl_limit = self._ttl_seconds
+        else:
+            ttl_limit = int(ttl_seconds)
+        if max_items is None:
+            size_limit = self._max_items
+        else:
+            size_limit = int(max_items)
+        removed_ttl: list[tuple[str, OrderState]] = []
+        removed_size: list[tuple[str, OrderState]] = []
+        if ttl_limit is not None and ttl_limit > 0 and self._orders:
+            removed_ttl = TrackingCleaner.cleanup_by_ttl(
+                self,
+                now_ts=reference,
+                ttl_seconds=ttl_limit,
+            )
+        if size_limit is not None and size_limit >= 0 and self._orders:
+            removed_size = TrackingCleaner.cleanup_by_size(
+                self,
+                max_items=size_limit,
+            )
+        if removed_ttl:
+            self.stats["removed_ttl"] += len(removed_ttl)
+        if removed_size:
+            self.stats["removed_size"] += len(removed_size)
+        if removed_ttl or removed_size:
+            LOGGER.info(
+                "tracker.cleanup ttl=%d size=%d",
+                len(removed_ttl),
+                len(removed_size),
+            )
+        return removed_ttl, removed_size
 
     def snapshot(self) -> Tuple[TrackedOrderSnapshot, ...]:
         """Return an immutable snapshot of the current tracked orders."""

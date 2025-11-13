@@ -24,8 +24,8 @@ from ..orders.state import OrderState, OrderStateError, next_state, validate_tra
 from ..orders.tracker import (
     OrderTracker,
     TRACKER_MAX_ACTIVE,
+    TRACKER_MAX_ITEMS,
     TRACKER_TTL_SEC,
-    TrackingCleaner,
     tracker_max_items,
     tracker_ttl_seconds,
 )
@@ -208,14 +208,16 @@ def _latency_weight_bps_per_ms() -> float:
 
 
 def _order_tracker_ttl() -> int:
-    raw = os.getenv("ORDER_TRACKER_TTL_SEC")
-    if raw is None:
-        return TRACKER_TTL_SEC
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return TRACKER_TTL_SEC
-    return max(value, 0)
+    for name in ("ORDER_TRACKER_TTL", "ORDER_TRACKER_TTL_SEC"):
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        return max(value, 0)
+    return TRACKER_TTL_SEC
 
 
 def _order_tracker_max_active() -> int:
@@ -227,6 +229,17 @@ def _order_tracker_max_active() -> int:
     except (TypeError, ValueError):
         return TRACKER_MAX_ACTIVE
     return value if value > 0 else TRACKER_MAX_ACTIVE
+
+
+def _order_tracker_max_items() -> int:
+    raw = os.getenv("ORDER_TRACKER_MAX")
+    if raw is None:
+        return TRACKER_MAX_ITEMS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return TRACKER_MAX_ITEMS
+    return max(value, 0)
 
 
 class TrackedOrderLike(Protocol):
@@ -276,18 +289,21 @@ class SmartRouter:
         self._latency_weight = _latency_weight_bps_per_ms()
         self._liquidity_snapshot = self._load_liquidity_snapshot()
         self._idempo = idempo_store if idempo_store is not None else IdempoStore()
-        self._order_tracker = OrderTracker(max_active=_order_tracker_max_active())
+        tracker_ttl = _order_tracker_ttl()
+        tracker_max = _order_tracker_max_items()
+        self._order_tracker = OrderTracker(
+            max_active=_order_tracker_max_active(),
+            ttl_seconds=tracker_ttl,
+            max_items=tracker_max,
+        )
         self._outbox_enabled = _feature_flag_enabled("FF_IDEMPOTENCY_OUTBOX", False)
         self._outbox: Outbox | None = Outbox() if self._outbox_enabled else None
         self._outbox_keys: Dict[str, str] = {}
-        self._order_tracker_ttl_sec = _order_tracker_ttl()
+        self._order_tracker_ttl_sec = tracker_ttl
         self._tracker_ttl_seconds = tracker_ttl_seconds()
         self._tracker_max_items = tracker_max_items()
         self._tracker_stats: Dict[str, int] = {
             "seen": 0,
-            "removed_terminal": 0,
-            "removed_ttl": 0,
-            "removed_size": 0,
         }
         self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
         self._order_strategies: Dict[str, str] = {}
@@ -412,7 +428,41 @@ class SmartRouter:
     def get_tracker_stats(self) -> Dict[str, int]:
         """Return tracker cleanup statistics."""
 
-        return dict(self._tracker_stats)
+        stats = dict(self._order_tracker.stats)
+        stats.update(self._tracker_stats)
+        return stats
+
+    def _refresh_tracker_limits(self) -> None:
+        ttl_seconds = tracker_ttl_seconds()
+        if ttl_seconds != self._tracker_ttl_seconds:
+            self._tracker_ttl_seconds = ttl_seconds
+        max_items = tracker_max_items()
+        if max_items != self._tracker_max_items:
+            self._tracker_max_items = max_items
+
+    def _handle_tracker_cleanup(
+        self,
+        removed: Iterable[tuple[str, OrderState | str]],
+        *,
+        reason: str,
+    ) -> None:
+        for order_id, state in removed:
+            self._discard_tracker_references(order_id)
+            self._log_tracker_removal(order_id=order_id, state=state, reason=reason)
+
+    def _run_tracker_cleanup(self, now_ts: float | None = None) -> None:
+        self._refresh_tracker_limits()
+        ttl_arg = self._tracker_ttl_seconds if self._tracker_ttl_seconds >= 0 else 0
+        max_arg = self._tracker_max_items if self._tracker_max_items >= 0 else 0
+        removed_ttl, removed_size = self._order_tracker.cleanup(
+            now_ts,
+            ttl_seconds=ttl_arg,
+            max_items=max_arg,
+        )
+        if removed_ttl:
+            self._handle_tracker_cleanup(removed_ttl, reason="ttl")
+        if removed_size:
+            self._handle_tracker_cleanup(removed_size, reason="size")
 
     def cleanup_tracker_by_ttl(self, now_ts: float | None = None) -> int:
         """Remove tracker entries that exceeded the configured TTL."""
@@ -423,18 +473,15 @@ class SmartRouter:
         if self._tracker_ttl_seconds <= 0:
             return 0
         reference = float(now_ts) if now_ts is not None else time.time()
-        removed = TrackingCleaner.cleanup_by_ttl(
-            self._order_tracker,
-            now_ts=reference,
+        removed_ttl, _ = self._order_tracker.cleanup(
+            reference,
             ttl_seconds=self._tracker_ttl_seconds,
+            max_items=-1,
         )
-        if not removed:
+        if not removed_ttl:
             return 0
-        for order_id, state in removed:
-            self._discard_tracker_references(order_id)
-            self._log_tracker_removal(order_id=order_id, state=state, reason="ttl")
-        self._tracker_stats["removed_ttl"] += len(removed)
-        return len(removed)
+        self._handle_tracker_cleanup(removed_ttl, reason="ttl")
+        return len(removed_ttl)
 
     def cleanup_tracker_by_size(self) -> int:
         """Ensure tracker entries do not exceed the configured capacity."""
@@ -442,17 +489,15 @@ class SmartRouter:
         max_items = tracker_max_items()
         if max_items != self._tracker_max_items:
             self._tracker_max_items = max_items
-        removed = TrackingCleaner.cleanup_by_size(
-            self._order_tracker,
+        _, removed_size = self._order_tracker.cleanup(
+            None,
+            ttl_seconds=-1,
             max_items=self._tracker_max_items,
         )
-        if not removed:
+        if not removed_size:
             return 0
-        for order_id, state in removed:
-            self._discard_tracker_references(order_id)
-            self._log_tracker_removal(order_id=order_id, state=state, reason="size")
-        self._tracker_stats["removed_size"] += len(removed)
-        return len(removed)
+        self._handle_tracker_cleanup(removed_size, reason="size")
+        return len(removed_size)
 
     def _discard_tracker_references(self, order_id: str) -> None:
         self._order_strategies.pop(order_id, None)
@@ -695,6 +740,7 @@ class SmartRouter:
                 "reason": "marketdata_stale",
             }
 
+        intent_key: str | None = None
         if self._outbox_enabled and self._outbox is not None:
             intent_payload = {
                 "venue": venue,
@@ -721,13 +767,16 @@ class SmartRouter:
         self._order_strategies[client_order_id] = strategy
         existing_tracked = self._order_tracker.get(client_order_id)
         qty_decimal = Decimal(str(qty_value))
+        register_ts = float(ts_ns) / NANOS_IN_SECOND
         self._order_tracker.register_order(
             client_order_id,
+            key=intent_key or "",
             venue=venue,
             symbol=symbol,
             side=side,
             qty=qty_decimal,
             now_ns=ts_ns,
+            ts=register_ts,
         )
         try:
             state = self._order_tracker.apply_event(
@@ -759,9 +808,7 @@ class SmartRouter:
         if existing_tracked is None:
             self._tracker_stats["seen"] += 1
 
-        register_ts = float(ts_ns) / NANOS_IN_SECOND
-        self.cleanup_tracker_by_ttl(register_ts)
-        self.cleanup_tracker_by_size()
+        self._run_tracker_cleanup(register_ts)
         self._outbox_cleanup()
 
         tracked = self._order_tracker.get(client_order_id)
@@ -951,17 +998,29 @@ class SmartRouter:
                     },
                 },
             )
-            if self._order_tracker.finalize(client_order_id, new_state):
-                self._tracker_stats["removed_terminal"] += 1
-                self._log_tracker_removal(
-                    order_id=client_order_id,
-                    state=new_state,
-                    reason="terminal",
-                )
+            self._log_tracker_removal(
+                order_id=client_order_id,
+                state=new_state,
+                reason="terminal",
+            )
             self._last_events.pop(client_order_id, None)
 
-        self.cleanup_tracker_by_ttl(now_ts)
-        self.cleanup_tracker_by_size()
+        tracker_ctx = {
+            "ts": now_ts,
+            "now_ns": now_ns,
+            "venue": updated.venue if updated is not None else "",
+            "symbol": updated.symbol if updated is not None else "",
+            "side": updated.side if updated is not None else "",
+        }
+        if self._outbox_enabled:
+            tracker_ctx["key"] = self._outbox_keys.get(client_order_id, "")
+        self._order_tracker.process_order_event(
+            client_order_id,
+            new_state,
+            **tracker_ctx,
+        )
+
+        self._run_tracker_cleanup(now_ts)
         self._outbox_cleanup()
         self._prune_completed(now_ns)
         if self._order_strategies:
