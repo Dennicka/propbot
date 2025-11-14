@@ -102,6 +102,8 @@ _PNLCAP_COOLOFF = metrics_gauge("propbot_pnl_cooloff_sec", labels=("scope",))
 class RouterControlSnapshot(TypedDict):
     mode: str
     safe_mode: bool
+    safe_mode_global: bool
+    canary_mode: bool
     pretrade_strict: bool
     risk_limits_enabled: bool
     last_change_ts: float | None
@@ -135,6 +137,14 @@ def get_router_control_snapshot() -> RouterControlSnapshot:
 
     mode = "UNKNOWN"
     safe_mode = False
+    safe_mode_global = _env_flag("SAFE_MODE_GLOBAL", False)
+    canary_mode = False
+    try:
+        runtime_profile = get_profile()
+    except RuntimeError:
+        runtime_profile = None
+    if runtime_profile is not None:
+        canary_mode = bool(getattr(runtime_profile, "is_canary", False))
     extra: dict[str, Any] = {}
 
     if control is not None:
@@ -174,6 +184,8 @@ def get_router_control_snapshot() -> RouterControlSnapshot:
     snapshot: RouterControlSnapshot = {
         "mode": mode,
         "safe_mode": safe_mode,
+        "safe_mode_global": safe_mode_global,
+        "canary_mode": canary_mode,
         "pretrade_strict": bool(ff.pretrade_strict_on()),
         "risk_limits_enabled": bool(ff.risk_limits_on()),
         "last_change_ts": hold_ts,
@@ -195,6 +207,13 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         LOGGER.warning("invalid-int-env %s=%r", name, raw)
         return default
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _maybe_float(value: object) -> float | None:
@@ -2102,6 +2121,14 @@ class SmartRouter:
                     VENUE_ALIASES.get("okx", "okx-perp"),
                 }
             )
+        try:
+            runtime_profile = get_profile()
+        except RuntimeError:
+            runtime_profile = None
+        if runtime_profile is not None and bool(getattr(runtime_profile, "is_canary", False)):
+            max_venues = _env_int("CANARY_MAX_VENUES", 2)
+            if max_venues > 0:
+                venues = list(venues[:max_venues])
         return venues
 
     def score(

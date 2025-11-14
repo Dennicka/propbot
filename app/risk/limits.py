@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Optional, Tuple, TypedDict
 
 from app.config import feature_flags
+from app.config.profile import is_canary_mode_enabled
 
 
 LOGGER = logging.getLogger(__name__)
+
+_TRUTHY = {"1", "true", "yes", "on"}
+_DEFAULT_SAFE_MODE_NOTIONAL = Decimal("0.1")
+_DEFAULT_SAFE_MODE_DAILY = Decimal("0.25")
 
 
 @dataclass
@@ -42,6 +49,94 @@ class RiskLimitsSnapshot(TypedDict):
     daily_loss_used: float | None
     rejects_recent: int | None
     extra: dict[str, float]
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUTHY
+
+
+def _safe_mode_global_flag(default: bool = False) -> bool:
+    return _env_flag("SAFE_MODE_GLOBAL", default)
+
+
+def _parse_decimal_env(name: str, default: Decimal) -> Decimal:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if not text:
+        return default
+    try:
+        value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        LOGGER.warning("risk.safe_mode_scale_invalid", extra={"name": name, "value": raw})
+        return default
+    return value
+
+
+def _clamp_multiplier(value: Decimal) -> Decimal:
+    if value <= Decimal("0"):
+        return Decimal("0")
+    if value >= Decimal("1"):
+        return Decimal("1")
+    return value
+
+
+def _safe_mode_notional_multiplier() -> Decimal:
+    return _clamp_multiplier(
+        _parse_decimal_env("SAFE_MODE_SCALE_NOTIONAL", _DEFAULT_SAFE_MODE_NOTIONAL)
+    )
+
+
+def _safe_mode_daily_loss_multiplier() -> Decimal:
+    return _clamp_multiplier(
+        _parse_decimal_env("SAFE_MODE_SCALE_DAILY_LOSS", _DEFAULT_SAFE_MODE_DAILY)
+    )
+
+
+def _scale_decimal(value: Decimal, multiplier: Decimal) -> Decimal:
+    if value <= Decimal("0"):
+        return value
+    scaled = value * multiplier
+    if scaled > value:
+        return value
+    return scaled
+
+
+def _scale_decimal_map(mapping: Dict[str, Decimal], multiplier: Decimal) -> Dict[str, Decimal]:
+    if not mapping:
+        return {}
+    return {key: _scale_decimal(amount, multiplier) for key, amount in mapping.items()}
+
+
+def _scale_symbol_map(
+    mapping: Dict[Tuple[str, str], Decimal], multiplier: Decimal
+) -> Dict[Tuple[str, str], Decimal]:
+    if not mapping:
+        return {}
+    return {key: _scale_decimal(amount, multiplier) for key, amount in mapping.items()}
+
+
+def _scale_config_for_safe_mode(
+    cfg: "RiskConfig", multiplier_notional: Decimal, multiplier_daily: Decimal
+) -> "RiskConfig":
+    scaled = RiskConfig(
+        cap_per_venue=_scale_decimal_map(cfg.cap_per_venue, multiplier_notional),
+        cap_per_symbol=_scale_symbol_map(cfg.cap_per_symbol, multiplier_notional),
+        cap_per_strategy=dict(cfg.cap_per_strategy),
+        daily_loss_limit=(
+            _scale_decimal(cfg.daily_loss_limit, multiplier_daily)
+            if cfg.daily_loss_limit is not None
+            else None
+        ),
+        daily_cooloff_sec=cfg.daily_cooloff_sec,
+        max_consecutive_rejects=cfg.max_consecutive_rejects,
+        rejects_cooloff_sec=cfg.rejects_cooloff_sec,
+    )
+    return scaled
 
 
 class RiskGovernor:
@@ -196,9 +291,12 @@ class RiskGovernor:
             )
 
 
-def load_config_from_env() -> RiskConfig:
-    import os
-
+def load_config_from_env(
+    *,
+    apply_safe_mode: bool = True,
+    is_canary: bool | None = None,
+    safe_mode_global: bool | None = None,
+) -> RiskConfig:
     def _parse_map(s: str, sep_items: str = ",", sep_kv: str = ":") -> Dict[str, Decimal]:
         out: Dict[str, Decimal] = {}
         if not s:
@@ -227,6 +325,18 @@ def load_config_from_env() -> RiskConfig:
     cfg.daily_cooloff_sec = int(os.getenv("RISK_DAILY_COOLOFF_SEC", "3600"))
     cfg.max_consecutive_rejects = int(os.getenv("RISK_MAX_CONSEC_REJECTS", "3"))
     cfg.rejects_cooloff_sec = int(os.getenv("RISK_REJECTS_COOLOFF_SEC", "300"))
+
+    if apply_safe_mode:
+        canary_flag = is_canary if is_canary is not None else is_canary_mode_enabled()
+        safe_mode_flag = (
+            safe_mode_global if safe_mode_global is not None else _safe_mode_global_flag()
+        )
+        if canary_flag or safe_mode_flag:
+            cfg = _scale_config_for_safe_mode(
+                cfg,
+                multiplier_notional=_safe_mode_notional_multiplier(),
+                multiplier_daily=_safe_mode_daily_loss_multiplier(),
+            )
     return cfg
 
 
@@ -259,6 +369,38 @@ def _serialise_symbol_map(mapping: Dict[Tuple[str, str], Decimal]) -> dict[str, 
     return result
 
 
+def apply_safe_mode_scaling(
+    raw_limits: RiskLimitsSnapshot, *, is_canary: bool, safe_mode_global: bool
+) -> RiskLimitsSnapshot:
+    """Apply safe-mode scaling to a risk limits snapshot when required."""
+
+    if not (is_canary or safe_mode_global):
+        return raw_limits
+
+    scaled = deepcopy(raw_limits)
+    notional_factor = float(_safe_mode_notional_multiplier())
+    daily_factor = float(_safe_mode_daily_loss_multiplier())
+
+    notional_factor = min(max(notional_factor, 0.0), 1.0)
+    daily_factor = min(max(daily_factor, 0.0), 1.0)
+
+    venue_caps = raw_limits.get("max_notional_per_venue", {})
+    scaled["max_notional_per_venue"] = {
+        key: max(value * notional_factor, 0.0) for key, value in venue_caps.items()
+    }
+
+    symbol_caps = raw_limits.get("max_notional_per_symbol", {})
+    scaled["max_notional_per_symbol"] = {
+        key: max(value * notional_factor, 0.0) for key, value in symbol_caps.items()
+    }
+
+    daily_limit = raw_limits.get("daily_loss_limit")
+    if isinstance(daily_limit, (int, float)):
+        scaled["daily_loss_limit"] = max(daily_limit * daily_factor, 0.0)
+
+    return scaled
+
+
 def get_risk_limits_snapshot() -> RiskLimitsSnapshot:
     """Return configured risk limits for UI consumers."""
 
@@ -275,7 +417,13 @@ def get_risk_limits_snapshot() -> RiskLimitsSnapshot:
     if not enabled:
         return snapshot
     try:
-        cfg = load_config_from_env()
+        canary_flag = is_canary_mode_enabled()
+        safe_mode_flag = _safe_mode_global_flag()
+        cfg = load_config_from_env(
+            apply_safe_mode=False,
+            is_canary=canary_flag,
+            safe_mode_global=safe_mode_flag,
+        )
     except Exception:  # pragma: no cover - defensive
         return snapshot
     snapshot["max_notional_per_venue"] = _serialise_cap_map(cfg.cap_per_venue)
@@ -286,7 +434,7 @@ def get_risk_limits_snapshot() -> RiskLimitsSnapshot:
         "rejects_cooloff_sec": float(max(cfg.rejects_cooloff_sec, 0)),
         "max_consecutive_rejects": float(max(cfg.max_consecutive_rejects, 0)),
     }
-    return snapshot
+    return apply_safe_mode_scaling(snapshot, is_canary=canary_flag, safe_mode_global=safe_mode_flag)
 
 
 __all__ = [
@@ -294,5 +442,6 @@ __all__ = [
     "RiskState",
     "RiskGovernor",
     "load_config_from_env",
+    "apply_safe_mode_scaling",
     "get_risk_limits_snapshot",
 ]
