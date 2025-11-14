@@ -63,7 +63,13 @@ def router(monkeypatch: pytest.MonkeyPatch) -> SmartRouter:
 
     SafeMode.set(False)
 
-    profile = TradingProfile(name="paper", allow_trading=True, strict_flags=False)
+    profile = TradingProfile(
+        name="paper",
+        allow_trading=True,
+        strict_flags=False,
+        is_canary=False,
+        display_name="paper",
+    )
     liquidity = {"per_venue": {"binance": {"available_balance": 1000.0}}}
     state = SimpleNamespace(config=None)
     market_data = DummyMarketData()

@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
+import os
 from types import SimpleNamespace
 from typing import Any, Dict, Mapping, Tuple
 
@@ -24,6 +25,7 @@ from ..metrics import (
     observe_replace_chain,
     record_open_intents,
 )
+from ..metrics.core import counter as metrics_counter
 from ..rules.pretrade import PretradeValidationError, get_pretrade_validator
 from ..persistence import order_store
 from ..runtime import locks
@@ -69,6 +71,34 @@ def _maybe_float(value: object) -> float | None:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _canary_env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if not text:
+        return default
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        LOGGER.warning("canary.invalid-float-env", extra={"name": name, "value": raw})
+        return default
+
+
+def _canary_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if not text:
+        return default
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        LOGGER.warning("canary.invalid-int-env", extra={"name": name, "value": raw})
+        return default
 
 
 def _log_guard_event(
@@ -332,6 +362,8 @@ class OrderRef:
 class OrderRouter:
     def __init__(self, broker) -> None:
         self._broker = broker
+        self._canary_day_key: str = ""
+        self._canary_day_count: int = 0
 
     def _supports_native_reduce_only(self, venue: str) -> bool:
         support = getattr(self._broker, "supports_reduce_only", None)
@@ -398,6 +430,20 @@ class OrderRouter:
     ) -> OrderRef:
         validator = get_pretrade_validator()
         profile = get_trading_profile()
+        try:
+            runtime_profile = runtime.get_profile()
+        except RuntimeError:
+            runtime_profile = None
+        runtime_is_canary = bool(getattr(runtime_profile, "is_canary", False))
+        canary_profile_name = str(getattr(runtime_profile, "display_name", profile.name))
+        canary_notional_limit = (
+            max(_canary_env_float("CANARY_MAX_ORDER_NOTIONAL_USD", 200.0), 0.0)
+            if runtime_is_canary
+            else 0.0
+        )
+        canary_daily_limit = (
+            max(_canary_env_int("CANARY_MAX_DAILY_ORDERS", 200), 0) if runtime_is_canary else 0
+        )
         order_payload: Dict[str, object] = {
             "venue": venue,
             "symbol": symbol,
@@ -576,6 +622,75 @@ class OrderRouter:
         if is_reduction:
             increasing = False
         if increasing and target_side is not None:
+            if runtime_is_canary:
+                if canary_notional_limit > 0 and order_notional_decimal > Decimal(
+                    str(canary_notional_limit)
+                ):
+                    reason_text = "canary-max-order-notional"
+                    _CANARY_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                    PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                    runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                    _log_guard_event(
+                        "order_router.canary_order_notional",
+                        profile=canary_profile_name,
+                        venue=venue,
+                        symbol=symbol,
+                        notional=order_notional_decimal,
+                        limit=Decimal(str(canary_notional_limit)),
+                        mode="canary",
+                        reason=reason_text,
+                        limit_type="canary_notional",
+                    )
+                    log_operator_action(
+                        "system",
+                        "system",
+                        "PRETRADE_BLOCKED",
+                        details={
+                            "reason": reason_text,
+                            "venue": venue,
+                            "symbol": symbol,
+                            "qty": qty,
+                            "price": price,
+                            "limit": canary_notional_limit,
+                        },
+                    )
+                    raise PretradeGateThrottled(reason_text, details=order_payload)
+                if canary_daily_limit > 0:
+                    day_key = time.strftime("%Y%m%d", time.gmtime())
+                    if self._canary_day_key != day_key:
+                        self._canary_day_key = day_key
+                        self._canary_day_count = 0
+                    if self._canary_day_count >= canary_daily_limit:
+                        reason_text = "canary-max-daily-orders"
+                        _CANARY_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                        PRETRADE_BLOCKS_TOTAL.labels(reason=reason_text).inc()
+                        runtime.record_pretrade_block(symbol, reason_text, qty=qty, price=price)
+                        _log_guard_event(
+                            "order_router.canary_daily_limit",
+                            profile=canary_profile_name,
+                            venue=venue,
+                            symbol=symbol,
+                            notional=order_notional_decimal,
+                            limit=canary_daily_limit,
+                            mode="canary",
+                            reason=reason_text,
+                            limit_type="canary_daily_orders",
+                        )
+                        log_operator_action(
+                            "system",
+                            "system",
+                            "PRETRADE_BLOCKED",
+                            details={
+                                "reason": reason_text,
+                                "venue": venue,
+                                "symbol": symbol,
+                                "qty": qty,
+                                "price": price,
+                                "limit": canary_daily_limit,
+                            },
+                        )
+                        raise PretradeGateThrottled(reason_text, details=order_payload)
+                    self._canary_day_count += 1
             safe_status = get_safe_mode_state()
             safe_mode_label = safe_status.state.value
             if not profile.allow_new_orders:
@@ -1286,3 +1401,4 @@ def _replacement_depth(session, intent_id: str) -> int:
 
 
 __all__ = ["OrderRouter", "OrderRef", "OrderRouterError", "enforce_reduce_only"]
+_CANARY_BLOCKS_TOTAL = metrics_counter("propbot_canary_blocks_total", labels=("reason",))

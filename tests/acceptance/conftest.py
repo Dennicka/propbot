@@ -138,10 +138,28 @@ def _default_router_state() -> Any:
 def _profile_from_env() -> TradingProfile:
     profile = os.getenv("EXEC_PROFILE", "paper").strip().lower()
     if profile == "live":
-        return TradingProfile(name="live", allow_trading=True, strict_flags=True)
+        return TradingProfile(
+            name="live",
+            allow_trading=True,
+            strict_flags=True,
+            is_canary=False,
+            display_name="live",
+        )
     if profile == "testnet":
-        return TradingProfile(name="testnet", allow_trading=True, strict_flags=True)
-    return TradingProfile(name="paper", allow_trading=True, strict_flags=False)
+        return TradingProfile(
+            name="testnet",
+            allow_trading=True,
+            strict_flags=True,
+            is_canary=False,
+            display_name="testnet",
+        )
+    return TradingProfile(
+        name="paper",
+        allow_trading=True,
+        strict_flags=False,
+        is_canary=False,
+        display_name="paper",
+    )
 
 
 def _extract_block_reason(response: Mapping[str, Any]) -> str | None:

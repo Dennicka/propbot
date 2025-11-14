@@ -22,7 +22,13 @@ def _enable_test_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture()
 def router_factory(monkeypatch: pytest.MonkeyPatch):
     SafeMode.set(False)
-    profile = TradingProfile(name="paper", allow_trading=True, strict_flags=False)
+    profile = TradingProfile(
+        name="paper",
+        allow_trading=True,
+        strict_flags=False,
+        is_canary=False,
+        display_name="paper",
+    )
     state = SimpleNamespace(
         control=SimpleNamespace(
             post_only=False,

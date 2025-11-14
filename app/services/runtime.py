@@ -97,8 +97,10 @@ _PROFILE: TradingProfile | None = None
 
 class RuntimeProfileSnapshot(TypedDict):
     name: str
+    display_name: str
     env: str | None
     is_live: bool
+    is_canary: bool
     created_at: float | None
     extra: dict[str, Any]
 
@@ -108,8 +110,10 @@ def get_runtime_profile_snapshot() -> RuntimeProfileSnapshot:
 
     snapshot: RuntimeProfileSnapshot = {
         "name": "unknown",
+        "display_name": "unknown",
         "env": None,
         "is_live": False,
+        "is_canary": False,
         "created_at": None,
         "extra": {},
     }
@@ -119,10 +123,14 @@ def get_runtime_profile_snapshot() -> RuntimeProfileSnapshot:
         profile = None
     if profile is not None:
         snapshot["name"] = profile.name
+        snapshot["display_name"] = profile.display_name
         snapshot["is_live"] = is_live(profile)
+        snapshot["is_canary"] = bool(getattr(profile, "is_canary", False))
         snapshot["extra"] = {
             "allow_trading": bool(profile.allow_trading),
             "strict_flags": bool(profile.strict_flags),
+            "display_name": profile.display_name,
+            "is_canary": bool(getattr(profile, "is_canary", False)),
         }
     env_value: str | None = None
     try:
@@ -161,6 +169,8 @@ def get_profile() -> TradingProfile:
                             "name": profile.name,
                             "allow_trading": profile.allow_trading,
                             "strict_flags": profile.strict_flags,
+                            "display_name": profile.display_name,
+                            "is_canary": bool(profile.is_canary),
                         },
                     },
                 )
@@ -172,6 +182,8 @@ def get_profile() -> TradingProfile:
                             "profile": profile.name,
                             "allow_trading": profile.allow_trading,
                             "strict_flags": profile.strict_flags,
+                            "display_name": profile.display_name,
+                            "is_canary": bool(profile.is_canary),
                         },
                     )
     if _PROFILE is None:
@@ -2241,10 +2253,12 @@ def get_last_plan() -> Dict[str, object] | None:
 
 def reset_for_tests() -> None:
     """Helper used in tests to reset runtime state."""
-    global _STATE, _SHUTDOWN_LOCK, _SHUTDOWN_STARTED, _LAST_SHUTDOWN_RESULT
+    global _STATE, _SHUTDOWN_LOCK, _SHUTDOWN_STARTED, _LAST_SHUTDOWN_RESULT, _PROFILE
     _SHUTDOWN_LOCK = None
     _SHUTDOWN_STARTED = False
     _LAST_SHUTDOWN_RESULT = None
+    with _STATE_LOCK:
+        _PROFILE = None
     reset_safe_mode_for_tests()
     with _STATE_LOCK:
         _STATE = _bootstrap_runtime()
