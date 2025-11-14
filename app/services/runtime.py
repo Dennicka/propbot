@@ -31,6 +31,7 @@ from typing import (
 import httpx
 from requests import RequestException
 
+from ..alerts.pipeline import get_ops_alerts_pipeline
 from ..audit_log import log_operator_action
 from ..golden.logger import get_golden_logger
 from ..pretrade.gate import PreTradeGate
@@ -301,7 +302,8 @@ async def start_recon_a_daemon() -> None:
         )
         return
 
-    router = SmartRouter()
+    alerts_pipeline = get_ops_alerts_pipeline()
+    router = SmartRouter(alerts=alerts_pipeline)
     reconciler = Reconciler(router=router, cfg=ReconConfig())
     daemon = OrderReconDaemon(reconciler)
     await daemon.start()

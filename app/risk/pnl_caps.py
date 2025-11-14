@@ -6,11 +6,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 from app.alerts.events import evt_pnl_cap
 from app.alerts.levels import AlertLevel
 from app.alerts.manager import notify as alert_notify
+from app.alerts.pipeline import OpsAlertsPipeline, PNL_CAP_BREACHED
 from app.ops.hooks import ops_alert
 
 
@@ -36,6 +37,14 @@ class DayStats:
     peak: Decimal = Decimal("0")
     last: Decimal = Decimal("0")
     cooloff_until: float = 0.0
+
+
+def _current_profile() -> str | None:
+    raw = os.getenv("EXEC_PROFILE")
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
 
 
 class PnLAggregator:
@@ -97,12 +106,48 @@ class CapsPolicy:
 class PnLCapsGuard:
     """Проверяет капы и управляет cool-off окнами."""
 
-    def __init__(self, policy: CapsPolicy, agg: PnLAggregator, clock=time):
+    def __init__(
+        self,
+        policy: CapsPolicy,
+        agg: PnLAggregator,
+        clock=time,
+        *,
+        alerts: OpsAlertsPipeline | None = None,
+    ) -> None:
         self.p = policy
         self.agg = agg
         self.clock = clock
+        self._alerts = alerts
 
-    def _notify(self, scope: str, reason: str) -> None:
+    def _notify(
+        self,
+        scope: str,
+        reason: str,
+        *,
+        current: Decimal | None = None,
+        cap: Decimal | None = None,
+        window: str | None = None,
+        extra: Mapping[str, object] | None = None,
+    ) -> None:
+        context: Dict[str, object] = {"scope": scope, "reason": reason}
+        if current is not None:
+            context["current_pnl"] = current
+        if cap is not None:
+            context["pnl_cap"] = cap
+        if window is not None:
+            context["window"] = window
+        if extra:
+            context.update(dict(extra))
+        profile = _current_profile()
+        if profile:
+            context["profile"] = profile
+        if self._alerts is not None:
+            self._alerts.notify_event(
+                event_type=PNL_CAP_BREACHED,
+                message=f"PnL cap breached: {scope}",
+                level=AlertLevel.CRITICAL,
+                context=context,
+            )
         ops_alert(evt_pnl_cap(scope=scope, reason=reason))
         alert_notify(
             AlertLevel.CRITICAL,
@@ -128,37 +173,83 @@ class PnLCapsGuard:
 
         if global_stats.cooloff_until > now:
             reason = f"cooloff-global-{int(global_stats.cooloff_until - now)}s"
-            self._notify("global", reason)
+            self._notify(
+                "global",
+                reason,
+                current=global_stats.last,
+                cap=self.p.cap_global,
+                window="daily",
+                extra={
+                    "cooloff_until": global_stats.cooloff_until,
+                    "remaining_seconds": int(global_stats.cooloff_until - now),
+                },
+            )
             return (True, reason)
         if strat_stats.cooloff_until > now:
             reason = f"cooloff-{strategy}-{int(strat_stats.cooloff_until - now)}s"
-            self._notify(strategy, reason)
+            self._notify(
+                strategy,
+                reason,
+                current=strat_stats.last,
+                cap=self.p.cap_per.get(strategy, Decimal("0")),
+                window="daily",
+                extra={
+                    "cooloff_until": strat_stats.cooloff_until,
+                    "remaining_seconds": int(strat_stats.cooloff_until - now),
+                },
+            )
             return (True, reason)
 
         if self.p.cap_global > 0 and global_stats.last <= -self.p.cap_global:
             self._cool(global_stats)
             reason = "daily-loss-cap-global"
-            self._notify("global", reason)
+            self._notify(
+                "global",
+                reason,
+                current=global_stats.last,
+                cap=self.p.cap_global,
+                window="daily",
+            )
             return (True, reason)
 
         cap_strat = self.p.cap_per.get(strategy, Decimal("0"))
         if cap_strat > 0 and strat_stats.last <= -cap_strat:
             self._cool(strat_stats)
             reason = f"daily-loss-cap-{strategy}"
-            self._notify(strategy, reason)
+            self._notify(
+                strategy,
+                reason,
+                current=strat_stats.last,
+                cap=cap_strat,
+                window="daily",
+            )
             return (True, reason)
 
         if self.p.dd_global > 0 and (global_stats.peak - global_stats.last) > self.p.dd_global:
             self._cool(global_stats)
             reason = "drawdown-cap-global"
-            self._notify("global", reason)
+            self._notify(
+                "global",
+                reason,
+                current=global_stats.last,
+                cap=self.p.dd_global,
+                window="drawdown",
+                extra={"peak": global_stats.peak},
+            )
             return (True, reason)
 
         dd_strat = self.p.dd_per.get(strategy, Decimal("0"))
         if dd_strat > 0 and (strat_stats.peak - strat_stats.last) > dd_strat:
             self._cool(strat_stats)
             reason = f"drawdown-cap-{strategy}"
-            self._notify(strategy, reason)
+            self._notify(
+                strategy,
+                reason,
+                current=strat_stats.last,
+                cap=dd_strat,
+                window="drawdown",
+                extra={"peak": strat_stats.peak},
+            )
             return (True, reason)
 
         return (False, "ok")

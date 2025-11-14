@@ -8,8 +8,10 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Optional, Tuple, TypedDict
+from typing import Dict, Mapping, Optional, Tuple, TypedDict
 
+from app.alerts.levels import AlertLevel
+from app.alerts.pipeline import OpsAlertsPipeline, RISK_LIMIT_BREACHED
 from app.config import feature_flags
 from app.config.profile import is_canary_mode_enabled
 
@@ -19,6 +21,14 @@ LOGGER = logging.getLogger(__name__)
 _TRUTHY = {"1", "true", "yes", "on"}
 _DEFAULT_SAFE_MODE_NOTIONAL = Decimal("0.1")
 _DEFAULT_SAFE_MODE_DAILY = Decimal("0.25")
+
+
+def _current_profile() -> str | None:
+    raw = os.getenv("EXEC_PROFILE")
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
 
 
 @dataclass
@@ -140,9 +150,41 @@ def _scale_config_for_safe_mode(
 
 
 class RiskGovernor:
-    def __init__(self, cfg: RiskConfig):
+    def __init__(self, cfg: RiskConfig, *, alerts: OpsAlertsPipeline | None = None):
         self.cfg = cfg
         self.state = RiskState()
+        self._alerts = alerts
+
+    def _emit_alert(
+        self,
+        *,
+        limit_type: str,
+        reason: str,
+        venue: str,
+        symbol: str,
+        strategy: str,
+        context: Mapping[str, object] | None = None,
+    ) -> None:
+        if self._alerts is None:
+            return
+        payload: Dict[str, object] = {
+            "limit_type": limit_type,
+            "reason": reason,
+            "venue": str(venue or ""),
+            "symbol": str(symbol or ""),
+            "strategy": str(strategy or ""),
+        }
+        if context:
+            payload.update(dict(context))
+        profile = _current_profile()
+        if profile:
+            payload["profile"] = profile
+        self._alerts.notify_event(
+            event_type=RISK_LIMIT_BREACHED,
+            message=f"Risk limit breached: {limit_type}",
+            level=AlertLevel.CRITICAL,
+            context=payload,
+        )
 
     def _today(self, now_s: int) -> str:
         return time.strftime("%Y%m%d", time.gmtime(now_s))
@@ -182,17 +224,17 @@ class RiskGovernor:
         symbol: str,
         strategy: str,
         notional: Decimal,
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], Dict[str, object]]:
         venue_cap = self.cfg.cap_per_venue.get(venue)
         if venue_cap is not None and notional > venue_cap:
-            return "venue_cap"
+            return "venue_cap", {"limit": venue_cap, "scope": venue}
         symbol_cap = self.cfg.cap_per_symbol.get((venue, symbol))
         if symbol_cap is not None and notional > symbol_cap:
-            return "symbol_cap"
+            return "symbol_cap", {"limit": symbol_cap, "scope": f"{venue}:{symbol}"}
         strategy_cap = self.cfg.cap_per_strategy.get(strategy)
         if strategy_cap is not None and notional > strategy_cap:
-            return "strategy_cap"
-        return None
+            return "strategy_cap", {"limit": strategy_cap, "scope": strategy}
+        return None, {}
 
     def allow_order(
         self,
@@ -207,16 +249,45 @@ class RiskGovernor:
         self._reset_day_if_needed(now_value)
         reason = self._check_global_cooloff(now_value)
         if reason is not None:
+            self._emit_alert(
+                limit_type="daily_cooloff",
+                reason=reason,
+                venue=venue,
+                symbol=symbol,
+                strategy=strategy,
+                context={"cooloff_until": self.state.in_cooloff_until},
+            )
             return False, reason
         key = (venue, symbol, strategy)
         reason = self._check_key_cooloff(key, now_value)
         if reason is not None:
+            self._emit_alert(
+                limit_type="key_cooloff",
+                reason=reason,
+                venue=venue,
+                symbol=symbol,
+                strategy=strategy,
+                context={
+                    "cooloff_until": self.state.key_cooloff_until.get(key, 0),
+                    "rejects": self.state.rejects.get(key, 0),
+                },
+            )
             return False, reason
         qty_abs = qty.copy_abs()
         price_abs = price.copy_abs()
         notional = price_abs * qty_abs
-        reason = self._check_notional_caps(venue, symbol, strategy, notional)
+        reason, details = self._check_notional_caps(venue, symbol, strategy, notional)
         if reason is not None:
+            context: Dict[str, object] = {"notional": notional}
+            context.update(details)
+            self._emit_alert(
+                limit_type=reason,
+                reason=reason,
+                venue=venue,
+                symbol=symbol,
+                strategy=strategy,
+                context=context,
+            )
             return False, reason
         return True, ""
 
@@ -250,6 +321,14 @@ class RiskGovernor:
                         "cooloff_until": until,
                     },
                 },
+            )
+            self._emit_alert(
+                limit_type="reject_cooloff",
+                reason="reject_cooloff",
+                venue=venue,
+                symbol=symbol,
+                strategy=strategy,
+                context={"cooloff_until": until, "reject_count": count},
             )
 
     def on_ack(self, venue: str, symbol: str, strategy: str) -> None:
@@ -287,6 +366,19 @@ class RiskGovernor:
                         "realized_pnl": str(self.state.realized_pnl),
                         "cooloff_until": self.state.in_cooloff_until,
                     },
+                },
+            )
+            self._emit_alert(
+                limit_type="daily_loss_limit",
+                reason="daily_loss_limit",
+                venue=venue,
+                symbol=symbol,
+                strategy=strategy,
+                context={
+                    "cooloff_until": self.state.in_cooloff_until,
+                    "realized_pnl": self.state.realized_pnl,
+                    "limit": limit,
+                    "scope": "global",
                 },
             )
 
