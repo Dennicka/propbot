@@ -8,9 +8,11 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List
 
+from app.alerts.events import evt_recon_issues
 from app.db import ledger
 from app.metrics.core import counter as metrics_counter, gauge as metrics_gauge
 from app.metrics.recon import RECON_ISSUES_TOTAL
+from app.ops.hooks import ops_alert
 
 try:  # pragma: no cover - optional dependency guard
     from app.outbox.journal import OutboxJournal
@@ -142,6 +144,9 @@ def run_recon(now: float) -> Dict[str, object]:
         RECON_ISSUES_TOTAL.labels(kind=kind, code="orders", severity="WARN").inc()
 
     _write_report(_report_path(), report)
+    if issues:
+        sample = [str(entry.get("kind", "")) for entry in issues[:3]]
+        ops_alert(evt_recon_issues(len(issues), sample))
     return report
 
 

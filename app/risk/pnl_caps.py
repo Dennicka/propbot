@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
 
+from app.alerts.events import evt_pnl_cap
+from app.ops.hooks import ops_alert
+
 
 def _today_key(t: float, tz: str) -> str:
     if tz.upper() == "UTC":
@@ -97,6 +100,9 @@ class PnLCapsGuard:
         self.agg = agg
         self.clock = clock
 
+    def _notify(self, scope: str, reason: str) -> None:
+        ops_alert(evt_pnl_cap(scope=scope, reason=reason))
+
     def _cool(self, stats: DayStats) -> None:
         now = self.clock.time()
         if stats.cooloff_until <= now:
@@ -112,26 +118,38 @@ class PnLCapsGuard:
         strat_stats: DayStats = per.get(strategy, DayStats())
 
         if global_stats.cooloff_until > now:
-            return (True, f"cooloff-global-{int(global_stats.cooloff_until - now)}s")
+            reason = f"cooloff-global-{int(global_stats.cooloff_until - now)}s"
+            self._notify("global", reason)
+            return (True, reason)
         if strat_stats.cooloff_until > now:
-            return (True, f"cooloff-{strategy}-{int(strat_stats.cooloff_until - now)}s")
+            reason = f"cooloff-{strategy}-{int(strat_stats.cooloff_until - now)}s"
+            self._notify(strategy, reason)
+            return (True, reason)
 
         if self.p.cap_global > 0 and global_stats.last <= -self.p.cap_global:
             self._cool(global_stats)
-            return (True, "daily-loss-cap-global")
+            reason = "daily-loss-cap-global"
+            self._notify("global", reason)
+            return (True, reason)
 
         cap_strat = self.p.cap_per.get(strategy, Decimal("0"))
         if cap_strat > 0 and strat_stats.last <= -cap_strat:
             self._cool(strat_stats)
-            return (True, f"daily-loss-cap-{strategy}")
+            reason = f"daily-loss-cap-{strategy}"
+            self._notify(strategy, reason)
+            return (True, reason)
 
         if self.p.dd_global > 0 and (global_stats.peak - global_stats.last) > self.p.dd_global:
             self._cool(global_stats)
-            return (True, "drawdown-cap-global")
+            reason = "drawdown-cap-global"
+            self._notify("global", reason)
+            return (True, reason)
 
         dd_strat = self.p.dd_per.get(strategy, Decimal("0"))
         if dd_strat > 0 and (strat_stats.peak - strat_stats.last) > dd_strat:
             self._cool(strat_stats)
-            return (True, f"drawdown-cap-{strategy}")
+            reason = f"drawdown-cap-{strategy}"
+            self._notify(strategy, reason)
+            return (True, reason)
 
         return (False, "ok")

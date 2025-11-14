@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from time import time
 from typing import Dict, Optional, Set
 
+from app.alerts.events import evt_readiness
+from app.ops.hooks import ops_alert
+
 DEFAULT_REQUIRED_SIGNALS: Set[str] = {"market", "recon", "adapters"}
 
 
@@ -19,6 +22,7 @@ class HealthAggregator:
         self._ttl = int(ttl_seconds)
         self._req: Set[str] = set(required) if required else set(DEFAULT_REQUIRED_SIGNALS)
         self._signals: Dict[str, Signal] = {}
+        self._last_ready: Optional[bool] = None
 
     @property
     def ttl_seconds(self) -> int:
@@ -47,6 +51,7 @@ class HealthAggregator:
 
     def clear(self) -> None:
         self._signals.clear()
+        self._last_ready = None
 
     def is_ready(self, now: Optional[float] = None) -> tuple[bool, str]:
         t = now or time()
@@ -59,10 +64,21 @@ class HealthAggregator:
             elif not signal.ok:
                 bad.append(f"{name}:{signal.reason or 'fail'}")
         if missing:
-            return False, "readiness-missing:" + ",".join(missing)
-        if bad:
-            return False, "readiness-bad:" + ",".join(bad)
-        return True, "ok"
+            ready = False
+            detail = "readiness-missing:" + ",".join(missing)
+        elif bad:
+            ready = False
+            detail = "readiness-bad:" + ",".join(bad)
+        else:
+            ready = True
+            detail = "ok"
+        previous = self._last_ready
+        self._last_ready = ready
+        if previous is True and not ready:
+            ops_alert(evt_readiness("bad", detail))
+        elif previous is False and ready:
+            ops_alert(evt_readiness("ok", "recovered"))
+        return ready, detail
 
 
 _AGG = HealthAggregator()
