@@ -17,6 +17,7 @@ from app.ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from app.readiness.live import registry
 from app.risk.risk_governor import get_risk_governor
 from app.services import runtime
+from app.ui.config_snapshot import build_ui_config_snapshot
 
 from .util.logging import setup_logging
 from .services.status import get_status_overview, get_status_components, get_status_slo
@@ -94,6 +95,14 @@ async def get_ui_status() -> dict[str, Any]:
         alerts_registry=alerts_registry,
     )
     return ops_snapshot_to_dict(snapshot)
+
+
+@app.get("/api/ui/config")
+async def get_ui_config() -> dict[str, Any]:
+    """Return the current runtime configuration snapshot for UI."""
+
+    snapshot = build_ui_config_snapshot()
+    return {"config": snapshot}
 
 
 @app.get("/api/ui/alerts")

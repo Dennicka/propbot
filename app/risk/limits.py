@@ -6,7 +6,9 @@ import logging
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, TypedDict
+
+from app.config import feature_flags
 
 
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +32,16 @@ class RiskState:
     in_cooloff_until: int = 0
     rejects: Dict[Tuple[str, str, str], int] = field(default_factory=dict)
     key_cooloff_until: Dict[Tuple[str, str, str], int] = field(default_factory=dict)
+
+
+class RiskLimitsSnapshot(TypedDict):
+    enabled: bool
+    max_notional_per_venue: dict[str, float]
+    max_notional_per_symbol: dict[str, float]
+    daily_loss_limit: float | None
+    daily_loss_used: float | None
+    rejects_recent: int | None
+    extra: dict[str, float]
 
 
 class RiskGovernor:
@@ -218,4 +230,69 @@ def load_config_from_env() -> RiskConfig:
     return cfg
 
 
-__all__ = ["RiskConfig", "RiskState", "RiskGovernor", "load_config_from_env"]
+def _as_float(value: Decimal | float | int | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _serialise_cap_map(mapping: Dict[str, Decimal]) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for key, value in mapping.items():
+        numeric = _as_float(value)
+        if numeric is None:
+            continue
+        result[str(key)] = numeric
+    return result
+
+
+def _serialise_symbol_map(mapping: Dict[Tuple[str, str], Decimal]) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for (venue, symbol), value in mapping.items():
+        numeric = _as_float(value)
+        if numeric is None:
+            continue
+        result[f"{venue}:{symbol}"] = numeric
+    return result
+
+
+def get_risk_limits_snapshot() -> RiskLimitsSnapshot:
+    """Return configured risk limits for UI consumers."""
+
+    enabled = bool(feature_flags.risk_limits_on())
+    snapshot: RiskLimitsSnapshot = {
+        "enabled": enabled,
+        "max_notional_per_venue": {},
+        "max_notional_per_symbol": {},
+        "daily_loss_limit": None,
+        "daily_loss_used": None,
+        "rejects_recent": None,
+        "extra": {},
+    }
+    if not enabled:
+        return snapshot
+    try:
+        cfg = load_config_from_env()
+    except Exception:  # pragma: no cover - defensive
+        return snapshot
+    snapshot["max_notional_per_venue"] = _serialise_cap_map(cfg.cap_per_venue)
+    snapshot["max_notional_per_symbol"] = _serialise_symbol_map(cfg.cap_per_symbol)
+    snapshot["daily_loss_limit"] = _as_float(cfg.daily_loss_limit)
+    snapshot["extra"] = {
+        "daily_cooloff_sec": float(max(cfg.daily_cooloff_sec, 0)),
+        "rejects_cooloff_sec": float(max(cfg.rejects_cooloff_sec, 0)),
+        "max_consecutive_rejects": float(max(cfg.max_consecutive_rejects, 0)),
+    }
+    return snapshot
+
+
+__all__ = [
+    "RiskConfig",
+    "RiskState",
+    "RiskGovernor",
+    "load_config_from_env",
+    "get_risk_limits_snapshot",
+]

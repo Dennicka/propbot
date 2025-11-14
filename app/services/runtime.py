@@ -25,6 +25,7 @@ from typing import (
     Mapping,
     Sequence,
     Tuple,
+    TypedDict,
 )
 
 import httpx
@@ -59,7 +60,7 @@ from ..utils.chaos import (
     configure as configure_chaos,
     resolve_settings as resolve_chaos_settings,
 )
-from ..config.profile import TradingProfile, load_profile_from_env
+from ..config.profile import TradingProfile, is_live, load_profile_from_env
 
 
 if TYPE_CHECKING:
@@ -92,6 +93,54 @@ _STATE_LOCK = threading.RLock()
 _STUCK_RESOLVER_INSTANCE: object | None = None
 
 _PROFILE: TradingProfile | None = None
+
+
+class RuntimeProfileSnapshot(TypedDict):
+    name: str
+    env: str | None
+    is_live: bool
+    created_at: float | None
+    extra: dict[str, Any]
+
+
+def get_runtime_profile_snapshot() -> RuntimeProfileSnapshot:
+    """Return a lightweight snapshot of the active runtime profile."""
+
+    snapshot: RuntimeProfileSnapshot = {
+        "name": "unknown",
+        "env": None,
+        "is_live": False,
+        "created_at": None,
+        "extra": {},
+    }
+    try:
+        profile = get_profile()
+    except RuntimeError:
+        profile = None
+    if profile is not None:
+        snapshot["name"] = profile.name
+        snapshot["is_live"] = is_live(profile)
+        snapshot["extra"] = {
+            "allow_trading": bool(profile.allow_trading),
+            "strict_flags": bool(profile.strict_flags),
+        }
+    env_value: str | None = None
+    try:
+        state = get_state()
+        control = getattr(state, "control", None)
+        if control is not None:
+            raw_env = getattr(control, "environment", None)
+            if raw_env:
+                env_value = str(raw_env)
+    except RuntimeError:
+        env_value = None
+    if env_value is None:
+        fallback = os.environ.get("MODE") or os.environ.get("ENVIRONMENT") or os.environ.get("ENV")
+        if fallback:
+            env_value = str(fallback)
+    if env_value:
+        snapshot["env"] = env_value
+    return snapshot
 
 
 def get_profile() -> TradingProfile:
