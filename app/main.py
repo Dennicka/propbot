@@ -276,7 +276,9 @@ def create_app() -> FastAPI:
             market_watchdog=market_watchdog,
             alerts_registry=alerts_registry,
         )
-        return ops_snapshot_to_dict(snapshot)
+        payload = ops_snapshot_to_dict(snapshot)
+        payload["config"] = build_ui_config_snapshot()
+        return payload
 
     @app.get("/api/ui/config")
     async def get_ui_config() -> dict[str, Any]:
