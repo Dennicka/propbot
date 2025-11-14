@@ -20,6 +20,7 @@ def test_get_ui_config_basic(client: TestClient, monkeypatch) -> None:
     assert "runtime" in config
     assert "router" in config
     assert "risk_limits" in config
+    assert "strategies" in config
 
     runtime_cfg = config["runtime"]
     assert isinstance(runtime_cfg.get("name"), str)
@@ -31,3 +32,11 @@ def test_get_ui_config_basic(client: TestClient, monkeypatch) -> None:
     risk_cfg = config["risk_limits"]
     assert "enabled" in risk_cfg
     assert isinstance(risk_cfg["enabled"], bool)
+
+    strategies_cfg = config["strategies"]
+    assert "items" in strategies_cfg
+    assert isinstance(strategies_cfg["items"], list)
+    if strategies_cfg["items"]:
+        first = strategies_cfg["items"][0]
+        assert "id" in first
+        assert "max_notional_usd" in first

@@ -78,6 +78,7 @@ from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 from ..risk.budgets import get_risk_budgets
 from ..risk.limits import RiskGovernor, load_config_from_env
+from ..strategies.budgets import StrategyBudgetCheckInput, check_strategy_budget
 from ..strategies.registry import StrategyId, get_strategy_registry
 from .timeouts import DeadlineTracker
 from ..sor.plan import Leg, RoutePlan
@@ -1159,6 +1160,72 @@ class SmartRouter:
                     return _router_response(
                         {"ok": False, "reason": "readiness-agg", "detail": detail}
                     )
+            strategy_budget_notional = Decimal("0")
+            try:
+                price_for_strategy_budget = Decimal("0") if price is None else Decimal(str(price))
+                qty_for_strategy_budget = Decimal(str(qty))
+                strategy_budget_notional = (
+                    price_for_strategy_budget * qty_for_strategy_budget
+                ).copy_abs()
+            except (ArithmeticError, ValueError):  # pragma: no cover - defensive
+                strategy_budget_notional = Decimal("0")
+            daily_pnl_for_strategy: Decimal | None = None
+            try:
+                pnl_snapshot = self._pnl_agg.snapshot()
+            except Exception:  # pragma: no cover - defensive
+                pnl_snapshot = {}
+            else:
+                per_strat_obj = pnl_snapshot.get("per_strat", {})
+                if isinstance(per_strat_obj, Mapping):
+                    stats = per_strat_obj.get(strategy)
+                    if isinstance(stats, DayStats):
+                        daily_pnl_for_strategy = stats.last
+            strategy_budget_input = StrategyBudgetCheckInput(
+                strategy_id=strategy,
+                notional_usd_after=strategy_budget_notional,
+                daily_pnl_usd=daily_pnl_for_strategy,
+                open_positions_after=None,
+                profile=getattr(profile, "name", None) if profile is not None else None,
+                context={"venue": venue, "symbol": symbol},
+            )
+            strategy_budget_decision = check_strategy_budget(strategy_budget_input)
+            if not strategy_budget_decision.allowed:
+                LOGGER.warning(
+                    "smart_router.strategy_budget_blocked",
+                    extra={
+                        "event": "smart_router_strategy_budget_blocked",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "strategy": strategy,
+                            "symbol": symbol,
+                            "breached_limit": strategy_budget_decision.breached_limit,
+                            "reason": strategy_budget_decision.reason,
+                            "notional_usd_after": str(strategy_budget_notional),
+                        },
+                    },
+                )
+                metrics_reason = "strategy-budget"
+                ops_alert(
+                    evt_router_block(
+                        reason="strategy-budget",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={
+                            "breached_limit": strategy_budget_decision.breached_limit,
+                            "detail": strategy_budget_decision.reason,
+                        },
+                    )
+                )
+                return _router_response(
+                    {
+                        "client_order_id": client_order_id,
+                        "status": "strategy_budget_blocked",
+                        "reason": "strategy-budget",
+                        "detail": strategy_budget_decision.reason,
+                        "breached_limit": strategy_budget_decision.breached_limit,
+                    }
+                )
             if self._risk_governor is not None:
                 price_for_risk = Decimal("0") if price is None else Decimal(str(price))
                 qty_for_risk = Decimal(str(qty))
