@@ -18,6 +18,8 @@ from app.db import ledger as ledger_db
 from app.health.aggregator import DEFAULT_REQUIRED_SIGNALS, get_agg
 from app.hedge.policy import HedgeLeg
 from app.market.watchdog import watchdog
+from app.ops.hooks import ops_alert
+from app.alerts.events import evt_error, evt_router_block
 from app.metrics.core import (
     DEFAULT_METRICS_PATH as _DEFAULT_METRICS_PATH,
     METRICS_PATH_ENV as _METRICS_PATH_ENV,
@@ -536,6 +538,14 @@ class SmartRouter:
         if plan is None:
             block_reason = f"sor-block:{reason}"
             _SOR_BLOCKS_TOTAL.labels(reason=reason).inc()
+            ops_alert(
+                evt_router_block(
+                    reason=f"sor:{reason}",
+                    strategy=strategy,
+                    symbol=symbol,
+                    extra={"plan": "none"},
+                )
+            )
             return {"status": "blocked", "reason": block_reason, "plan": None}
 
         _SOR_PLANS_TOTAL.inc()
@@ -920,11 +930,27 @@ class SmartRouter:
         try:
             if SafeMode.is_active():
                 metrics_reason = "safe-mode"
+                ops_alert(
+                    evt_router_block(
+                        reason="safe-mode",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={"venue": venue},
+                    )
+                )
                 return {"ok": False, "reason": "safe-mode"}
             block, detail = self._pnl_guard.should_block(strategy)
             if block:
                 _PNLCAP_BLOCKS_TOTAL.labels(reason=detail, strategy=strategy).inc()
                 metrics_reason = "pnl-cap"
+                ops_alert(
+                    evt_router_block(
+                        reason="pnl-cap",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={"detail": detail},
+                    )
+                )
                 return {"ok": False, "reason": "pnl-cap", "detail": detail}
             profile = get_profile()
             guard_reason = None
@@ -947,6 +973,14 @@ class SmartRouter:
                         },
                     )
                     metrics_reason = "live-guard"
+                    ops_alert(
+                        evt_router_block(
+                            reason=guard_reason,
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"client_order_id": client_order_id},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": guard_reason,
@@ -968,6 +1002,14 @@ class SmartRouter:
                         },
                     )
                     metrics_reason = "readiness-agg"
+                    ops_alert(
+                        evt_router_block(
+                            reason="readiness-agg",
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"detail": detail},
+                        )
+                    )
                     return {"ok": False, "reason": "readiness-agg", "detail": detail}
             if self._risk_governor is not None:
                 price_for_risk = Decimal("0") if price is None else Decimal(str(price))
@@ -995,6 +1037,14 @@ class SmartRouter:
                         },
                     )
                     metrics_reason = "risk"
+                    ops_alert(
+                        evt_router_block(
+                            reason=f"risk:{reason}",
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"venue": venue},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": f"risk-blocked:{reason}",
@@ -1014,6 +1064,14 @@ class SmartRouter:
                     )
                     self._idempo.expire(client_order_id)
                     metrics_reason = "cooldown"
+                    ops_alert(
+                        evt_router_block(
+                            reason="cooldown",
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"remaining": f"{remaining:.2f}"},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": "cooldown",
@@ -1054,6 +1112,14 @@ class SmartRouter:
                     )
                     self._idempo.expire(client_order_id)
                     metrics_reason = "stale-p95"
+                    ops_alert(
+                        evt_router_block(
+                            reason=gate_reason,
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"venue": venue, "p95_ms": str(p95_ms)},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": "marketdata_stale",
@@ -1098,6 +1164,14 @@ class SmartRouter:
                         }
                     )
                 metrics_reason = "dupe-intent"
+                ops_alert(
+                    evt_router_block(
+                        reason="idempotent",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={"client_order_id": client_order_id},
+                    )
+                )
                 return response
 
             side_lower = str(side or "").strip().lower()
@@ -1134,6 +1208,14 @@ class SmartRouter:
                         )
                     self._idempo.expire(client_order_id)
                     metrics_reason = "pretrade"
+                    ops_alert(
+                        evt_router_block(
+                            reason=f"pretrade:{exc.reason}",
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"venue": venue, "side": side_lower},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": "pretrade_rejected",
@@ -1176,6 +1258,14 @@ class SmartRouter:
                     self._idempo.expire(client_order_id)
                     _RISK_BUDGET_BLOCKS_TOTAL.labels(reason=detail_budget).inc()
                     metrics_reason = "risk-budget"
+                    ops_alert(
+                        evt_router_block(
+                            reason="risk-budget",
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"detail": detail_budget},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": "risk_budget_blocked",
@@ -1201,6 +1291,14 @@ class SmartRouter:
                 )
                 self._idempo.expire(client_order_id)
                 metrics_reason = "stale-p95"
+                ops_alert(
+                    evt_router_block(
+                        reason="marketdata-stale",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={"venue": venue},
+                    )
+                )
                 return {
                     "client_order_id": client_order_id,
                     "status": "marketdata_stale",
@@ -1227,12 +1325,28 @@ class SmartRouter:
                     LOGGER.info("duplicate-intent-skip %s", intent_key)
                     self._outbox_cleanup()
                     metrics_reason = "dupe-intent"
+                    ops_alert(
+                        evt_router_block(
+                            reason="duplicate-intent",
+                            strategy=strategy,
+                            symbol=symbol,
+                            extra={"intent_key": intent_key},
+                        )
+                    )
                     return {
                         "client_order_id": client_order_id,
                         "status": "duplicate_intent",
                         "reason": "dupe-intent",
                     }
                 metrics_reason = "dupe-intent"
+                ops_alert(
+                    evt_router_block(
+                        reason="duplicate-intent",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={"intent_key": intent_key},
+                    )
+                )
                 return {
                     "client_order_id": client_order_id,
                     "status": "pretrade_rejected",
@@ -1256,6 +1370,14 @@ class SmartRouter:
                         self._run_intent_window_cleanup()
                         metrics_reason = "outbox-inflight"
                         _OUTBOX_BLOCKS_TOTAL.labels(reason="inflight").inc()
+                        ops_alert(
+                            evt_router_block(
+                                reason="outbox-inflight",
+                                strategy=strategy,
+                                symbol=symbol,
+                                extra={"intent_key": intent_key},
+                            )
+                        )
                         return {
                             "client_order_id": client_order_id,
                             "status": "duplicate_intent",
@@ -1453,6 +1575,12 @@ class SmartRouter:
                 state=previous_state,
                 details={"reason": "unknown_event"},
             )
+            ops_alert(
+                evt_error(
+                    "router-invalid-event",
+                    f"client_order_id={client_order_id} event={event_key}",
+                )
+            )
             return previous_state
 
         try:
@@ -1465,6 +1593,12 @@ class SmartRouter:
                 event=event_key,
                 state=previous_state,
                 details={"target_state": candidate_state.value, "error": str(exc)},
+            )
+            ops_alert(
+                evt_error(
+                    "router-state-error",
+                    f"client_order_id={client_order_id} target={candidate_state.value}",
+                )
             )
             return previous_state
 
@@ -1500,6 +1634,12 @@ class SmartRouter:
                     },
                 },
                 exc_info=exc,
+            )
+            ops_alert(
+                evt_error(
+                    "router-apply-event-error",
+                    f"client_order_id={client_order_id} event={event_key}",
+                )
             )
             return previous_state
 
