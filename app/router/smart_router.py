@@ -78,6 +78,7 @@ from ..utils.symbols import normalise_symbol
 from ..util.venues import VENUE_ALIASES
 from ..risk.budgets import get_risk_budgets
 from ..risk.limits import RiskGovernor, load_config_from_env
+from ..strategies.registry import StrategyId, get_strategy_registry
 from .timeouts import DeadlineTracker
 from ..sor.plan import Leg, RoutePlan
 from ..sor.select import Quote, select_best_pair
@@ -102,6 +103,16 @@ _PNLCAP_BLOCKS_TOTAL = metrics_counter("propbot_pnlcap_blocks_total", labels=("r
 _PNLCAP_DAY_REALIZED = metrics_gauge("propbot_pnl_day_realized_usd", labels=("scope",))
 _PNLCAP_DAY_PEAK = metrics_gauge("propbot_pnl_day_peak_usd", labels=("scope",))
 _PNLCAP_COOLOFF = metrics_gauge("propbot_pnl_cooloff_sec", labels=("scope",))
+_UNKNOWN_STRATEGIES_LOGGED: set[StrategyId] = set()
+
+
+def _normalise_strategy_id(value: str | None) -> StrategyId:
+    raw = (value or "").strip()
+    if not raw:
+        return "xex_arb"
+    if raw.lower() == "xarb":
+        return "xex_arb"
+    return raw
 
 
 class RouterControlSnapshot(TypedDict):
@@ -584,8 +595,8 @@ class SmartRouter:
     def _sor_enabled(self, strategy: str) -> bool:
         if not _feature_flag_enabled("FF_SOR_V1", False):
             return False
-        strategy_key = str(strategy or "").strip().lower()
-        return strategy_key in {"xarb", "inter_venue_arb"}
+        strategy_key = _normalise_strategy_id(strategy).lower()
+        return strategy_key in {"xex_arb", "inter_venue_arb"}
 
     def _get_sor_quotes(self, symbol: str) -> Dict[str, Quote]:
         source = self._market_data
@@ -634,6 +645,7 @@ class SmartRouter:
         ts_ns: int,
         nonce: int,
     ) -> Dict[str, object]:
+        strategy = _normalise_strategy_id(strategy)
         if not self._sor_enabled(strategy):
             return {
                 "status": "disabled",
@@ -1037,11 +1049,22 @@ class SmartRouter:
         metrics_submitted = False
         cost_estimate: TradeCostEstimate | None = None
 
+        strategy = _normalise_strategy_id(strategy)
+        registry = get_strategy_registry()
+        if registry.get(strategy) is None and strategy not in _UNKNOWN_STRATEGIES_LOGGED:
+            _UNKNOWN_STRATEGIES_LOGGED.add(strategy)
+            LOGGER.warning(
+                "smart_router.unknown_strategy_id",
+                extra={"strategy_id": strategy},
+            )
+
         def _router_response(
             payload: Mapping[str, object], *, cost: TradeCostEstimate | None = None
         ) -> Dict[str, object]:
             result = dict(payload)
             result["cost"] = cost if cost is not None else cost_estimate
+            result.setdefault("strategy", strategy)
+            result.setdefault("strategy_id", strategy)
             return result
 
         risk_budget_notional = Decimal("0")
@@ -1703,6 +1726,7 @@ class SmartRouter:
                     "qty": qty_value,
                     "price": price_value,
                     "strategy": strategy,
+                    "strategy_id": strategy,
                     "ts_ns": ts_ns,
                     "created_ts": register_ts,
                     "state": state.value if state is not None else None,

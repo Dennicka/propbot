@@ -49,6 +49,7 @@ from ..risk.exposure_caps import (
 )
 from ..risk.freeze import get_freeze_registry
 from ..util.quantization import QuantizationError, ensure_order_quantized
+from ..strategies.registry import StrategyId, get_strategy_registry
 
 
 LOGGER = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ LOGGER = logging.getLogger(__name__)
 _CRITICAL_CAUSE = "ACCOUNT_HEALTH_CRITICAL"
 _REDUCE_ONLY_BLOCK = "blocked: reduce-only due to ACCOUNT_HEALTH::CRITICAL"
 _FROZEN_BLOCK = "blocked: FROZEN_BY_RISK"
+_UNKNOWN_STRATEGIES_LOGGED: set[StrategyId] = set()
 
 
 def _coerce_float(value: object) -> float:
@@ -357,6 +359,7 @@ class OrderRef:
     request_id: str
     broker_order_id: str | None
     state: order_store.OrderIntentState
+    strategy_id: StrategyId | None = None
 
 
 class OrderRouter:
@@ -428,6 +431,15 @@ class OrderRouter:
         intent_id: str | None = None,
         request_id: str | None = None,
     ) -> OrderRef:
+        strategy_id = _resolve_strategy_id(strategy)
+        strategy = strategy_id
+        registry = get_strategy_registry()
+        if registry.get(strategy_id) is None and strategy_id not in _UNKNOWN_STRATEGIES_LOGGED:
+            _UNKNOWN_STRATEGIES_LOGGED.add(strategy_id)
+            LOGGER.warning(
+                "order_router.unknown_strategy_id",
+                extra={"strategy_id": strategy_id},
+            )
         validator = get_pretrade_validator()
         profile = get_trading_profile()
         try:
@@ -453,6 +465,7 @@ class OrderRouter:
             "type": order_type,
             "tif": tif,
             "strategy": strategy,
+            "strategy_id": strategy_id,
         }
         reduce_only_flag = False
         current_position_value = self._current_position(venue, symbol)
@@ -954,6 +967,7 @@ class OrderRouter:
                         request_id=intent.request_id,
                         broker_order_id=intent.broker_order_id,
                         state=intent.state,
+                        strategy_id=strategy,
                     )
                 if prev_request_id == client_request_id and current_state in (
                     order_store.OrderIntentState.PENDING,
@@ -965,6 +979,7 @@ class OrderRouter:
                         request_id=intent.request_id,
                         broker_order_id=intent.broker_order_id,
                         state=intent.state,
+                        strategy_id=strategy,
                     )
                 try:
                     order_store.update_intent_state(
@@ -1069,6 +1084,7 @@ class OrderRouter:
                 request_id=client_request_id,
                 broker_order_id=broker_order_id,
                 state=order_store.OrderIntentState.ACKED,
+                strategy_id=strategy,
             )
 
     async def cancel_order(
@@ -1155,6 +1171,7 @@ class OrderRouter:
                         request_id=replacement.request_id,
                         broker_order_id=replacement.broker_order_id,
                         state=replacement.state,
+                        strategy_id=_resolve_strategy_id(replacement.strategy),
                     )
             symbol = existing.symbol
             side = existing.side
@@ -1402,3 +1419,12 @@ def _replacement_depth(session, intent_id: str) -> int:
 
 __all__ = ["OrderRouter", "OrderRef", "OrderRouterError", "enforce_reduce_only"]
 _CANARY_BLOCKS_TOTAL = metrics_counter("propbot_canary_blocks_total", labels=("reason",))
+
+
+def _resolve_strategy_id(value: str | None) -> StrategyId:
+    raw = (value or "").strip()
+    if not raw:
+        return "xex_arb"
+    if raw == "xarb":
+        return "xex_arb"
+    return raw

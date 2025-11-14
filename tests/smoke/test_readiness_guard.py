@@ -93,12 +93,11 @@ def router(monkeypatch: pytest.MonkeyPatch) -> SmartRouter:
 def test_guard_blocks_when_signals_missing(router: SmartRouter) -> None:
     response = _register(router)
 
-    assert response == {
-        "ok": False,
-        "reason": "readiness-agg",
-        "detail": "readiness-missing:market,recon",
-        "cost": None,
-    }
+    assert response["ok"] is False
+    assert response["reason"] == "readiness-agg"
+    assert response["detail"] == "readiness-missing:market,recon"
+    assert response.get("cost") is None
+    assert response.get("strategy_id") == "smoke"
 
 
 def test_guard_allows_when_signals_healthy(router: SmartRouter) -> None:
@@ -119,9 +118,8 @@ def test_guard_blocks_when_signal_bad(router: SmartRouter) -> None:
 
     response = _register(router)
 
-    assert response == {
-        "ok": False,
-        "reason": "readiness-agg",
-        "detail": "readiness-bad:recon:lag",
-        "cost": None,
-    }
+    assert response["ok"] is False
+    assert response["reason"] == "readiness-agg"
+    assert response["detail"] == "readiness-bad:recon:lag"
+    assert response.get("cost") is None
+    assert response.get("strategy_id") == "smoke"

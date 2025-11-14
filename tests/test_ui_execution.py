@@ -44,3 +44,5 @@ def test_ui_execution_includes_cost(client) -> None:
     assert order["client_order_id"] == "test-order"
     assert order["cost"]["total_cost"] == str(estimate.total_cost)
     assert order["cost"]["estimated_fee"] == str(estimate.estimated_fee)
+    assert "strategy_id" in order
+    assert order["strategy_id"] == "pytest"

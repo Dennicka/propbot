@@ -62,6 +62,7 @@ from ..utils.chaos import (
     configure as configure_chaos,
     resolve_settings as resolve_chaos_settings,
 )
+from ..strategies.registry import register_default_strategies
 from ..config.profile import TradingProfile, is_live, load_profile_from_env
 
 
@@ -1062,6 +1063,7 @@ def _bootstrap_runtime() -> RuntimeState:
     loaded = load_app_config(config_path)
     chaos_settings = resolve_chaos_settings(getattr(loaded.data, "chaos", None))
     configure_chaos(chaos_settings)
+    register_default_strategies()
     execution_cfg = getattr(loaded.data, "execution", None)
     resolver_cfg = getattr(execution_cfg, "stuck_resolver", None) if execution_cfg else None
     control_cfg = loaded.data.control
@@ -2044,6 +2046,9 @@ def _serialise_trade_cost(cost: object) -> object:
 
 def record_execution_order(order: Mapping[str, object]) -> Dict[str, object]:
     payload = dict(order)
+    if "strategy_id" not in payload:
+        strategy_value = payload.get("strategy")
+        payload["strategy_id"] = str(strategy_value) if strategy_value else None
     if "cost" in payload:
         payload["cost"] = _serialise_trade_cost(payload.get("cost"))
     with _STATE_LOCK:
@@ -2060,6 +2065,9 @@ def update_execution_order(client_order_id: str, updates: Mapping[str, object]) 
     update_payload = dict(updates)
     if "cost" in update_payload:
         update_payload["cost"] = _serialise_trade_cost(update_payload.get("cost"))
+    if "strategy_id" not in update_payload and "strategy" in update_payload:
+        strategy_value = update_payload.get("strategy")
+        update_payload["strategy_id"] = str(strategy_value) if strategy_value else None
     with _STATE_LOCK:
         for entry in reversed(_STATE.execution.orders):
             if str(entry.get("client_order_id")) == str(client_order_id):
