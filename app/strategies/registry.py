@@ -14,6 +14,7 @@ class StrategyInfo:
     description: str
     tags: List[str]
     max_notional_usd: float | None = None
+    max_daily_loss_usd: float | None = None
     max_open_positions: int | None = None
 
 
@@ -55,8 +56,9 @@ def register_default_strategies() -> None:
             name="Cross-exchange arbitrage",
             description="Simple cross-exchange perp arbitrage (long/short on two venues).",
             tags=["arb", "xex", "perp"],
-            max_notional_usd=None,
-            max_open_positions=None,
+            max_notional_usd=50_000.0,
+            max_daily_loss_usd=1_000.0,
+            max_open_positions=10,
         )
     )
     reg.register(

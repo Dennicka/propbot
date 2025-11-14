@@ -72,6 +72,7 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
             "risk_limits_enabled": True,
         },
         "risk_limits": {"enabled": True},
+        "strategies": {"items": []},
     }
 
     monkeypatch.setattr("app.server_ws.runtime", dummy_router)
@@ -126,6 +127,7 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
     assert "runtime" in config
     assert "router" in config
     assert "risk_limits" in config
+    assert "strategies" in config
 
     runtime = config["runtime"]
     assert isinstance(runtime.get("name"), str)
@@ -136,3 +138,7 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
 
     risk_limits = config["risk_limits"]
     assert "enabled" in risk_limits
+
+    strategies_block = config["strategies"]
+    assert "items" in strategies_block
+    assert isinstance(strategies_block["items"], list)
