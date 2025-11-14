@@ -1,66 +1,68 @@
 from __future__ import annotations
 
 import logging
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from typing import Sequence
+import os
+from typing import Any, Mapping
+from urllib.parse import urlparse
 
-LOGGER = logging.getLogger(__name__)
+import requests
 
-_API_URL = "https://api.telegram.org"
+log = logging.getLogger(__name__)
+
+ALLOW_NETLOC = {"api.telegram.org"}
+ALLOW_SCHEMES = {"https"}
+
+TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
 
 
-def _build_url(token: str) -> str:
-    return f"{_API_URL}/bot{token}/sendMessage"
+class TelegramWireError(RuntimeError):
+    """Raised when Telegram wire validations or delivery fail."""
+
+
+def _assert_safe_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOW_SCHEMES:
+        raise TelegramWireError(f"Disallowed URL scheme: {parsed.scheme!r}")
+    if parsed.netloc not in ALLOW_NETLOC:
+        raise TelegramWireError(f"Disallowed host: {parsed.netloc!r}")
 
 
 def send_message(
-    *,
     token: str,
-    chat_id: str,
+    chat_id: str | int,
     text: str,
-    timeout: int,
-    retries: Sequence[int],
-) -> bool:
-    if not token or not chat_id:
-        LOGGER.warning("telegram.send_message_missing_credentials")
-        return False
-    url = _build_url(token)
-    payload = {
-        "chat_id": chat_id,
+    *,
+    timeout: float = 5.0,
+    extra: Mapping[str, Any] | None = None,
+) -> int:
+    """Send a message through the Telegram Bot API."""
+
+    base = TELEGRAM_API_BASE.rstrip("/")
+    url = f"{base}/bot{token}/sendMessage"
+
+    _assert_safe_url(url)
+
+    payload: dict[str, Any] = {
+        "chat_id": str(chat_id),
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": "true",
     }
-    encoded = urllib.parse.urlencode(payload).encode("utf-8")
-    delays = [0, *list(retries)]
-    for delay in delays:
-        if delay > 0:
-            time.sleep(delay)
-        try:
-            request = urllib.request.Request(url, data=encoded, method="POST")  # noqa: S310
-            request.add_header("Content-Type", "application/x-www-form-urlencoded")
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # type: ignore[arg-type]  # noqa: S310
-                status = getattr(response, "status", 200)
-                if 200 <= status < 300:
-                    return True
-                if status < 500:
-                    LOGGER.warning("telegram.send_message_http_error", extra={"status": status})
-                    return False
-        except urllib.error.HTTPError as exc:
-            status = exc.code
-            if status < 500:
-                LOGGER.warning("telegram.send_message_http_error", extra={"status": status})
-                return False
-        except (urllib.error.URLError, TimeoutError) as exc:
-            LOGGER.warning(
-                "telegram.send_message_error",
-                extra={"error": getattr(exc, "reason", str(exc))},
-                exc_info=True,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.exception("telegram.send_message_unhandled")
-            return False
-    return False
+    if extra:
+        payload.update(extra)
+
+    try:
+        response = requests.post(url, data=payload, timeout=timeout)
+    except requests.RequestException as exc:  # pragma: no cover - network failure
+        log.warning("telegram.send_message_error", extra={"error": str(exc)})
+        raise TelegramWireError(str(exc)) from exc
+
+    status = response.status_code
+    if status >= 400:
+        log.warning(
+            "telegram.send_message_http_error",
+            extra={"status": status, "body": response.text[:500]},
+        )
+        raise TelegramWireError(f"Non-2xx from Telegram: {status}")
+
+    return status

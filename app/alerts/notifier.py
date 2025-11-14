@@ -329,14 +329,30 @@ def _build_notifier() -> MultiNotifier:
         if token and chat_id:
             from . import wire_telegram
 
+            delays = [0.0, *(float(d) for d in retries)] if retries else [0.0]
+
             def _send(text: str) -> bool:
-                return wire_telegram.send_message(
-                    token=token,
-                    chat_id=chat_id,
-                    text=text,
-                    timeout=timeout,
-                    retries=retries,
-                )
+                extra = {"disable_web_page_preview": "true"}
+                for delay in delays:
+                    if delay > 0:
+                        time.sleep(delay)
+                    try:
+                        status = wire_telegram.send_message(
+                            token=token,
+                            chat_id=chat_id,
+                            text=text,
+                            timeout=float(timeout),
+                            extra=extra,
+                        )
+                    except wire_telegram.TelegramWireError as exc:
+                        LOGGER.warning(
+                            "alerts.telegram_send_retry",
+                            extra={"delay": delay, "error": str(exc)},
+                        )
+                        continue
+                    return 200 <= status < 300
+                LOGGER.warning("alerts.telegram_send_failed")
+                return False
 
             notifier.add_sink("telegram", TelegramSink(_send))
         else:
