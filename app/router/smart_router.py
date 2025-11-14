@@ -63,6 +63,7 @@ from ..services.runtime import (
     get_state,
 )
 from ..services.safe_mode import SafeMode
+from ..pricing import estimate_trade_cost
 from ..tca.cost_model import (
     FeeInfo,
     FeeTable,
@@ -1410,6 +1411,31 @@ class SmartRouter:
                     "error": "market data stale",
                     "reason": "marketdata_stale",
                 }
+
+            cost = None
+            if (
+                price_value is not None
+                and price_value > 0.0
+                and qty_value > 0.0
+                and side_lower in {"buy", "sell"}
+            ):
+                cost = estimate_trade_cost(
+                    venue=venue,
+                    symbol=symbol,
+                    side=side_lower,
+                    qty=Decimal(str(qty_value)),
+                    price=Decimal(str(price_value)),
+                    taker_fee_bps=Decimal("2"),
+                    funding_rate=None,
+                )
+                LOGGER.debug(
+                    "Cost estimate",
+                    extra={
+                        "venue": venue,
+                        "symbol": symbol,
+                        "total_cost": str(cost.total_cost),
+                    },
+                )
 
             intent_payload = {
                 "venue": venue,
