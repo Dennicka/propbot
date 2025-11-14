@@ -7,8 +7,9 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, MutableMapping, Tuple
 
-from app.utils.chaos import should_drop_ws_update
+from app.health.watchdog import get_watchdog
 from app.metrics.observability import set_market_data_staleness
+from app.utils.chaos import should_drop_ws_update
 
 
 BookFetcher = Callable[[str], Dict[str, float]]
@@ -56,6 +57,7 @@ class MarketDataAggregator:
         with self._lock:
             self._books[key] = entry
         set_market_data_staleness(venue, symbol, 0.0)
+        get_watchdog().mark_marketdata_tick(ts_value)
 
     def _fetch_via_rest(self, venue: str, symbol: str) -> _BookEntry:
         fetcher = self._rest_fetchers.get(venue.lower())
@@ -70,6 +72,7 @@ class MarketDataAggregator:
             self._books[(venue.lower(), symbol.upper())] = entry
         age = max(time.time() - entry.ts, 0.0)
         set_market_data_staleness(venue, symbol, age)
+        get_watchdog().mark_marketdata_tick(entry.ts)
         return entry
 
     def top_of_book(self, venue: str, symbol: str) -> Dict[str, float]:

@@ -411,6 +411,17 @@ def histogram(
     return get_registry().histogram(name, bucket_list, labels)
 
 
+HEALTH_WATCHDOG_OVERALL_GAUGE = gauge("propbot_health_watchdog_overall", labels=("level",))
+for level in ("ok", "warn", "fail"):
+    HEALTH_WATCHDOG_OVERALL_GAUGE.labels(level=level).set(0.0)
+
+HEALTH_WATCHDOG_COMPONENT_GAUGE = gauge(
+    "propbot_health_watchdog_component_level", labels=("component", "level")
+)
+for level in ("ok", "warn", "fail"):
+    HEALTH_WATCHDOG_COMPONENT_GAUGE.labels(component="unknown", level=level).set(0.0)
+
+
 def write_metrics(path: str | os.PathLike[str] | None = None) -> None:
     payload = get_registry().to_text()
     target = Path(path or os.getenv(METRICS_PATH_ENV, DEFAULT_METRICS_PATH))
@@ -438,4 +449,6 @@ __all__ = [
     "get_registry",
     "histogram",
     "write_metrics",
+    "HEALTH_WATCHDOG_COMPONENT_GAUGE",
+    "HEALTH_WATCHDOG_OVERALL_GAUGE",
 ]
