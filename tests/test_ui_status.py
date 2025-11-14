@@ -63,12 +63,23 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
     dummy_readiness = DummyReadinessRegistry()
     dummy_watchdog = DummyMarketWatchdog()
     dummy_alerts = DummyAlertsRegistry()
+    config_snapshot = {
+        "runtime": {"name": "paper", "is_live": False},
+        "router": {
+            "mode": "RESUME",
+            "safe_mode": False,
+            "pretrade_strict": True,
+            "risk_limits_enabled": True,
+        },
+        "risk_limits": {"enabled": True},
+    }
 
     monkeypatch.setattr("app.server_ws.runtime", dummy_router)
     monkeypatch.setattr("app.server_ws.get_risk_governor", lambda: dummy_risk)
     monkeypatch.setattr("app.server_ws.registry", dummy_readiness)
     monkeypatch.setattr("app.server_ws.market_watchdog", dummy_watchdog)
     monkeypatch.setattr("app.server_ws.alerts_registry", dummy_alerts)
+    monkeypatch.setattr("app.server_ws.build_ui_config_snapshot", lambda: config_snapshot)
 
     monkeypatch.setattr("app.main.runtime_service.get_state", lambda: dummy_router.get_state())
     monkeypatch.setattr("app.main.runtime_service.get_profile", lambda: dummy_router.get_profile())
@@ -76,6 +87,7 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
     monkeypatch.setattr("app.main.readiness_registry", dummy_readiness)
     monkeypatch.setattr("app.main.market_watchdog", dummy_watchdog)
     monkeypatch.setattr("app.main.alerts_registry", dummy_alerts)
+    monkeypatch.setattr("app.main.build_ui_config_snapshot", lambda: config_snapshot)
 
     response = client.get("/api/ui/status")
     assert response.status_code == 200
@@ -108,3 +120,19 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
     assert isinstance(alerts["last_n"], list)
     assert alerts["last_n"][0]["message"] == "first"
     assert alerts["last_n"][1]["message"] == "second"
+
+    config = payload["config"]
+    assert config == config_snapshot
+    assert "runtime" in config
+    assert "router" in config
+    assert "risk_limits" in config
+
+    runtime = config["runtime"]
+    assert isinstance(runtime.get("name"), str)
+    assert isinstance(runtime.get("is_live"), bool)
+
+    router = config["router"]
+    assert "safe_mode" in router
+
+    risk_limits = config["risk_limits"]
+    assert "enabled" in risk_limits
