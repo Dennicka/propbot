@@ -17,6 +17,9 @@ from typing import Iterable, Mapping, Sequence
 
 import httpx
 
+from app.alerts.levels import AlertLevel
+from app.alerts.manager import notify as alert_notify
+
 from .. import ledger
 from ..broker.router import ExecutionRouter
 from ..market.watchdog import watchdog
@@ -88,6 +91,8 @@ def _log_recon_failure(
         },
         exc_info=exc,
     )
+    severity = AlertLevel.ERROR if level >= logging.ERROR else AlertLevel.WARN
+    alert_notify(severity, message, source="recon", details=dict(details))
 
 
 def _order_tracker_totals(router) -> tuple[int, int]:
@@ -394,6 +399,12 @@ class ReconDaemon:
                     },
                     exc_info=result,
                 )
+                alert_notify(
+                    AlertLevel.WARN,
+                    "recon.remote_balances_error",
+                    source="recon",
+                    details={"venue": venue, "error": str(result)},
+                )
                 continue
             balances.extend(result)
         return balances
@@ -409,6 +420,12 @@ class ReconDaemon:
                     "component": "recon",
                     "details": {"venue": venue, "category": "balances"},
                 },
+            )
+            alert_notify(
+                AlertLevel.WARN,
+                "recon.remote_balances_timeout",
+                source="recon",
+                details={"venue": venue, "category": "balances"},
             )
             return []
         except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
@@ -451,6 +468,12 @@ class ReconDaemon:
                     },
                     exc_info=result,
                 )
+                alert_notify(
+                    AlertLevel.WARN,
+                    "recon.remote_orders_error",
+                    source="recon",
+                    details={"venue": venue, "error": str(result)},
+                )
                 continue
             orders.extend(result)
         return orders
@@ -466,6 +489,12 @@ class ReconDaemon:
                     "component": "recon",
                     "details": {"venue": venue, "category": "orders"},
                 },
+            )
+            alert_notify(
+                AlertLevel.WARN,
+                "recon.remote_orders_timeout",
+                source="recon",
+                details={"venue": venue, "category": "orders"},
             )
             return []
         except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
@@ -510,6 +539,12 @@ class ReconDaemon:
                     },
                     exc_info=result,
                 )
+                alert_notify(
+                    AlertLevel.WARN,
+                    "recon.remote_pnl_failed",
+                    source="recon",
+                    details={"venue": venue, "error": str(result)},
+                )
                 continue
             snapshots.extend(result)
         return snapshots
@@ -531,6 +566,12 @@ class ReconDaemon:
                     "component": "recon",
                     "details": {"venue": venue, "category": "fills"},
                 },
+            )
+            alert_notify(
+                AlertLevel.WARN,
+                "recon.remote_pnl_timeout",
+                source="recon",
+                details={"venue": venue, "category": "fills"},
             )
             return []
         except _REMOTE_ERRORS as exc:  # pragma: no cover - defensive
@@ -1149,6 +1190,17 @@ class OrderReconDaemon:
                     "order_id": issue.order_id,
                     "age_sec": issue.age_sec,
                     "details": details_payload,
+                },
+            )
+            alert_notify(
+                AlertLevel.WARN,
+                "recon_a.issue",
+                source="recon",
+                details={
+                    "kind": issue.kind,
+                    "order_id": issue.order_id,
+                    "age_sec": issue.age_sec,
+                    **details_payload,
                 },
             )
         if counters_obj is not None and hasattr(counters_obj, "reset"):

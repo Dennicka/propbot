@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import logging
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -11,8 +12,14 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from app.alerts.levels import AlertLevel
+from app.alerts.manager import notify as alert_notify
+
 DEFAULT_RATE_PER_MIN = 30
 DEFAULT_BURST = 10
+
+
+logger = logging.getLogger(__name__)
 
 
 def _guard_request(request: Request, should_guard: Callable[[Request], bool]) -> bool:
@@ -137,6 +144,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "X-RateLimit-Reset": str(max(0, int(math.ceil(outcome.reset_seconds)))),
         }
         if not outcome.allowed:
+            path = request.url.path if request.url else "?"
+            logger.warning(
+                "rate_limit.exceeded",
+                extra={
+                    "identifier": identifier,
+                    "path": path,
+                    "reset": outcome.reset_seconds,
+                },
+            )
+            alert_notify(
+                AlertLevel.WARN,
+                "API rate limit exceeded",
+                source="rate-limit",
+                identifier=identifier,
+                path=path,
+                reset_seconds=outcome.reset_seconds,
+            )
             return JSONResponse({"detail": "rate limit exceeded"}, status_code=429, headers=headers)
 
         response = await call_next(request)
