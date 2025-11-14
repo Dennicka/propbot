@@ -64,3 +64,18 @@ def test_aggregate_portfolio_pnl() -> None:
     assert snapshot.funding_paid == Decimal("0.3")
     assert snapshot.gross_pnl == Decimal("8")
     assert snapshot.net_pnl == Decimal("7.5")
+
+
+def test_portfolio_snapshot_net_pnl_with_fees_and_funding() -> None:
+    snapshot = PortfolioPnlSnapshot(
+        realized_pnl=Decimal("10"),
+        unrealized_pnl=Decimal("5"),
+        fees_paid=Decimal("-2"),
+        funding_paid=Decimal("1"),
+    )
+
+    assert snapshot.gross_pnl == Decimal("15")
+    assert snapshot.net_pnl == Decimal("14")
+    assert snapshot.net_pnl == (
+        snapshot.realized_pnl + snapshot.unrealized_pnl + snapshot.fees_paid + snapshot.funding_paid
+    )
