@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 import sys
 from functools import wraps
@@ -20,6 +21,9 @@ from app.ops.hooks import ops_alert
 from app.services.runtime import get_runtime_profile_snapshot
 
 DEFAULT_REQUIRED_SIGNALS: Set[str] = {"market", "recon", "adapters"}
+
+
+logger = logging.getLogger(__name__)
 
 
 _LEVELS: tuple[str, ...] = ("ok", "warn", "fail")
@@ -243,7 +247,9 @@ def ensure_watchdog_integration() -> None:
             try:
                 live_router.compute_readiness = _wrapped_compute_readiness
             except Exception:  # pragma: no cover - defensive
-                pass
+                logger.exception(
+                    "Failed to wrap live_router.compute_readiness; health watchdog readiness hook disabled",
+                )
 
         if _ORIGINAL_HEALTH_ENDPOINT is None:
             _ORIGINAL_HEALTH_ENDPOINT = health_router.health
