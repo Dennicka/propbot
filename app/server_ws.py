@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
 
-from app.alerts.registry import registry as alerts_registry
+from app.alerts.registry import REGISTRY as alerts_registry
+from app.alerts.registry import build_alerts_payload
 from app.market.watchdog import watchdog as market_watchdog
 from app.ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from app.readiness.live import registry
@@ -93,6 +94,13 @@ async def get_ui_status() -> dict[str, Any]:
         alerts_registry=alerts_registry,
     )
     return ops_snapshot_to_dict(snapshot)
+
+
+@app.get("/api/ui/alerts")
+async def get_ui_alerts(limit: int = 50) -> dict[str, Any]:
+    """Expose the most recent ops alerts for UI consumption."""
+
+    return build_alerts_payload(limit)
 
 
 app.router.routes = [

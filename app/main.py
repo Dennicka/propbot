@@ -51,7 +51,8 @@ from .readiness import (
     wait_for_live_readiness,
 )
 from .readiness.live import registry as readiness_registry
-from .alerts.registry import registry as alerts_registry
+from .alerts.registry import REGISTRY as alerts_registry
+from .alerts.registry import build_alerts_payload
 from .market.watchdog import watchdog as market_watchdog
 from .ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from .risk.risk_governor import get_risk_governor
@@ -275,6 +276,12 @@ def create_app() -> FastAPI:
             alerts_registry=alerts_registry,
         )
         return ops_snapshot_to_dict(snapshot)
+
+    @app.get("/api/ui/alerts")
+    async def get_ui_alerts(limit: int = 50) -> dict[str, Any]:
+        """Expose recent ops alerts for the UI layer."""
+
+        return build_alerts_payload(limit)
 
     setup_ops_notifier(app)
     setup_telegram_bot(app)
