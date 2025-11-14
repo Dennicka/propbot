@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, cast
 
 from ..utils.decimal import to_decimal
 
@@ -26,15 +26,15 @@ class PositionPnlSnapshot:
 
     symbol: str
     venue: str
-    size: object = Decimal("0")
-    entry_price: object = Decimal("0")
-    mark_price: object = Decimal("0")
-    realized_pnl: object = Decimal("0")
-    unrealized_pnl: object = Decimal("0")
-    fees_paid: object = Decimal("0")
-    funding_paid: object = Decimal("0")
-    gross_pnl: object | None = None
-    net_pnl: object | None = None
+    size: Decimal = Decimal("0")
+    entry_price: Decimal = Decimal("0")
+    mark_price: Decimal = Decimal("0")
+    realized_pnl: Decimal = Decimal("0")
+    unrealized_pnl: Decimal = Decimal("0")
+    fees_paid: Decimal = Decimal("0")
+    funding_paid: Decimal = Decimal("0")
+    gross_pnl: Decimal | None = None
+    net_pnl: Decimal | None = None
 
     def __post_init__(self) -> None:
         self.symbol = str(self.symbol or "").upper()
@@ -62,12 +62,12 @@ class PositionPnlSnapshot:
 class PortfolioPnlSnapshot:
     """Aggregated PnL snapshot across multiple positions."""
 
-    realized_pnl: object = Decimal("0")
-    unrealized_pnl: object = Decimal("0")
-    fees_paid: object = Decimal("0")
-    funding_paid: object = Decimal("0")
-    gross_pnl: object | None = None
-    net_pnl: object | None = None
+    realized_pnl: Decimal = Decimal("0")
+    unrealized_pnl: Decimal = Decimal("0")
+    fees_paid: Decimal = Decimal("0")
+    funding_paid: Decimal = Decimal("0")
+    gross_pnl: Decimal | None = None
+    net_pnl: Decimal | None = None
     positions: Tuple[PositionPnlSnapshot, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
@@ -100,7 +100,7 @@ def aggregate_portfolio_pnl(
     unrealized = sum((pos.unrealized_pnl for pos in position_list), Decimal("0"))
     fees = sum((pos.fees_paid for pos in position_list), Decimal("0"))
     funding = sum((pos.funding_paid for pos in position_list), Decimal("0"))
-    gross = sum((pos.gross_pnl for pos in position_list), Decimal("0"))
+    gross = sum((cast(Decimal, pos.gross_pnl) for pos in position_list), Decimal("0"))
     net = gross + fees + funding
 
     return PortfolioPnlSnapshot(
