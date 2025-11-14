@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+from app.alerts.registry import AlertRecord, alerts_to_dict
+
 from app.config import feature_flags
 
 try:
@@ -276,7 +278,9 @@ def _alerts_snapshot(registry: Any, *, limit: int = 10) -> AlertsStatus:
             entries = ()
     normalised: list[Mapping[str, Any]] = []
     for entry in entries:
-        if isinstance(entry, Mapping):
+        if isinstance(entry, AlertRecord):
+            normalised.append(alerts_to_dict([entry])[0])
+        elif isinstance(entry, Mapping):
             normalised.append(dict(entry))
     return AlertsStatus(last_n=tuple(normalised))
 

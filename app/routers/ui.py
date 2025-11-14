@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, conint, conf
 LOGGER = logging.getLogger(__name__)
 
 from .. import ledger
+from ..alerts.registry import build_alerts_payload
 from ..ledger import build_ledger_from_history
 from ..metrics import set_auto_trade_state
 from ..metrics.pnl import publish_daily_snapshots
@@ -2054,19 +2055,32 @@ async def hedge_log(request: Request, limit: int = Query(100, ge=1, le=1_000)) -
 @router.get("/alerts")
 async def ops_alerts(
     request: Request,
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(100, ge=1),
     since: str | None = Query(default=None),
 ) -> dict:
     """Return recent operator alerts, protected by API token."""
 
     require_token(request)
+    payload = build_alerts_payload(limit)
+    items = payload.get("items", [])
+    if since:
+        try:
+            since_ts = datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            since_ts = None
+        else:
+            items = [item for item in items if float(item.get("ts", 0.0)) >= since_ts]
+    payload["items"] = items
+
     try:
         from ..opsbot.notifier import get_recent_alerts
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive
         LOGGER.exception("failed to load ops alerts", extra={"error": str(exc)})
-        return {"alerts": []}
-    alerts = get_recent_alerts(limit=limit, since=since)
-    return {"alerts": alerts}
+        legacy_alerts: list[dict[str, object]] = []
+    else:
+        legacy_alerts = get_recent_alerts(limit=limit, since=since)
+    payload["alerts"] = legacy_alerts
+    return payload
 
 
 @router.get("/audit/export")

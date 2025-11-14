@@ -15,6 +15,8 @@ from typing import Deque, Dict, Iterable, List, Mapping, MutableSequence, Option
 import requests
 from fastapi import FastAPI
 
+from app.alerts.registry import REGISTRY
+
 LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_MAX_RECORDS = 500
@@ -148,6 +150,33 @@ def emit_alert(
         alerts.append(record)
         _trim_records(alerts, _max_records())
         _write_alerts(path, alerts)
+
+    details: dict[str, object] = {}
+    if extra:
+        details["extra"] = dict(extra)
+    if active is not None:
+        details["active"] = bool(active)
+    if alert_id:
+        details["alert_id"] = alert_id
+
+    ts_value = record.get("ts")
+    ts_float: float | None
+    if isinstance(ts_value, str):
+        try:
+            ts_float = datetime.fromisoformat(ts_value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            ts_float = None
+    else:
+        ts_float = None
+
+    REGISTRY.record(
+        level="INFO",
+        source="opsbot",
+        message=text,
+        code=str(kind),
+        details=details,
+        ts=ts_float,
+    )
 
     _enqueue_telegram(record)
     return record

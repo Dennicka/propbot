@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from . import wire_telegram
 from .levels import AlertLevel, should_route
-from .registry import registry as alerts_registry
+from .registry import REGISTRY as alerts_registry
 
 _LOG_FILE_LOCK = threading.Lock()
 
@@ -68,7 +68,23 @@ def notify(level: AlertLevel | str, message: str, **meta: Any) -> None:
     resolved = AlertLevel.coerce(level)
     serialisable_meta = _normalise_meta(meta)
     record = _format_record(resolved, message, serialisable_meta)
-    alerts_registry.record(level=resolved.value, message=message, meta=serialisable_meta)
+
+    registry_details = dict(serialisable_meta)
+    source = registry_details.pop("source", "ops")
+    code = registry_details.pop("code", None)
+    nested_details = registry_details.pop("details", None)
+    if isinstance(nested_details, Mapping):
+        registry_details.update(dict(nested_details))
+    elif nested_details is not None:
+        registry_details["details"] = nested_details
+
+    alerts_registry.record(
+        level=resolved.value,
+        source=source,
+        message=message,
+        code=str(code) if code is not None else None,
+        details=registry_details,
+    )
     _write_stdout(record)
     _write_logfile(record)
 
