@@ -36,6 +36,7 @@ from .routers import ui_risk
 from .routers import ui_pnl_attrib
 from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
+from .api.ui import alerts as ui_alerts
 from .api.ui import pretrade as ui_pretrade
 from .api.ui import readiness as ui_readiness
 from .api.ui import system_status as ui_system_status
@@ -52,7 +53,6 @@ from .readiness import (
 )
 from .readiness.live import registry as readiness_registry
 from .alerts.registry import REGISTRY as alerts_registry
-from .alerts.registry import build_alerts_payload
 from .market.watchdog import watchdog as market_watchdog
 from .ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from .risk.risk_governor import get_risk_governor
@@ -256,6 +256,7 @@ def create_app() -> FastAPI:
     app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_status.router, prefix="/api/ui/status")
+    app.include_router(ui_alerts.router)
     app.include_router(ui_trades.router)
     app.include_router(ui_risk.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_pretrade.router)
@@ -286,12 +287,6 @@ def create_app() -> FastAPI:
 
         snapshot = build_ui_config_snapshot()
         return {"config": snapshot}
-
-    @app.get("/api/ui/alerts")
-    async def get_ui_alerts(limit: int = 50) -> dict[str, Any]:
-        """Expose recent ops alerts for the UI layer."""
-
-        return build_alerts_payload(limit)
 
     setup_ops_notifier(app)
     setup_telegram_bot(app)

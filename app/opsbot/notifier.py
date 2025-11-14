@@ -15,7 +15,7 @@ from typing import Deque, Dict, Iterable, List, Mapping, MutableSequence, Option
 import requests
 from fastapi import FastAPI
 
-from app.alerts.registry import REGISTRY
+from app.alerts.registry import REGISTRY, OpsAlert
 
 LOGGER = logging.getLogger(__name__)
 
@@ -177,6 +177,28 @@ def emit_alert(
         details=details,
         ts=ts_float,
     )
+
+    try:
+        from app.services.runtime import get_ops_alerts_registry
+    except Exception:  # pragma: no cover - fallback when runtime unavailable
+        ops_registry = None
+    else:
+        try:
+            ops_registry = get_ops_alerts_registry()
+        except Exception:  # pragma: no cover - registry initialisation failure
+            ops_registry = None
+    if ops_registry is not None:
+        context: dict[str, object] = {"kind": kind, **details}
+        ops_registry.add(
+            OpsAlert(
+                ts=datetime.now(timezone.utc),
+                event_type=str(kind),
+                message=text,
+                severity="info",
+                source="opsbot",
+                context=context,
+            )
+        )
 
     _enqueue_telegram(record)
     return record

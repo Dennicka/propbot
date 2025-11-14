@@ -33,10 +33,6 @@ def test_ops_alert_logging_and_endpoint(alerts_env: Path, monkeypatch, client) -
     )
     assert response.status_code == 200
     payload = response.json()
-    assert "alerts" in payload
-    assert payload["alerts"]
-    kinds = [entry["kind"] for entry in payload["alerts"]]
-    assert "resume" in kinds
-    items = payload.get("items")
-    assert isinstance(items, list) and items
-    assert any(entry.get("message") == "Resume processed" for entry in items)
+    assert isinstance(payload, list)
+    assert any(entry.get("event_type") == "resume" for entry in payload)
+    assert any(entry.get("message") == "Resume processed" for entry in payload)

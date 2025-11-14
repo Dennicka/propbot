@@ -146,6 +146,7 @@ class PnLCapsGuard:
                 event_type=PNL_CAP_BREACHED,
                 message=f"PnL cap breached: {scope}",
                 level=AlertLevel.CRITICAL,
+                severity="critical",
                 context=context,
             )
         ops_alert(evt_pnl_cap(scope=scope, reason=reason))

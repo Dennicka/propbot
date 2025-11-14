@@ -2052,7 +2052,7 @@ async def hedge_log(request: Request, limit: int = Query(100, ge=1, le=1_000)) -
     return {"entries": read_entries(limit=limit)}
 
 
-@router.get("/alerts")
+@router.get("/alerts/legacy")
 async def ops_alerts(
     request: Request,
     limit: int = Query(100, ge=1),
