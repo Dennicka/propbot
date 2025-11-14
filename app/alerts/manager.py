@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from . import wire_telegram
 from .levels import AlertLevel, should_route
+from .registry import registry as alerts_registry
 
 _LOG_FILE_LOCK = threading.Lock()
 
@@ -67,6 +68,7 @@ def notify(level: AlertLevel | str, message: str, **meta: Any) -> None:
     resolved = AlertLevel.coerce(level)
     serialisable_meta = _normalise_meta(meta)
     record = _format_record(resolved, message, serialisable_meta)
+    alerts_registry.record(level=resolved.value, message=message, meta=serialisable_meta)
     _write_stdout(record)
     _write_logfile(record)
 

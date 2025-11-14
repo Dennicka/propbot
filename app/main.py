@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +50,11 @@ from .readiness import (
     collect_readiness_signals,
     wait_for_live_readiness,
 )
+from .readiness.live import registry as readiness_registry
+from .alerts.registry import registry as alerts_registry
+from .market.watchdog import watchdog as market_watchdog
+from .ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
+from .risk.risk_governor import get_risk_governor
 from .metrics.observability import observe_api_latency, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
@@ -256,6 +262,19 @@ def create_app() -> FastAPI:
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
     from .opsbot import setup_notifier as setup_ops_notifier
+
+    @app.get("/api/ui/status")
+    async def get_ui_status() -> dict[str, Any]:
+        """Ops snapshot aggregating router, risk, readiness, watchdog, and alerts."""
+
+        snapshot = build_ops_snapshot(
+            router=runtime_service,
+            risk_governor=get_risk_governor(),
+            readiness_registry=readiness_registry,
+            market_watchdog=market_watchdog,
+            alerts_registry=alerts_registry,
+        )
+        return ops_snapshot_to_dict(snapshot)
 
     setup_ops_notifier(app)
     setup_telegram_bot(app)
