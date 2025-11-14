@@ -89,7 +89,10 @@ def test_safe_mode_blocks_submission(monkeypatch: pytest.MonkeyPatch, router_fac
 
     response = _register(router)
 
-    assert response == {"ok": False, "reason": "safe-mode", "cost": None}
+    assert response["ok"] is False
+    assert response["reason"] == "safe-mode"
+    assert response.get("cost") is None
+    assert response.get("strategy_id") == "smoke"
 
 
 def test_pretrade_strict_rejects_zero_qty(monkeypatch: pytest.MonkeyPatch, router_factory) -> None:

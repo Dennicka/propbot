@@ -73,6 +73,7 @@ class ExecutionOrderView(BaseModel):
     qty: float | None = None
     price: float | None = None
     strategy: str | None = None
+    strategy_id: str | None = None
     ts_ns: int | None = None
     created_ts: float | None = None
     state: str | None = None
@@ -90,6 +91,14 @@ class ExecutionOrderView(BaseModel):
             data["state"] = str(state_value.value)
         elif state_value is not None:
             data["state"] = str(state_value)
+        strategy_value = data.get("strategy")
+        if strategy_value is not None:
+            data["strategy"] = str(strategy_value)
+        strategy_id_value = data.get("strategy_id")
+        if strategy_id_value is not None:
+            data["strategy_id"] = str(strategy_id_value)
+        elif strategy_value is not None:
+            data["strategy_id"] = str(strategy_value)
         for key in ("qty", "price", "filled_qty"):
             if key in data and data[key] is not None:
                 try:

@@ -111,12 +111,11 @@ def test_guard_blocks_after_daily_cap_and_resumes(router_with_pnl_caps) -> None:
         ts_ns=3,
         nonce=3,
     )
-    assert third == {
-        "ok": False,
-        "reason": "pnl-cap",
-        "detail": "daily-loss-cap-global",
-        "cost": None,
-    }
+    assert third["ok"] is False
+    assert third["reason"] == "pnl-cap"
+    assert third["detail"] == "daily-loss-cap-global"
+    assert third.get("cost") is None
+    assert third.get("strategy_id") == "auto_hedge"
     block_key = ("daily-loss-cap-global", "auto_hedge")
     assert smart_router_module._PNLCAP_BLOCKS_TOTAL._values.get(block_key) == pytest.approx(1.0)
 
