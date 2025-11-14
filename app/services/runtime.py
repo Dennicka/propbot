@@ -520,9 +520,13 @@ class StuckResolverRuntimeState:
 @dataclass
 class ExecutionState:
     stuck_resolver: StuckResolverRuntimeState = field(default_factory=StuckResolverRuntimeState)
+    orders: list[Dict[str, object]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
-        return {"stuck_resolver": self.stuck_resolver.snapshot()}
+        return {
+            "stuck_resolver": self.stuck_resolver.snapshot(),
+            "orders": [dict(order) for order in self.orders],
+        }
 
 
 @dataclass
@@ -1983,6 +1987,84 @@ def set_open_orders(orders: List[Dict[str, object]]) -> List[Dict[str, object]]:
     with _STATE_LOCK:
         _STATE.open_orders = [dict(order) for order in orders]
         return _STATE.open_orders
+
+
+_EXECUTION_ORDERS_LIMIT = 200
+
+
+def _serialise_decimal(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(value)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _serialise_trade_cost(cost: object) -> object:
+    if cost is None:
+        return None
+    if isinstance(cost, Mapping):
+        return {key: _serialise_decimal(value) for key, value in cost.items()}
+    venue = getattr(cost, "venue", None)
+    symbol = getattr(cost, "symbol", None)
+    side = getattr(cost, "side", None)
+    if venue is None or symbol is None or side is None:
+        return cost
+    return {
+        "venue": str(venue),
+        "symbol": str(symbol),
+        "side": str(side),
+        "qty": _serialise_decimal(getattr(cost, "qty", None)),
+        "price": _serialise_decimal(getattr(cost, "price", None)),
+        "taker_fee_bps": _serialise_decimal(getattr(cost, "taker_fee_bps", None)),
+        "maker_fee_bps": _serialise_decimal(getattr(cost, "maker_fee_bps", None)),
+        "estimated_fee": _serialise_decimal(getattr(cost, "estimated_fee", None)),
+        "funding_rate": _serialise_decimal(getattr(cost, "funding_rate", None)),
+        "estimated_funding_cost": _serialise_decimal(getattr(cost, "estimated_funding_cost", None)),
+        "total_cost": _serialise_decimal(getattr(cost, "total_cost", None)),
+    }
+
+
+def record_execution_order(order: Mapping[str, object]) -> Dict[str, object]:
+    payload = dict(order)
+    if "cost" in payload:
+        payload["cost"] = _serialise_trade_cost(payload.get("cost"))
+    with _STATE_LOCK:
+        orders = _STATE.execution.orders
+        orders.append(payload)
+        if len(orders) > _EXECUTION_ORDERS_LIMIT:
+            del orders[:-_EXECUTION_ORDERS_LIMIT]
+    return payload
+
+
+def update_execution_order(client_order_id: str, updates: Mapping[str, object]) -> None:
+    if not client_order_id:
+        return
+    update_payload = dict(updates)
+    if "cost" in update_payload:
+        update_payload["cost"] = _serialise_trade_cost(update_payload.get("cost"))
+    with _STATE_LOCK:
+        for entry in reversed(_STATE.execution.orders):
+            if str(entry.get("client_order_id")) == str(client_order_id):
+                entry.update(update_payload)
+                break
+
+
+def remove_execution_order(client_order_id: str) -> None:
+    if not client_order_id:
+        return
+    with _STATE_LOCK:
+        _STATE.execution.orders = [
+            entry
+            for entry in _STATE.execution.orders
+            if str(entry.get("client_order_id")) != str(client_order_id)
+        ]
+
+
+def get_execution_orders() -> List[Dict[str, object]]:
+    with _STATE_LOCK:
+        return [dict(order) for order in _STATE.execution.orders]
 
 
 def _stuck_config_payload(config: object | None) -> Mapping[str, object] | None:

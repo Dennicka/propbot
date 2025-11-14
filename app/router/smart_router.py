@@ -61,9 +61,11 @@ from ..services.runtime import (
     get_market_data,
     get_profile,
     get_state,
+    record_execution_order,
+    update_execution_order,
 )
 from ..services.safe_mode import SafeMode
-from ..pricing import estimate_trade_cost
+from ..pricing import TradeCostEstimate, estimate_trade_cost
 from ..tca.cost_model import (
     FeeInfo,
     FeeTable,
@@ -533,6 +535,7 @@ class SmartRouter:
         }
         self._completed_orders: Dict[str, tuple[Dict[str, object], int]] = {}
         self._order_strategies: Dict[str, str] = {}
+        self._order_costs: Dict[str, TradeCostEstimate] = {}
         self._audit_counters = AuditCounters()
         self._last_events: Dict[str, str] = {}
         self._risk_governor: RiskGovernor | None = None
@@ -1029,6 +1032,15 @@ class SmartRouter:
         metrics_started = time.perf_counter()
         metrics_reason: str | None = None
         metrics_submitted = False
+        cost_estimate: TradeCostEstimate | None = None
+
+        def _router_response(
+            payload: Mapping[str, object], *, cost: TradeCostEstimate | None = None
+        ) -> Dict[str, object]:
+            result = dict(payload)
+            result["cost"] = cost if cost is not None else cost_estimate
+            return result
+
         risk_budget_notional = Decimal("0")
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
         outbox_pending_recorded = False
@@ -1044,7 +1056,7 @@ class SmartRouter:
                         extra={"venue": venue},
                     )
                 )
-                return {"ok": False, "reason": "safe-mode"}
+                return _router_response({"ok": False, "reason": "safe-mode"})
             block, detail = self._pnl_guard.should_block(strategy)
             if block:
                 _PNLCAP_BLOCKS_TOTAL.labels(reason=detail, strategy=strategy).inc()
@@ -1057,7 +1069,7 @@ class SmartRouter:
                         extra={"detail": detail},
                     )
                 )
-                return {"ok": False, "reason": "pnl-cap", "detail": detail}
+                return _router_response({"ok": False, "reason": "pnl-cap", "detail": detail})
             profile = get_profile()
             guard_reason = None
             if is_live(profile):
@@ -1087,12 +1099,14 @@ class SmartRouter:
                             extra={"client_order_id": client_order_id},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": guard_reason,
-                        "reason": guard_reason,
-                        "profile": profile.name,
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": guard_reason,
+                            "reason": guard_reason,
+                            "profile": profile.name,
+                        }
+                    )
             if self._readiness_agg is not None:
                 ready, detail = self._readiness_agg.is_ready()
                 if not ready:
@@ -1116,7 +1130,9 @@ class SmartRouter:
                             extra={"detail": detail},
                         )
                     )
-                    return {"ok": False, "reason": "readiness-agg", "detail": detail}
+                    return _router_response(
+                        {"ok": False, "reason": "readiness-agg", "detail": detail}
+                    )
             if self._risk_governor is not None:
                 price_for_risk = Decimal("0") if price is None else Decimal(str(price))
                 qty_for_risk = Decimal(str(qty))
@@ -1151,11 +1167,13 @@ class SmartRouter:
                             extra={"venue": venue},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": f"risk-blocked:{reason}",
-                        "reason": reason,
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": f"risk-blocked:{reason}",
+                            "reason": reason,
+                        }
+                    )
 
             cooldown_key = self._cooldown_key(venue, symbol, strategy)
             if self._cooldown_enabled:
@@ -1178,13 +1196,15 @@ class SmartRouter:
                             extra={"remaining": f"{remaining:.2f}"},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": "cooldown",
-                        "error": "router cooldown",
-                        "reason": reason_hint,
-                        "cooldown_remaining": remaining,
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": "cooldown",
+                            "error": "router cooldown",
+                            "reason": reason_hint,
+                            "cooldown_remaining": remaining,
+                        }
+                    )
 
             if ff.md_watchdog_on():
                 sample_ms = watchdog.staleness_ms(venue, symbol)
@@ -1226,13 +1246,15 @@ class SmartRouter:
                             extra={"venue": venue, "p95_ms": str(p95_ms)},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": "marketdata_stale",
-                        "error": "market data stale",
-                        "reason": "marketdata_stale",
-                        "gate_reason": gate_reason,
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": "marketdata_stale",
+                            "error": "market data stale",
+                            "reason": "marketdata_stale",
+                            "gate_reason": gate_reason,
+                        }
+                    )
 
             if not self._idempo.should_send(client_order_id):
                 tracked = self._order_tracker.get(client_order_id)
@@ -1278,7 +1300,7 @@ class SmartRouter:
                         extra={"client_order_id": client_order_id},
                     )
                 )
-                return response
+                return _router_response(response)
 
             side_lower = str(side or "").strip().lower()
             price_value = float(price) if price is not None else None
@@ -1322,12 +1344,14 @@ class SmartRouter:
                             extra={"venue": venue, "side": side_lower},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": "pretrade_rejected",
-                        "error": "pretrade rejected",
-                        "reason": exc.reason,
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": "pretrade_rejected",
+                            "error": "pretrade rejected",
+                            "reason": exc.reason,
+                        }
+                    )
                 qty_value = float(q_qty)
                 price_value = float(q_price) if q_price is not None else price_value
             else:
@@ -1372,12 +1396,14 @@ class SmartRouter:
                             extra={"detail": detail_budget},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": "risk_budget_blocked",
-                        "reason": "risk-budget",
-                        "detail": detail_budget,
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": "risk_budget_blocked",
+                            "reason": "risk-budget",
+                            "detail": detail_budget,
+                        }
+                    )
 
             if ff.md_watchdog_on() and watchdog.is_stale(venue, symbol):
                 LOGGER.warning(
@@ -1405,37 +1431,71 @@ class SmartRouter:
                         extra={"venue": venue},
                     )
                 )
-                return {
-                    "client_order_id": client_order_id,
-                    "status": "marketdata_stale",
-                    "error": "market data stale",
-                    "reason": "marketdata_stale",
-                }
+                return _router_response(
+                    {
+                        "client_order_id": client_order_id,
+                        "status": "marketdata_stale",
+                        "error": "market data stale",
+                        "reason": "marketdata_stale",
+                    }
+                )
 
-            cost = None
             if (
                 price_value is not None
                 and price_value > 0.0
                 and qty_value > 0.0
                 and side_lower in {"buy", "sell"}
             ):
-                cost = estimate_trade_cost(
-                    venue=venue,
-                    symbol=symbol,
-                    side=side_lower,
-                    qty=Decimal(str(qty_value)),
-                    price=Decimal(str(price_value)),
-                    taker_fee_bps=Decimal("2"),
-                    funding_rate=None,
-                )
-                LOGGER.debug(
-                    "Cost estimate",
-                    extra={
-                        "venue": venue,
-                        "symbol": symbol,
-                        "total_cost": str(cost.total_cost),
-                    },
-                )
+                try:
+                    fee_info = self._resolve_fee_info(venue)
+                    taker_bps = Decimal(str(fee_info.taker_bps))
+                except (TypeError, ValueError, ArithmeticError):
+                    taker_bps = Decimal("0")
+                try:
+                    cost_estimate = estimate_trade_cost(
+                        venue=venue,
+                        symbol=symbol,
+                        side=side_lower,
+                        qty=Decimal(str(qty_value)),
+                        price=Decimal(str(price_value)),
+                        taker_fee_bps=taker_bps,
+                        funding_rate=None,
+                    )
+                except Exception:  # pragma: no cover - defensive logging
+                    LOGGER.exception(
+                        "smart_router.cost_estimate_failed",
+                        extra={
+                            "event": "smart_router_cost_estimate_failed",
+                            "component": "smart_router",
+                            "details": {
+                                "venue": venue,
+                                "symbol": symbol,
+                                "side": side_lower,
+                                "qty": qty_value,
+                                "price": price_value,
+                            },
+                        },
+                    )
+                    cost_estimate = None
+                else:
+                    LOGGER.debug(
+                        "smart_router.cost_estimate",
+                        extra={
+                            "event": "smart_router_cost_estimate",
+                            "component": "smart_router",
+                            "details": {
+                                "venue": venue,
+                                "symbol": symbol,
+                                "side": side_lower,
+                                "qty": qty_value,
+                                "price": price_value,
+                                "taker_fee_bps": float(taker_bps),
+                                "total_cost": str(cost_estimate.total_cost),
+                                "estimated_fee": str(cost_estimate.estimated_fee),
+                                "funding_cost": str(cost_estimate.estimated_funding_cost),
+                            },
+                        },
+                    )
 
             intent_payload = {
                 "venue": venue,
@@ -1464,11 +1524,13 @@ class SmartRouter:
                             extra={"intent_key": intent_key},
                         )
                     )
-                    return {
-                        "client_order_id": client_order_id,
-                        "status": "duplicate_intent",
-                        "reason": "dupe-intent",
-                    }
+                    return _router_response(
+                        {
+                            "client_order_id": client_order_id,
+                            "status": "duplicate_intent",
+                            "reason": "dupe-intent",
+                        }
+                    )
                 metrics_reason = "dupe-intent"
                 ops_alert(
                     evt_router_block(
@@ -1478,12 +1540,14 @@ class SmartRouter:
                         extra={"intent_key": intent_key},
                     )
                 )
-                return {
-                    "client_order_id": client_order_id,
-                    "status": "pretrade_rejected",
-                    "error": "pretrade rejected",
-                    "reason": "dupe-intent",
-                }
+                return _router_response(
+                    {
+                        "client_order_id": client_order_id,
+                        "status": "pretrade_rejected",
+                        "error": "pretrade rejected",
+                        "reason": "dupe-intent",
+                    }
+                )
 
             qty_decimal = Decimal(str(qty_value))
             px_decimal = Decimal("0") if price_value is None else Decimal(str(price_value))
@@ -1509,12 +1573,15 @@ class SmartRouter:
                                 extra={"intent_key": intent_key},
                             )
                         )
-                        return {
-                            "client_order_id": client_order_id,
-                            "status": "duplicate_intent",
-                            "ok": False,
-                            "reason": "outbox-inflight",
-                        }
+                        return _router_response(
+                            {
+                                "client_order_id": client_order_id,
+                                "status": "duplicate_intent",
+                                "ok": False,
+                                "reason": "outbox-inflight",
+                            },
+                            cost=None,
+                        )
                 self._outbox.begin_pending(
                     intent_key=intent_key,
                     order_id=client_order_id,
@@ -1622,7 +1689,24 @@ class SmartRouter:
             if price_value is not None:
                 response["price"] = price_value
             metrics_submitted = True
-            return response
+            if cost_estimate is not None:
+                self._order_costs[client_order_id] = cost_estimate
+            record_execution_order(
+                {
+                    "client_order_id": client_order_id,
+                    "venue": venue,
+                    "symbol": symbol,
+                    "side": side_lower,
+                    "qty": qty_value,
+                    "price": price_value,
+                    "strategy": strategy,
+                    "ts_ns": ts_ns,
+                    "created_ts": register_ts,
+                    "state": state.value if state is not None else None,
+                    "cost": cost_estimate,
+                }
+            )
+            return _router_response(response)
         finally:
             elapsed_ms = max((time.perf_counter() - metrics_started) * 1000.0, 0.0)
             _ROUTER_LATENCY_HISTOGRAM.observe(elapsed_ms)
@@ -1857,6 +1941,15 @@ class SmartRouter:
             self._outbox.mark_final(client_order_id, reason=event_key)
             self._outbox_keys.pop(client_order_id, None)
 
+        update_execution_order(
+            client_order_id,
+            {
+                "state": new_state.value,
+                "filled_qty": float(updated.filled) if updated is not None else None,
+                "last_event": event_key,
+            },
+        )
+
         if updated is not None and self._order_tracker.is_terminal(new_state):
             updated.updated_ts = now_ts
             updated.updated_ns = now_ns
@@ -1883,6 +1976,11 @@ class SmartRouter:
                 reason="terminal",
             )
             self._last_events.pop(client_order_id, None)
+            update_execution_order(
+                client_order_id,
+                {"state": new_state.value, "closed": True},
+            )
+            self._order_costs.pop(client_order_id, None)
 
         tracker_ctx = {
             "ts": now_ts,
