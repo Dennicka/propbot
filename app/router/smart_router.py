@@ -22,6 +22,7 @@ from app.hedge.policy import HedgeLeg
 from app.market.watchdog import watchdog
 from app.ops.hooks import ops_alert
 from app.alerts.events import evt_error, evt_router_block
+from app.alerts.pipeline import OpsAlertsPipeline
 from app.metrics.core import (
     DEFAULT_METRICS_PATH as _DEFAULT_METRICS_PATH,
     METRICS_PATH_ENV as _METRICS_PATH_ENV,
@@ -478,11 +479,13 @@ class SmartRouter:
         state=None,
         market_data=None,
         idempo_store: IdempoStore | None = None,
+        alerts: OpsAlertsPipeline | None = None,
     ) -> None:
         self._state = state if state is not None else get_state()
         config = getattr(self._state, "config", None)
         self._config = getattr(config, "data", None)
         self._market_data = market_data if market_data is not None else get_market_data()
+        self._alerts = alerts
         self._manual_fees = _manual_fee_table(self._config) if self._config else FeeTable()
         self._tier_table = _tier_table_from_config(self._config) if self._config else None
         self._impact_model = _impact_model_from_config(self._config) if self._config else None
@@ -549,7 +552,7 @@ class SmartRouter:
         self._readiness_agg = get_agg() if self._readiness_guard_enabled else None
         self._pnl_policy = CapsPolicy()
         self._pnl_agg = PnLAggregator(self._pnl_policy.tz)
-        self._pnl_guard = PnLCapsGuard(self._pnl_policy, self._pnl_agg)
+        self._pnl_guard = PnLCapsGuard(self._pnl_policy, self._pnl_agg, alerts=self._alerts)
         self._pnl_metric_scopes: set[str] = set()
         if self._readiness_agg is not None:
             ttl_seconds = max(0, _env_int("READINESS_TTL_SEC", 30))
@@ -565,7 +568,7 @@ class SmartRouter:
             )
         if ff.risk_limits_on():
             try:
-                self._risk_governor = RiskGovernor(load_config_from_env())
+                self._risk_governor = RiskGovernor(load_config_from_env(), alerts=self._alerts)
             except (ArithmeticError, ValueError) as exc:  # pragma: no cover - defensive
                 LOGGER.error(
                     "smart_router.risk_config_failed",
