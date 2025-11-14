@@ -56,6 +56,7 @@ from .alerts.registry import build_alerts_payload
 from .market.watchdog import watchdog as market_watchdog
 from .ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from .risk.risk_governor import get_risk_governor
+from .ui.config_snapshot import build_ui_config_snapshot
 from .metrics.observability import observe_api_latency, register_slo_metrics
 from .auto_hedge_daemon import setup_auto_hedge_daemon
 from .startup_validation import validate_startup
@@ -276,6 +277,13 @@ def create_app() -> FastAPI:
             alerts_registry=alerts_registry,
         )
         return ops_snapshot_to_dict(snapshot)
+
+    @app.get("/api/ui/config")
+    async def get_ui_config() -> dict[str, Any]:
+        """Return the current runtime configuration snapshot for UI."""
+
+        snapshot = build_ui_config_snapshot()
+        return {"config": snapshot}
 
     @app.get("/api/ui/alerts")
     async def get_ui_alerts(limit: int = 50) -> dict[str, Any]:

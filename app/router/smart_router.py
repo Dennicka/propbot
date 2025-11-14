@@ -7,9 +7,10 @@ import logging
 import math
 import os
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Dict, Iterable, Mapping, Protocol, Sequence, TypedDict
 
 import httpx
 
@@ -96,6 +97,89 @@ _PNLCAP_BLOCKS_TOTAL = metrics_counter("propbot_pnlcap_blocks_total", labels=("r
 _PNLCAP_DAY_REALIZED = metrics_gauge("propbot_pnl_day_realized_usd", labels=("scope",))
 _PNLCAP_DAY_PEAK = metrics_gauge("propbot_pnl_day_peak_usd", labels=("scope",))
 _PNLCAP_COOLOFF = metrics_gauge("propbot_pnl_cooloff_sec", labels=("scope",))
+
+
+class RouterControlSnapshot(TypedDict):
+    mode: str
+    safe_mode: bool
+    pretrade_strict: bool
+    risk_limits_enabled: bool
+    last_change_ts: float | None
+    extra: dict[str, Any]
+
+
+def _parse_ts(value: object) -> float | None:
+    if not value:
+        return None
+    try:
+        text = str(value)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if not text:
+        return None
+    try:
+        stamp = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return float(stamp.timestamp())
+
+
+def get_router_control_snapshot() -> RouterControlSnapshot:
+    """Return aggregated runtime/router control state for UI consumers."""
+
+    state = get_state()
+    control = getattr(state, "control", None)
+    safety = getattr(state, "safety", None)
+
+    mode = "UNKNOWN"
+    safe_mode = False
+    extra: dict[str, Any] = {}
+
+    if control is not None:
+        mode = str(getattr(control, "mode", mode) or mode)
+        safe_mode = bool(getattr(control, "safe_mode", safe_mode))
+        extra.update(
+            {
+                "two_man_rule": bool(getattr(control, "two_man_rule", False)),
+                "dry_run": bool(getattr(control, "dry_run", False)),
+                "dry_run_mode": bool(getattr(control, "dry_run_mode", False)),
+                "post_only": bool(getattr(control, "post_only", False)),
+                "reduce_only": bool(getattr(control, "reduce_only", False)),
+                "order_notional_usdt": float(getattr(control, "order_notional_usdt", 0.0)),
+                "max_slippage_bps": int(getattr(control, "max_slippage_bps", 0)),
+                "min_spread_bps": float(getattr(control, "min_spread_bps", 0.0)),
+                "auto_loop": bool(getattr(control, "auto_loop", False)),
+            }
+        )
+    hold_ts: float | None = None
+    if safety is not None:
+        hold_active = bool(getattr(safety, "hold_active", False))
+        extra.update(
+            {
+                "hold_active": hold_active,
+                "hold_reason": getattr(safety, "hold_reason", None),
+                "hold_source": getattr(safety, "hold_source", None),
+                "resume_requested": getattr(safety, "resume_request", None) is not None,
+            }
+        )
+        if hold_active:
+            hold_ts = _parse_ts(getattr(safety, "hold_since", None))
+        else:
+            hold_ts = _parse_ts(getattr(safety, "last_released_ts", None))
+        if hold_ts is None:
+            hold_ts = _parse_ts(getattr(safety, "hold_since", None))
+
+    snapshot: RouterControlSnapshot = {
+        "mode": mode,
+        "safe_mode": safe_mode,
+        "pretrade_strict": bool(ff.pretrade_strict_on()),
+        "risk_limits_enabled": bool(ff.risk_limits_on()),
+        "last_change_ts": hold_ts,
+        "extra": extra,
+    }
+    return snapshot
 
 
 def _metrics_output_path() -> str:
