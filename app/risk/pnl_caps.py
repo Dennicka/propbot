@@ -9,6 +9,8 @@ from decimal import Decimal
 from typing import Dict, Optional, Tuple
 
 from app.alerts.events import evt_pnl_cap
+from app.alerts.levels import AlertLevel
+from app.alerts.manager import notify as alert_notify
 from app.ops.hooks import ops_alert
 
 
@@ -102,6 +104,13 @@ class PnLCapsGuard:
 
     def _notify(self, scope: str, reason: str) -> None:
         ops_alert(evt_pnl_cap(scope=scope, reason=reason))
+        alert_notify(
+            AlertLevel.CRITICAL,
+            f"PnL cap triggered: {scope}",
+            source="pnl-cap",
+            scope=scope,
+            reason=reason,
+        )
 
     def _cool(self, stats: DayStats) -> None:
         now = self.clock.time()

@@ -11,6 +11,9 @@ from asyncio import TimeoutError as AsyncTimeoutError
 
 from prometheus_client import Counter, Gauge
 
+from app.alerts.levels import AlertLevel
+from app.alerts.manager import notify as alert_notify
+
 from .. import ledger
 from ..services import runtime
 from ..services.market_ws import market_status_snapshot
@@ -231,6 +234,12 @@ def _md_staleness_threshold() -> float:
             },
             exc_info=True,
         )
+        alert_notify(
+            AlertLevel.WARN,
+            "readiness md staleness threshold error",
+            source="readiness",
+            details={"error": str(exc)},
+        )
     raw = os.getenv("SLO_MD_STALENESS_CRITICAL_S")
     if raw:
         try:
@@ -326,6 +335,12 @@ def _resolve_router_ready() -> bool | None:
             },
             exc_info=True,
         )
+        alert_notify(
+            AlertLevel.WARN,
+            "readiness broker state unavailable",
+            source="readiness",
+            details={"error": str(exc)},
+        )
         return None
     overall = getattr(broker_state, "overall", None)
     if overall is None:
@@ -359,6 +374,12 @@ def _resolve_metrics_ok() -> bool | None:
             },
             exc_info=True,
         )
+        alert_notify(
+            AlertLevel.ERROR,
+            "readiness slo snapshot failed",
+            source="readiness",
+            details={"error": str(exc)},
+        )
         return False
     return bool(isinstance(snapshot, Mapping))
 
@@ -380,6 +401,12 @@ def _resolve_md_signals(threshold: float) -> tuple[bool | None, bool | None]:
                 "details": {"error": str(exc)},
             },
             exc_info=True,
+        )
+        alert_notify(
+            AlertLevel.ERROR,
+            "readiness market status unavailable",
+            source="readiness",
+            details={"error": str(exc)},
         )
         return None, None
     if not isinstance(status_rows, Sequence) or not status_rows:
@@ -416,6 +443,12 @@ def _resolve_db_ok() -> bool | None:
             },
             exc_info=True,
         )
+        alert_notify(
+            AlertLevel.WARN,
+            "readiness ledger check failed",
+            source="readiness",
+            details={"error": str(exc)},
+        )
         return None
 
 
@@ -432,6 +465,12 @@ def collect_readiness_signals() -> dict[str, Any]:
                 "details": {"error": str(exc)},
             },
             exc_info=True,
+        )
+        alert_notify(
+            AlertLevel.WARN,
+            "readiness runtime state unavailable",
+            source="readiness",
+            details={"error": str(exc)},
         )
         state = None
 

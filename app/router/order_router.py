@@ -9,6 +9,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Dict, Mapping, Tuple
 
+from app.alerts.levels import AlertLevel
+from app.alerts.manager import notify as alert_notify
+
 from ..audit_log import log_operator_action
 from ..execution.order_state import OrderState, OrderStatus, apply_exchange_update
 from .. import ledger
@@ -95,6 +98,7 @@ def _log_guard_event(
     if limit_type is not None:
         payload["limit_type"] = limit_type
     LOGGER.warning(event, extra=payload)
+    alert_notify(AlertLevel.WARN, event, context=payload, profile=profile, source="router")
     return payload
 
 
