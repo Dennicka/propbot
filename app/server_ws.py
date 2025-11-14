@@ -1,12 +1,22 @@
 from __future__ import annotations
+
 import asyncio
 import json
+from typing import Any
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
+
+from app.alerts.registry import registry as alerts_registry
+from app.market.watchdog import watchdog as market_watchdog
+from app.ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from app.readiness.live import registry
+from app.risk.risk_governor import get_risk_governor
+from app.services import runtime
+
 from .util.logging import setup_logging
 from .services.status import get_status_overview, get_status_components, get_status_slo
 from .routers import (
@@ -69,6 +79,20 @@ app.include_router(metrics_latency.router, prefix="/metrics")
 app.include_router(arb.router, prefix="/api/arb")
 app.include_router(deriv.router, prefix="/api/deriv")
 app.include_router(hedge.router, prefix="/api/hedge")
+
+
+@app.get("/api/ui/status")
+async def get_ui_status() -> dict[str, Any]:
+    """Ops snapshot aggregating router, risk, readiness, watchdog, and alerts."""
+
+    snapshot = build_ops_snapshot(
+        router=runtime,
+        risk_governor=get_risk_governor(),
+        readiness_registry=registry,
+        market_watchdog=market_watchdog,
+        alerts_registry=alerts_registry,
+    )
+    return ops_snapshot_to_dict(snapshot)
 
 
 app.router.routes = [
