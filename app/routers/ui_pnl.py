@@ -29,7 +29,6 @@ class UiPositionPnl(BaseModel):
     net_pnl: Decimal
 
 
-
 class UiPortfolioPnl(BaseModel):
     realized: Decimal
     unrealized: Decimal
@@ -39,13 +38,9 @@ class UiPortfolioPnl(BaseModel):
     net_pnl: Decimal
     positions: Tuple[UiPositionPnl, ...]
 
-
     @classmethod
     def from_snapshot(cls, snapshot: PortfolioPnlSnapshot) -> "UiPortfolioPnl":
-        positions = tuple(
-            UiPositionPnl(**position.__dict__)
-            for position in snapshot.positions
-        )
+        positions = tuple(UiPositionPnl(**position.__dict__) for position in snapshot.positions)
         return cls(
             realized=snapshot.realized_pnl,
             unrealized=snapshot.unrealized_pnl,
