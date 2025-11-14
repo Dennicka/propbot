@@ -14,12 +14,19 @@ def test_healthz(client, monkeypatch):
     _set_health(monkeypatch)
     response = client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "journal_ok": True,
-        "resume_ok": True,
-        "leader": True,
-        "config_ok": True,
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["journal_ok"] is True
+    assert payload["resume_ok"] is True
+    assert payload["leader"] is True
+    assert payload["config_ok"] is True
+    watchdog_block = payload.get("watchdog")
+    assert isinstance(watchdog_block, dict)
+    assert set(watchdog_block.get("components", {})) >= {
+        "router",
+        "recon",
+        "ledger",
+        "marketdata",
     }
 
 

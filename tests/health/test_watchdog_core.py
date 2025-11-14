@@ -8,6 +8,7 @@ def test_snapshot_never_seen_warn():
     watchdog._router_last_activity = None  # reset singleton state
     watchdog._recon_last_run = None
     watchdog._ledger_last_update = None
+    watchdog._marketdata_last_tick = None
 
     snap = watchdog.snapshot(now=100.0)
 
@@ -35,6 +36,7 @@ def test_snapshot_all_ok_levels():
     watchdog.mark_router_activity(ts=now)
     watchdog.mark_recon_run(ts=now)
     watchdog.mark_ledger_update(ts=now)
+    watchdog.mark_marketdata_tick(ts=now)
 
     snap = watchdog.snapshot(now=now + 1)
 
