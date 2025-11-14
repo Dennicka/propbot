@@ -32,6 +32,7 @@ import httpx
 from requests import RequestException
 
 from ..alerts.pipeline import get_ops_alerts_pipeline
+from ..alerts.registry import OpsAlertsRegistry
 from ..audit_log import log_operator_action
 from ..golden.logger import get_golden_logger
 from ..pretrade.gate import PreTradeGate
@@ -94,6 +95,19 @@ _STATE_LOCK = threading.RLock()
 _STUCK_RESOLVER_INSTANCE: object | None = None
 
 _PROFILE: TradingProfile | None = None
+
+_OPS_ALERTS_REGISTRY: OpsAlertsRegistry | None = None
+
+
+def get_ops_alerts_registry() -> OpsAlertsRegistry:
+    """Return the singleton ops alerts registry for the current process."""
+
+    global _OPS_ALERTS_REGISTRY
+    if _OPS_ALERTS_REGISTRY is None:
+        with _STATE_LOCK:
+            if _OPS_ALERTS_REGISTRY is None:
+                _OPS_ALERTS_REGISTRY = OpsAlertsRegistry()
+    return _OPS_ALERTS_REGISTRY
 
 
 class RuntimeProfileSnapshot(TypedDict):
@@ -302,7 +316,7 @@ async def start_recon_a_daemon() -> None:
         )
         return
 
-    alerts_pipeline = get_ops_alerts_pipeline()
+    alerts_pipeline = get_ops_alerts_pipeline(registry=get_ops_alerts_registry())
     router = SmartRouter(alerts=alerts_pipeline)
     reconciler = Reconciler(router=router, cfg=ReconConfig())
     daemon = OrderReconDaemon(reconciler)

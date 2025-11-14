@@ -183,6 +183,7 @@ class RiskGovernor:
             event_type=RISK_LIMIT_BREACHED,
             message=f"Risk limit breached: {limit_type}",
             level=AlertLevel.CRITICAL,
+            severity="critical",
             context=payload,
         )
 

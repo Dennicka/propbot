@@ -11,13 +11,13 @@ from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
 
 from app.alerts.registry import REGISTRY as alerts_registry
-from app.alerts.registry import build_alerts_payload
 from app.market.watchdog import watchdog as market_watchdog
 from app.ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from app.readiness.live import registry
 from app.risk.risk_governor import get_risk_governor
 from app.services import runtime
 from app.ui.config_snapshot import build_ui_config_snapshot
+from app.api.ui import alerts as ui_alerts
 
 from .util.logging import setup_logging
 from .services.status import get_status_overview, get_status_components, get_status_slo
@@ -77,6 +77,7 @@ app.include_router(ui_universe.router, prefix="/api/ui")
 app.include_router(ui_risk.router, prefix="/api/ui")
 app.include_router(ui_ops_report.router, prefix="/api/ui")
 app.include_router(ui_partial_hedge.router, prefix="/api/ui")
+app.include_router(ui_alerts.router)
 app.include_router(metrics_latency.router, prefix="/metrics")
 app.include_router(arb.router, prefix="/api/arb")
 app.include_router(deriv.router, prefix="/api/deriv")
@@ -105,13 +106,6 @@ async def get_ui_config() -> dict[str, Any]:
 
     snapshot = build_ui_config_snapshot()
     return {"config": snapshot}
-
-
-@app.get("/api/ui/alerts")
-async def get_ui_alerts(limit: int = 50) -> dict[str, Any]:
-    """Expose the most recent ops alerts for UI consumption."""
-
-    return build_alerts_payload(limit)
 
 
 app.router.routes = [
