@@ -97,6 +97,7 @@ def test_guard_blocks_when_signals_missing(router: SmartRouter) -> None:
         "ok": False,
         "reason": "readiness-agg",
         "detail": "readiness-missing:market,recon",
+        "cost": None,
     }
 
 
@@ -122,4 +123,5 @@ def test_guard_blocks_when_signal_bad(router: SmartRouter) -> None:
         "ok": False,
         "reason": "readiness-agg",
         "detail": "readiness-bad:recon:lag",
+        "cost": None,
     }

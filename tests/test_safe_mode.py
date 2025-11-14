@@ -70,7 +70,7 @@ def test_safe_mode_blocks_router_intent(monkeypatch) -> None:
         nonce=1,
     )
 
-    assert result == {"ok": False, "reason": "safe-mode"}
+    assert result == {"ok": False, "reason": "safe-mode", "cost": None}
 
 
 def test_safe_mode_disabled_allows_router_flow(monkeypatch) -> None:

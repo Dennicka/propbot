@@ -1,17 +1,108 @@
 from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any, Mapping
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ..broker.paper import PaperBroker
 from ..router.order_router import OrderRouter, PretradeGateThrottled
 from ..persistence import order_store
 from ..rules.pretrade import PretradeValidationError
+from ..pricing import TradeCostEstimate
+from ..services.runtime import get_execution_orders
 
 
 router = APIRouter()
 
 _BROKER = PaperBroker("paper")
 _ROUTER = OrderRouter(_BROKER)
+
+
+def _cost_view_from_payload(cost: object) -> "TradeCostEstimateView | None":
+    if isinstance(cost, TradeCostEstimate):
+        return TradeCostEstimateView.from_estimate(cost)
+    if isinstance(cost, Mapping):
+        try:
+            return TradeCostEstimateView(**cost)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+class TradeCostEstimateView(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    venue: str
+    symbol: str
+    side: str
+    qty: Decimal
+    price: Decimal
+    taker_fee_bps: Decimal
+    maker_fee_bps: Decimal
+    estimated_fee: Decimal
+    funding_rate: Decimal | None = None
+    estimated_funding_cost: Decimal
+    total_cost: Decimal
+
+    @classmethod
+    def from_estimate(cls, estimate: TradeCostEstimate) -> "TradeCostEstimateView":
+        return cls(
+            venue=estimate.venue,
+            symbol=estimate.symbol,
+            side=estimate.side,
+            qty=estimate.qty,
+            price=estimate.price,
+            taker_fee_bps=estimate.taker_fee_bps,
+            maker_fee_bps=estimate.maker_fee_bps,
+            estimated_fee=estimate.estimated_fee,
+            funding_rate=estimate.funding_rate,
+            estimated_funding_cost=estimate.estimated_funding_cost,
+            total_cost=estimate.total_cost,
+        )
+
+
+class ExecutionOrderView(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    client_order_id: str
+    venue: str | None = None
+    symbol: str | None = None
+    side: str | None = None
+    qty: float | None = None
+    price: float | None = None
+    strategy: str | None = None
+    ts_ns: int | None = None
+    created_ts: float | None = None
+    state: str | None = None
+    filled_qty: float | None = None
+    last_event: str | None = None
+    closed: bool | None = None
+    cost: TradeCostEstimateView | None = None
+
+    @classmethod
+    def from_runtime(cls, payload: Mapping[str, Any]) -> "ExecutionOrderView":
+        data = dict(payload)
+        cost_view = _cost_view_from_payload(data.pop("cost", None))
+        state_value = data.get("state")
+        if hasattr(state_value, "value"):
+            data["state"] = str(state_value.value)
+        elif state_value is not None:
+            data["state"] = str(state_value)
+        for key in ("qty", "price", "filled_qty"):
+            if key in data and data[key] is not None:
+                try:
+                    data[key] = float(data[key])
+                except (TypeError, ValueError):
+                    data[key] = None
+        return cls(cost=cost_view, **data)
+
+
+class ExecutionResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    orders: list[ExecutionOrderView]
 
 
 class SubmitOrderRequest(BaseModel):
@@ -38,9 +129,10 @@ def _get_router() -> OrderRouter:
     return _ROUTER
 
 
-@router.get("/execution")
-def execution() -> dict:
-    return {"orders": []}
+@router.get("/execution", response_model=ExecutionResponse)
+def execution() -> ExecutionResponse:
+    orders = [ExecutionOrderView.from_runtime(entry) for entry in get_execution_orders()]
+    return ExecutionResponse(orders=orders)
 
 
 @router.post("/execution/orders", response_model=SubmitOrderResponse)

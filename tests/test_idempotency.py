@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import time
 import types
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,8 @@ from fastapi.testclient import TestClient
 from app.orders.idempotency import IdempoStore, make_coid
 from app.orders.state import OrderState
 from app.router.smart_router import SmartRouter
+from app.pricing import TradeCostEstimate
+from app.services import runtime
 from app.utils.idem import IdempotencyCache
 
 
@@ -54,6 +57,62 @@ def test_duplicate_post_returns_cached_response(
     assert hold_mock.await_count == 1
 
 
+def test_register_order_includes_cost_estimate(
+    router_setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.reset_for_tests()
+    router, _ = router_setup
+    fake_cost = TradeCostEstimate(
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=Decimal("0.01"),
+        price=Decimal("100"),
+        taker_fee_bps=Decimal("2"),
+        maker_fee_bps=Decimal("0"),
+        estimated_fee=Decimal("0.02"),
+        funding_rate=None,
+        estimated_funding_cost=Decimal("0"),
+        total_cost=Decimal("0.02"),
+    )
+
+    def fake_estimate(**_: object) -> TradeCostEstimate:
+        return fake_cost
+
+    monkeypatch.setattr("app.router.smart_router.estimate_trade_cost", fake_estimate)
+
+    response = router.register_order(
+        strategy="alpha",
+        venue="binance-um",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.01,
+        price=100.0,
+        ts_ns=1,
+        nonce=1,
+    )
+
+    assert response["cost"] is fake_cost
+    orders = runtime.get_execution_orders()
+    matching = [
+        entry for entry in orders if entry.get("client_order_id") == response["client_order_id"]
+    ]
+    assert matching, "execution orders should include the recorded order"
+    assert matching[0]["cost"] == {
+        "venue": fake_cost.venue,
+        "symbol": fake_cost.symbol,
+        "side": fake_cost.side,
+        "qty": str(fake_cost.qty),
+        "price": str(fake_cost.price),
+        "taker_fee_bps": str(fake_cost.taker_fee_bps),
+        "maker_fee_bps": str(fake_cost.maker_fee_bps),
+        "estimated_fee": str(fake_cost.estimated_fee),
+        "funding_rate": None,
+        "estimated_funding_cost": str(fake_cost.estimated_funding_cost),
+        "total_cost": str(fake_cost.total_cost),
+    }
+
+
 class _DummyMarketData:
     def __init__(self) -> None:
         now = time.time()
@@ -93,6 +152,10 @@ def router_setup(monkeypatch) -> tuple[SmartRouter, IdempoStore]:
         ),
         derivatives=types.SimpleNamespace(venues={}),
     )
+    monkeypatch.setenv("TEST_ONLY_ROUTER_META", "*")
+    monkeypatch.setenv("TEST_ONLY_ROUTER_TICK_SIZE", "0.1")
+    monkeypatch.setenv("TEST_ONLY_ROUTER_STEP_SIZE", "0.001")
+    monkeypatch.delenv("TEST_ONLY_ROUTER_MIN_NOTIONAL", raising=False)
     market = _DummyMarketData()
     store = IdempoStore(ttl_seconds=60)
     monkeypatch.setattr("app.router.smart_router.get_state", lambda: state)
