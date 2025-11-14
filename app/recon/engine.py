@@ -13,6 +13,7 @@ from app.db import ledger
 from app.metrics.core import counter as metrics_counter, gauge as metrics_gauge
 from app.metrics.recon import RECON_ISSUES_TOTAL
 from app.ops.hooks import ops_alert
+from app.health.watchdog import get_watchdog
 
 try:  # pragma: no cover - optional dependency guard
     from app.outbox.journal import OutboxJournal
@@ -147,6 +148,10 @@ def run_recon(now: float) -> Dict[str, object]:
     if issues:
         sample = [str(entry.get("kind", "")) for entry in issues[:3]]
         ops_alert(evt_recon_issues(len(issues), sample))
+
+    watchdog = get_watchdog()
+    watchdog.mark_recon_run()
+    watchdog.mark_ledger_update()
     return report
 
 

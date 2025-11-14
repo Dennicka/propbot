@@ -17,6 +17,7 @@ import httpx
 import app.config.feature_flags as ff
 from app.db import ledger as ledger_db
 from app.health.aggregator import DEFAULT_REQUIRED_SIGNALS, get_agg
+from app.health.watchdog import get_watchdog
 from app.hedge.policy import HedgeLeg
 from app.market.watchdog import watchdog
 from app.ops.hooks import ops_alert
@@ -1030,6 +1031,7 @@ class SmartRouter:
         risk_budget_notional = Decimal("0")
         client_order_id = make_coid(strategy, venue, symbol, side, ts_ns, nonce)
         outbox_pending_recorded = False
+        get_watchdog().mark_router_activity()
         try:
             if SafeMode.is_active():
                 metrics_reason = "safe-mode"
