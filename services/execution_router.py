@@ -14,6 +14,7 @@ from app.router.sor_scoring import (
     RouterVenueCostEstimate,
     RouterVenueMarketSnapshot,
     RouterVenueScore,
+    RouterVenueTradingLimits,
     Side,
     choose_best_venue,
 )
@@ -75,6 +76,15 @@ def _decimal_or_none(value: object) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return None
+
+
+def _positive_decimal_or_none(value: object) -> Decimal | None:
+    qty = _decimal_or_none(value)
+    if qty is None:
+        return None
+    if qty <= Decimal("0"):
+        return None
+    return qty
 
 
 def _fetch_quote(adapter: _VenueAdapter, symbol: str) -> float:
@@ -166,6 +176,17 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
         if best_ask is None:
             best_ask = _decimal_or_none(book_payload.get("best_ask"))
 
+        best_bid_qty = _positive_decimal_or_none(
+            book_payload.get("bid_qty")
+            or book_payload.get("best_bid_qty")
+            or book_payload.get("bid_size")
+        )
+        best_ask_qty = _positive_decimal_or_none(
+            book_payload.get("ask_qty")
+            or book_payload.get("best_ask_qty")
+            or book_payload.get("ask_size")
+        )
+
         costs: RouterVenueCostEstimate | None = None
         fee_rate = _decimal_or_none(fee_bps)
         if fee_rate is not None:
@@ -179,7 +200,12 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
             venue_id=canonical,
             best_bid=best_bid,
             best_ask=best_ask,
+            best_bid_qty=best_bid_qty,
+            best_ask_qty=best_ask_qty,
         )
+
+        # NOTE: RouterVenueTradingLimits remain None until exchange metadata/configs provide values.
+        limits: RouterVenueTradingLimits | None = None
         scoring_candidates.append(
             RouterVenueCandidate(
                 venue_id=canonical,
@@ -190,6 +216,7 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
                 costs=costs,
                 is_healthy=True,
                 risk_allowed=liquidity_ok,
+                limits=limits,
             )
         )
 
