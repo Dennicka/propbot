@@ -79,3 +79,20 @@ def test_ui_pnl_includes_fee_and_funding_fields(monkeypatch) -> None:
         + Decimal(position_payload["fees_paid"])
         + Decimal(position_payload["funding_paid"])
     )
+
+
+def test_ui_pnl_zero_portfolio_returns_zeroes(monkeypatch) -> None:
+    monkeypatch.setattr(ui_pnl, "_load_position_snapshots", lambda: ())
+
+    response = client.get("/api/ui/pnl")
+    assert response.status_code == 200
+
+    payload = response.json()
+
+    assert payload["realized"] == "0"
+    assert payload["unrealized"] == "0"
+    assert payload["fees_paid"] == "0"
+    assert payload["funding_paid"] == "0"
+    assert payload["gross_pnl"] == "0"
+    assert payload["net_pnl"] == "0"
+    assert payload["positions"] == []
