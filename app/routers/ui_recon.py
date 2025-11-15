@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from ..services import runtime
@@ -44,13 +44,17 @@ def status() -> dict[str, object]:
     return payload
 
 
+def get_recon_service() -> ReconService:
+    return ReconService()
+
+
 @router.get("/snapshot", response_model=UiReconSnapshot)
 async def get_recon_snapshot(
     venue_id: str = Query(..., description="Venue to reconcile"),
+    service: ReconService = Depends(get_recon_service),
 ) -> UiReconSnapshot:
     """Run reconciliation for a single venue and return aggregated issues."""
 
-    service = ReconService()
     snapshot = await service.run_for_venue(venue_id)
 
     issues = snapshot.issues
