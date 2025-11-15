@@ -10,6 +10,8 @@ StrategyMode = Literal["sandbox", "canary", "live"]
 
 @dataclass(slots=True)
 class StrategyInfo:
+    """Static metadata describing a trading strategy configuration."""
+
     id: StrategyId
     name: str
     description: str
@@ -23,6 +25,8 @@ class StrategyInfo:
 
 
 class StrategyRegistry:
+    """In-memory container of strategies available to the trading system."""
+
     def __init__(self) -> None:
         self._by_id: Dict[StrategyId, StrategyInfo] = {}
 
@@ -46,6 +50,8 @@ _REGISTRY = StrategyRegistry()
 
 
 def get_strategy_registry() -> StrategyRegistry:
+    """Return the process-wide strategy registry instance."""
+
     return _REGISTRY
 
 

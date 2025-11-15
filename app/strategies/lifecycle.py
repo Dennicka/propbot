@@ -12,6 +12,8 @@ from app.strategies.registry import (
 
 @dataclass(slots=True)
 class StrategyLifecycleContext:
+    """Runtime inputs used when evaluating lifecycle rules for a strategy."""
+
     strategy_id: StrategyId
     runtime_profile: str  # "paper" | "testnet" | "live"
     router_flagset: Mapping[str, bool] | None = None
@@ -20,6 +22,8 @@ class StrategyLifecycleContext:
 
 @dataclass(slots=True)
 class StrategyLifecycleDecision:
+    """Outcome of the lifecycle guard describing trade eligibility."""
+
     allowed: bool
     reason: str | None = None
     mode: StrategyMode | None = None
@@ -27,6 +31,8 @@ class StrategyLifecycleDecision:
 
 
 def check_strategy_lifecycle(ctx: StrategyLifecycleContext) -> StrategyLifecycleDecision:
+    """Apply lifecycle guards to decide if routing is allowed for a strategy."""
+
     reg = get_strategy_registry()
     info = reg.get(ctx.strategy_id)
     if info is None:

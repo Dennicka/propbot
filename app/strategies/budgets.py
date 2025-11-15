@@ -9,6 +9,8 @@ from app.strategies.registry import StrategyId, StrategyInfo, get_strategy_regis
 
 @dataclass(slots=True)
 class StrategyBudgetCheckInput:
+    """Inputs describing strategy state before running budget validation."""
+
     strategy_id: StrategyId
     notional_usd_after: Decimal
     daily_pnl_usd: Decimal | None = None
@@ -19,12 +21,16 @@ class StrategyBudgetCheckInput:
 
 @dataclass(slots=True)
 class StrategyBudgetDecision:
+    """Decision produced after evaluating strategy-specific budget limits."""
+
     allowed: bool
     reason: str | None = None
     breached_limit: str | None = None
 
 
 def check_strategy_budget(inp: StrategyBudgetCheckInput) -> StrategyBudgetDecision:
+    """Validate strategy trading limits before routing an order."""
+
     reg = get_strategy_registry()
     info: StrategyInfo | None = reg.get(inp.strategy_id)
     if info is None:
