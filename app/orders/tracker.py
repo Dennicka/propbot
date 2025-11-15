@@ -13,6 +13,8 @@ from typing import Dict, Iterable, Optional, Tuple
 from prometheus_client import Counter, Gauge
 
 from .state import OrderState, next_state
+from ..metrics.order_cycle import observe_order_cycle
+from ..services.runtime import get_runtime_profile_snapshot
 
 LOGGER = logging.getLogger(__name__)
 
@@ -96,6 +98,64 @@ class _TrackerMetrics:
 
 
 _TRACKER_METRICS = _TrackerMetrics()
+
+
+_DEFAULT_LABEL = "unknown"
+
+
+def _normalise_label(value: str | None, *, default: str = _DEFAULT_LABEL) -> str:
+    if not value:
+        return default
+    label = str(value).strip().lower()
+    return label or default
+
+
+def _get_runtime_profile_label() -> str:
+    try:
+        snapshot = get_runtime_profile_snapshot()
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.debug(
+            "order_tracker.runtime_profile_unavailable",
+            extra={
+                "event": "order_tracker_runtime_profile_unavailable",
+                "component": "orders_tracker",
+            },
+            exc_info=exc,
+        )
+        return _DEFAULT_LABEL
+    name_value = snapshot.get("name")
+    if isinstance(name_value, str):
+        label = name_value.strip().lower()
+        if label:
+            return label
+    return _DEFAULT_LABEL
+
+
+def _map_state_to_outcome(state: OrderState) -> str:
+    if state is OrderState.FILLED:
+        return "filled"
+    if state is OrderState.CANCELED:
+        return "cancelled"
+    if state is OrderState.REJECTED:
+        return "rejected"
+    if state is OrderState.EXPIRED:
+        return "expired"
+    return "failed"
+
+
+def _compute_order_cycle_seconds(tracked: "TrackedOrder") -> float | None:
+    start_ns = int(tracked.created_ns)
+    if start_ns <= 0:
+        return None
+    end_ns = int(tracked.updated_ns)
+    if end_ns <= 0:
+        if tracked.updated_ts:
+            end_ns = int(float(tracked.updated_ts) * _NANOS_IN_SECOND)
+        else:
+            end_ns = 0
+    if end_ns < start_ns:
+        return None
+    return float(end_ns - start_ns) / float(_NANOS_IN_SECOND)
 
 
 def _to_decimal(value: Decimal | float | int | str | None) -> Decimal:
@@ -399,6 +459,7 @@ class OrderTracker:
         final_state = tracked.state if self.is_terminal(tracked.state) else state
         if not self.is_terminal(final_state):
             raise ValueError(f"state {state!s} is not terminal")
+        self._record_order_cycle_metric(tracked, final_state)
         LOGGER.debug(
             "order_tracker.finalized",
             extra={
@@ -501,6 +562,20 @@ class OrderTracker:
                 len(removed_size),
             )
         return removed_ttl, removed_size
+
+    def _record_order_cycle_metric(self, tracked: TrackedOrder, final_state: OrderState) -> None:
+        duration_seconds = _compute_order_cycle_seconds(tracked)
+        if duration_seconds is None:
+            return
+        runtime_profile = _get_runtime_profile_label()
+        venue_label = _normalise_label(tracked.venue)
+        outcome_label = _map_state_to_outcome(final_state)
+        observe_order_cycle(
+            runtime_profile=runtime_profile,
+            venue=venue_label,
+            outcome=outcome_label,
+            seconds=max(duration_seconds, 0.0),
+        )
 
     def snapshot(self) -> Tuple[TrackedOrderSnapshot, ...]:
         """Return an immutable snapshot of the current tracked orders."""
