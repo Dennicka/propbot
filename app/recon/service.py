@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from app.alerts.recon import emit_recon_alerts
 from app.recon.engine import build_recon_snapshot
 from app.recon.external_source import ExternalStateSource
 from app.recon.internal_source import InternalStateSource
@@ -56,6 +57,7 @@ class ReconService:
             orders_internal=orders_internal,
             orders_external=orders_external,
         )
+        emit_recon_alerts(snapshot)
         return snapshot
 
 
