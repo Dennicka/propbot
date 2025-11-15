@@ -16,6 +16,9 @@ def test_live_safety_endpoint_snapshot(client, monkeypatch: pytest.MonkeyPatch) 
             "is_live_profile",
             "live_trading_guard_state",
             "live_trading_allowed",
+            "promotion_stage",
+            "promotion_reason",
+            "promotion_allowed_next_stages",
         ]
     ).issubset(payload.keys())
 

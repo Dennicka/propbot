@@ -21,6 +21,9 @@ def test_ops_status_snapshot_endpoint(client, monkeypatch):
             "health_reason",
             "readiness_reason",
             "live_trading_reason",
+            "promotion_stage",
+            "promotion_reason",
+            "promotion_allowed_next_stages",
         ]
     ).issubset(payload)
 

@@ -7,6 +7,11 @@ from pydantic import BaseModel
 
 from app.runtime.live_guard import LiveTradingGuard
 from app.runtime.promotion import PromotionStage, get_promotion_status
+
+try:  # pragma: no cover - optional settings module
+    from app.settings import settings as app_settings
+except ImportError:  # pragma: no cover - optional settings module
+    app_settings = None
 from app.services.runtime import get_profile
 
 router = APIRouter(prefix="/api/ui", tags=["ui", "runtime"])
@@ -19,6 +24,9 @@ class UiLiveGuardConfig(BaseModel):
     allowed_venues: list[str]
     allowed_strategies: list[str]
     reason: str | None = None
+    promotion_stage: str | None = None
+    promotion_reason: str | None = None
+    promotion_allowed_next_stages: list[str] | None = None
 
 
 class UiPromotionStatus(BaseModel):
@@ -39,6 +47,7 @@ async def get_live_guard_config(
     live_guard: LiveTradingGuard = Depends(get_live_guard),
 ) -> UiLiveGuardConfig:
     cfg = live_guard.get_config_view()
+    promotion = get_promotion_status(app_settings)
     return UiLiveGuardConfig(
         runtime_profile=cfg.runtime_profile,
         state=cfg.state,
@@ -46,12 +55,15 @@ async def get_live_guard_config(
         allowed_venues=list(cfg.allowed_venues),
         allowed_strategies=list(cfg.allowed_strategies),
         reason=cfg.reason,
+        promotion_stage=promotion.stage,
+        promotion_reason=promotion.reason,
+        promotion_allowed_next_stages=list(promotion.allowed_next_stages),
     )
 
 
 @router.get("/live-promotion", response_model=UiPromotionStatus)
 async def get_live_promotion_status() -> UiPromotionStatus:
-    status = get_promotion_status()
+    status = get_promotion_status(app_settings)
     return UiPromotionStatus(
         stage=status.stage,
         runtime_profile=status.runtime_profile,
