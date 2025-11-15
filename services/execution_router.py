@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, Mapping
 
 import time
 
 from app.router.smart_router import SmartRouter, feature_enabled as smart_router_feature_enabled
+from app.router.sor_scoring import (
+    RouterVenueCandidate,
+    RouterVenueCostEstimate,
+    RouterVenueMarketSnapshot,
+    RouterVenueScore,
+    Side,
+    choose_best_venue,
+)
 from app.services.runtime import (
     get_liquidity_status,
     get_market_data,
@@ -57,6 +66,15 @@ def _available_balance(entry: Mapping[str, object] | None) -> float | None:
         if key in entry:
             return _coerce_float(entry.get(key))
     return None
+
+
+def _decimal_or_none(value: object) -> Decimal | None:
+    try:
+        if value is None:
+            return None
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 def _fetch_quote(adapter: _VenueAdapter, symbol: str) -> float:
@@ -112,6 +130,7 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
 
     fallback_best: Dict[str, object] | None = None
     canonical_candidates: Dict[str, Dict[str, object]] = {}
+    scoring_candidates: list[RouterVenueCandidate] = []
     rest_latency_map: Dict[str, float] = {}
     ws_latency_map: Dict[str, float] = {}
 
@@ -132,12 +151,47 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
             book = market_data.top_of_book(canonical, symbol_normalised)
         except Exception:  # pragma: no cover - fallback to mark price only
             book = {}
+        book_payload = book if isinstance(book, Mapping) else {}
         ws_latency_ms = 0.0
-        ts_value = _coerce_float(book.get("ts")) if isinstance(book, Mapping) else 0.0
+        ts_value = _coerce_float(book_payload.get("ts"))
         if ts_value > 0:
             ws_latency_ms = max((time.time() - ts_value) * 1000.0, 0.0)
         rest_latency_map[canonical] = rest_latency_ms
         ws_latency_map[canonical] = ws_latency_ms
+
+        best_bid = _decimal_or_none(book_payload.get("bid"))
+        if best_bid is None:
+            best_bid = _decimal_or_none(book_payload.get("best_bid"))
+        best_ask = _decimal_or_none(book_payload.get("ask"))
+        if best_ask is None:
+            best_ask = _decimal_or_none(book_payload.get("best_ask"))
+
+        costs: RouterVenueCostEstimate | None = None
+        fee_rate = _decimal_or_none(fee_bps)
+        if fee_rate is not None:
+            fee_rate = fee_rate / Decimal("10000")
+            costs = RouterVenueCostEstimate(fee_rate=fee_rate, funding_rate=None)
+
+        candidate_side: Side = "buy" if side_lower in {"buy", "long"} else "sell"
+        quantity_dec = _decimal_or_none(base_size) or Decimal("0")
+        notional_dec = _decimal_or_none(notional_usdt) or Decimal("0")
+        market_snapshot = RouterVenueMarketSnapshot(
+            venue_id=canonical,
+            best_bid=best_bid,
+            best_ask=best_ask,
+        )
+        scoring_candidates.append(
+            RouterVenueCandidate(
+                venue_id=canonical,
+                side=candidate_side,
+                quantity=quantity_dec,
+                notional_estimate=notional_dec,
+                market=market_snapshot,
+                costs=costs,
+                is_healthy=True,
+                risk_allowed=liquidity_ok,
+            )
+        )
 
         candidate = {
             "venue": adapter.name,
@@ -183,9 +237,26 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
         "expected_notional": 0.0,
     }
 
-    smart_router_info: Dict[str, object] = {"enabled": False}
+    best_scoring: RouterVenueScore | None = None
+    scoring_info: Dict[str, object] | None = None
+    if scoring_candidates:
+        best_scoring = choose_best_venue(scoring_candidates)
+        if best_scoring is not None and best_scoring.venue_id in canonical_candidates:
+            result = dict(canonical_candidates[best_scoring.venue_id])
+        if best_scoring is None:
+            scoring_info = {"best": None, "score": None, "reason": "no_candidate"}
+        else:
+            scoring_info = {
+                "best": best_scoring.venue_id,
+                "score": float(best_scoring.score),
+                "reason": best_scoring.reason,
+            }
+    if scoring_info is None:
+        scoring_info = {"best": None, "score": None, "reason": "no_candidates"}
+
+    smart_router_info: Dict[str, object] = {"enabled": False, "scoring": scoring_info}
     if smart_router_feature_enabled():
-        smart_router_info = {"enabled": True}
+        smart_router_info = {"enabled": True, "scoring": scoring_info}
         try:
             router = SmartRouter()
             best_venue, scores = router.choose(
