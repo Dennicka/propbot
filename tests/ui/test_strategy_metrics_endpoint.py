@@ -39,6 +39,9 @@ def test_strategy_metrics_endpoint_smoke(monkeypatch) -> None:
 
     item = payload[0]
     assert item["strategy_id"] == "alpha"
+    assert "enabled" in item
+    assert "mode" in item
+    assert "priority" in item
     assert "trades_count" in item
     assert "winrate" in item
     assert "net_pnl" in item

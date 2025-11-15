@@ -31,6 +31,9 @@ def build_ui_config_snapshot() -> UiConfigSnapshot:
                     "max_notional_usd": info.max_notional_usd,
                     "max_daily_loss_usd": info.max_daily_loss_usd,
                     "max_open_positions": info.max_open_positions,
+                    "enabled": info.enabled,
+                    "mode": info.mode,
+                    "priority": info.priority,
                 }
                 for info in get_strategy_registry().all()
             ]

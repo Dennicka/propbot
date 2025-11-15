@@ -40,3 +40,6 @@ def test_get_ui_config_basic(client: TestClient, monkeypatch) -> None:
         first = strategies_cfg["items"][0]
         assert "id" in first
         assert "max_notional_usd" in first
+        assert "enabled" in first
+        assert "mode" in first
+        assert "priority" in first

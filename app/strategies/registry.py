@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Literal
 
 
 StrategyId = str
+StrategyMode = Literal["sandbox", "canary", "live"]
 
 
 @dataclass(slots=True)
@@ -16,6 +17,9 @@ class StrategyInfo:
     max_notional_usd: float | None = None
     max_daily_loss_usd: float | None = None
     max_open_positions: int | None = None
+    enabled: bool = True
+    mode: StrategyMode = "sandbox"
+    priority: int = 100
 
 
 class StrategyRegistry:
@@ -59,6 +63,9 @@ def register_default_strategies() -> None:
             max_notional_usd=50_000.0,
             max_daily_loss_usd=1_000.0,
             max_open_positions=10,
+            enabled=True,
+            mode="sandbox",
+            priority=50,
         )
     )
     reg.register(
@@ -68,6 +75,10 @@ def register_default_strategies() -> None:
             description="Lightweight strategy for smoke/testing.",
             tags=["test"],
             max_notional_usd=None,
+            max_daily_loss_usd=None,
             max_open_positions=None,
+            enabled=True,
+            mode="sandbox",
+            priority=100,
         )
     )
