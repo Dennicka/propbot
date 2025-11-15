@@ -64,7 +64,7 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
     dummy_watchdog = DummyMarketWatchdog()
     dummy_alerts = DummyAlertsRegistry()
     config_snapshot = {
-        "runtime": {"name": "paper", "is_live": False},
+        "runtime": {"name": "paper", "is_live": False, "is_testnet": False},
         "router": {
             "mode": "RESUME",
             "safe_mode": False,

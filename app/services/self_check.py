@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from ..config import trading_profiles
 from ..config.loader import load_app_config, validate_payload
+from ..config.profile import normalise_profile_category
 from ..profile_config import (
     MissingSecretsError,
     ProfileConfig,
@@ -25,6 +26,7 @@ from ..profile_config import (
 from ..secrets_store import SecretsStore
 from ..startup_validation import collect_startup_errors
 from ..util.venues import VENUE_ALIASES
+from .runtime import resolve_profile_config_path
 
 
 LOGGER = logging.getLogger(__name__)
@@ -68,8 +70,11 @@ class SelfCheckReport:
 def _normalise_profile_name(name: str | None) -> str:
     if not name:
         return trading_profiles.ExecutionProfile.PAPER.value
+    lowered = str(name).strip().lower()
+    if lowered.startswith("testnet"):
+        return trading_profiles.ExecutionProfile.TESTNET.value
     try:
-        resolved = trading_profiles.ExecutionProfile(str(name).strip().lower())
+        resolved = trading_profiles.ExecutionProfile(lowered)
     except ValueError as exc:
         raise ProfileConfigError(f"Неизвестный профиль self-check: {name!r}") from exc
     return resolved.value
@@ -87,27 +92,27 @@ def _check_env_alignment(profile_name: str) -> list[CheckResult]:
     config_profile = os.getenv("PROFILE")
     results: list[CheckResult] = []
 
-    if configured and configured.strip().lower() != profile_name:
+    target = normalise_profile_category(profile_name)
+    if configured and normalise_profile_category(configured) != target:
         results.append(
             CheckResult(
                 name="env.trading_profile",
                 status=CheckStatus.WARN,
                 message=(
                     "TRADING_PROFILE=%s (env) не совпадает с выбранным профилем %s. "
-                    "Установи TRADING_PROFILE перед запуском runtime." % (configured, profile_name)
+                    "Установи TRADING_PROFILE перед запуском runtime." % (configured, target)
                 ),
             )
         )
 
-    if config_profile and config_profile.strip().lower() != profile_name:
+    if config_profile and normalise_profile_category(config_profile) != target:
         results.append(
             CheckResult(
                 name="env.profile_config",
                 status=CheckStatus.WARN,
                 message=(
                     "PROFILE=%s (env) не совпадает с профилем self-check %s. "
-                    "Синхронизируй переменные окружения перед запуском."
-                    % (config_profile, profile_name)
+                    "Синхронизируй переменные окружения перед запуском." % (config_profile, target)
                 ),
             )
         )
@@ -173,7 +178,7 @@ def _check_profile_config(profile_name: str) -> tuple[ProfileConfig | None, Chec
 
 
 def _check_runtime_config(profile_name: str) -> CheckResult:
-    config_path = Path("configs") / f"config.{profile_name}.yaml"
+    config_path = Path(resolve_profile_config_path(profile_name))
     if not config_path.exists():
         return CheckResult(
             name="config.runtime",

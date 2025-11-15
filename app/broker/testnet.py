@@ -53,7 +53,7 @@ class TestnetBroker(Broker):
         runtime_venue: str,
         *,
         safe_mode: bool,
-        required_env: tuple[str, ...],
+        required_env: tuple[str | tuple[str, ...], ...],
     ) -> None:
         self.venue = venue
         self.runtime_venue = runtime_venue
@@ -74,7 +74,16 @@ class TestnetBroker(Broker):
         record_order_error(venue or self.venue, reason)
 
     def _ensure_credentials(self) -> None:
-        missing = [name for name in self.required_env if not os.getenv(name)]
+        missing: list[str] = []
+        for entry in self.required_env:
+            if isinstance(entry, tuple):
+                candidates = tuple(name for name in entry if name)
+            else:
+                candidates = (entry,)
+            if not candidates:
+                continue
+            if not any(os.getenv(name) for name in candidates):
+                missing.append("/".join(candidates))
         if missing:
             missing_vars = ", ".join(missing)
             raise RuntimeError(f"missing credentials for {self.venue}: {missing_vars}")

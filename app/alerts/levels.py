@@ -4,6 +4,8 @@ import os
 from enum import Enum
 from typing import Dict
 
+from ..config.profile import normalise_profile_category
+
 
 class AlertLevel(str, Enum):
     INFO = "INFO"
@@ -24,10 +26,7 @@ class AlertLevel(str, Enum):
 def _normalise_profile(profile: str | None) -> str:
     if not profile:
         profile = os.getenv("DEFAULT_PROFILE", "paper")
-    profile = profile.strip().lower()
-    if profile in {"testnet", "live"}:
-        return profile
-    return "paper"
+    return normalise_profile_category(profile)
 
 
 def should_route(level: "AlertLevel | str", profile: str | None = None) -> Dict[str, bool]:

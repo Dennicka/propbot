@@ -56,6 +56,16 @@ def _store_credentials() -> tuple[str | None, str | None, str | None]:
     return None, None, None
 
 
+def _first_env(names: list[str | None]) -> str | None:
+    for name in names:
+        if not name:
+            continue
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
 class OKXPerpClient:
     """OKX Perpetual swaps client with SAFE_MODE fallback."""
 
@@ -73,11 +83,24 @@ class OKXPerpClient:
         self._watchdog = get_broker_watchdog()
 
         store_key, store_secret, store_passphrase = _store_credentials()
-        env_key = os.getenv("OKX_API_KEY_TESTNET") if store_key is None else None
-        env_secret = os.getenv("OKX_API_SECRET_TESTNET") if store_secret is None else None
-        env_passphrase = (
-            os.getenv("OKX_API_PASSPHRASE_TESTNET") if store_passphrase is None else None
-        )
+        key_candidates = []
+        secret_candidates = []
+        passphrase_candidates = []
+        if getattr(config, "api_key_env", None):
+            key_candidates.append(config.api_key_env)
+        if getattr(config, "api_secret_env", None):
+            secret_candidates.append(config.api_secret_env)
+        if getattr(config, "api_passphrase_env", None):
+            passphrase_candidates.append(config.api_passphrase_env)
+        if config.testnet:
+            key_candidates.extend(["OKX_TESTNET_API_KEY", "OKX_API_KEY_TESTNET"])
+            secret_candidates.extend(["OKX_TESTNET_API_SECRET", "OKX_API_SECRET_TESTNET"])
+            passphrase_candidates.extend(
+                ["OKX_TESTNET_API_PASSPHRASE", "OKX_API_PASSPHRASE_TESTNET"]
+            )
+        env_key = _first_env(key_candidates) if store_key is None else None
+        env_secret = _first_env(secret_candidates) if store_secret is None else None
+        env_passphrase = _first_env(passphrase_candidates) if store_passphrase is None else None
 
         self._api_key = store_key or env_key
         self._api_secret = store_secret or env_secret

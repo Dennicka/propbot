@@ -63,7 +63,13 @@ from ..utils.chaos import (
     resolve_settings as resolve_chaos_settings,
 )
 from ..strategies.registry import register_default_strategies
-from ..config.profile import TradingProfile, is_live, load_profile_from_env
+from ..config.profile import (
+    TradingProfile,
+    is_live,
+    is_testnet,
+    load_profile_from_env,
+    normalise_profile_category,
+)
 
 
 if TYPE_CHECKING:
@@ -82,9 +88,12 @@ _RECON_A_DAEMON: OrderReconDaemon | None = None
 _RECON_A_SCHEDULED = False
 
 
-DEFAULT_CONFIG_PATHS = {
+PROFILE_CONFIG_PATHS = {
     "paper": "configs/config.paper.yaml",
     "testnet": "configs/config.testnet.yaml",
+    "testnet.binance": "configs/config.testnet.binance.yaml",
+    "testnet.okx": "configs/config.testnet.okx.yaml",
+    "testnet.bybit": "configs/config.testnet.bybit.yaml",
     "live": "configs/config.live.yaml",
 }
 
@@ -116,6 +125,7 @@ class RuntimeProfileSnapshot(TypedDict):
     display_name: str
     env: str | None
     is_live: bool
+    is_testnet: bool
     is_canary: bool
     created_at: float | None
     extra: dict[str, Any]
@@ -129,6 +139,7 @@ def get_runtime_profile_snapshot() -> RuntimeProfileSnapshot:
         "display_name": "unknown",
         "env": None,
         "is_live": False,
+        "is_testnet": False,
         "is_canary": False,
         "created_at": None,
         "extra": {},
@@ -141,6 +152,7 @@ def get_runtime_profile_snapshot() -> RuntimeProfileSnapshot:
         snapshot["name"] = profile.name
         snapshot["display_name"] = profile.display_name
         snapshot["is_live"] = is_live(profile)
+        snapshot["is_testnet"] = is_testnet(profile)
         snapshot["is_canary"] = bool(getattr(profile, "is_canary", False))
         snapshot["extra"] = {
             "allow_trading": bool(profile.allow_trading),
@@ -214,6 +226,20 @@ def get_profile() -> TradingProfile:
     return _PROFILE
 
 
+def resolve_profile_config_path(profile: str | None) -> str:
+    """Return the configuration file path for ``profile``."""
+
+    if profile is None:
+        key = "paper"
+    else:
+        key = str(profile).strip().lower()
+    if key in PROFILE_CONFIG_PATHS:
+        return PROFILE_CONFIG_PATHS[key]
+    if key.startswith("testnet"):
+        return PROFILE_CONFIG_PATHS["testnet"]
+    return PROFILE_CONFIG_PATHS["paper"]
+
+
 def _resolve_config_path() -> str:
     profile = (
         os.environ.get("PROFILE")
@@ -222,8 +248,28 @@ def _resolve_config_path() -> str:
         or os.environ.get("ENV")
         or "paper"
     )
-    profile_normalised = str(profile).lower()
-    return DEFAULT_CONFIG_PATHS.get(profile_normalised, DEFAULT_CONFIG_PATHS["paper"])
+    return resolve_profile_config_path(profile)
+
+
+def _normalise_environment_tag(raw: str | None) -> str:
+    return normalise_profile_category(raw)
+
+
+def _ensure_testnet_config_safe(profile_name: str, config: LoadedConfig) -> None:
+    if not profile_name.startswith("testnet"):
+        return
+    derivatives_cfg = getattr(config.data, "derivatives", None)
+    if not derivatives_cfg:
+        return
+    unsafe = [
+        venue.id
+        for venue in getattr(derivatives_cfg, "venues", [])
+        if not getattr(venue, "testnet", False)
+    ]
+    if unsafe:
+        raise RuntimeError(
+            "Testnet profile requires testnet-enabled venues only: " + ", ".join(sorted(unsafe))
+        )
 
 
 def _env_flag(name: str, default: bool = True) -> bool:
@@ -1061,6 +1107,15 @@ def _extract_watchdog_thresholds(watchdog_cfg) -> Dict[str, Dict[str, float]]:
 def _bootstrap_runtime() -> RuntimeState:
     config_path = _resolve_config_path()
     loaded = load_app_config(config_path)
+    profile_raw = (
+        os.environ.get("PROFILE")
+        or os.environ.get("EXCHANGE_PROFILE")
+        or os.environ.get("ENVIRONMENT")
+        or os.environ.get("ENV")
+        or "paper"
+    )
+    profile = str(profile_raw).strip().lower()
+    _ensure_testnet_config_safe(profile, loaded)
     chaos_settings = resolve_chaos_settings(getattr(loaded.data, "chaos", None))
     configure_chaos(chaos_settings)
     register_default_strategies()
@@ -1076,16 +1131,10 @@ def _bootstrap_runtime() -> RuntimeState:
     poll_interval = _env_int("POLL_INTERVAL_SEC", 5)
     min_spread_bps = _env_float("MIN_SPREAD_BPS", 0.0)
     dry_run_mode = _env_flag("DRY_RUN_MODE", False)
-    profile = (
-        os.environ.get("PROFILE")
-        or os.environ.get("EXCHANGE_PROFILE")
-        or os.environ.get("ENVIRONMENT")
-        or os.environ.get("ENV")
-        or "paper"
-    ).lower()
-    environment = (
+    environment_raw = (
         os.environ.get("MODE") or os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or profile
     )
+    environment = _normalise_environment_tag(environment_raw)
     loop_pair_env = os.environ.get("LOOP_PAIR")
     loop_venues_env = os.environ.get("LOOP_VENUES")
     loop_venues = []

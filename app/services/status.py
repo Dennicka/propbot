@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, List, Mapping, Sequence, Tuple
 
-from .runtime import RuntimeState, engage_safety_hold, get_state, update_clock_skew
+from .runtime import (
+    RuntimeState,
+    engage_safety_hold,
+    get_runtime_profile_snapshot,
+    get_state,
+    update_clock_skew,
+)
 from .partial_hedge_runner import get_partial_hedge_status
 from ..health.account_health import get_account_health
 from ..utils import redact_sensitive_data
@@ -719,6 +725,8 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
     thresholds = state.config.thresholds.slo if state.config.thresholds else {}
 
     safety_snapshot = state.safety.status_payload()
+    runtime_profile = get_runtime_profile_snapshot()
+    environment_tag = str(state.control.environment or state.control.deployment_mode or "paper")
     resume_request = state.safety.resume_request
     resume_pending = bool(resume_request and getattr(resume_request, "approved_ts", None) is None)
     runaway_guard_v2 = safety_snapshot.get("runaway_guard")
@@ -751,6 +759,11 @@ def _build_snapshot(state: RuntimeState) -> Dict[str, object]:
             "v2": dict(runaway_guard_v2),
         },
     }
+    snapshot["profile"] = runtime_profile.get("name", environment_tag)
+    snapshot["is_live"] = bool(runtime_profile.get("is_live", False))
+    snapshot["is_testnet"] = bool(runtime_profile.get("is_testnet", False))
+    snapshot["runtime_profile"] = runtime_profile
+    snapshot["environment"] = environment_tag
     snapshot["risk_throttled"] = bool(safety_snapshot.get("risk_throttled"))
     snapshot["risk_throttle_reason"] = safety_snapshot.get("risk_throttle_reason")
     risk_payload = safety_snapshot.get("risk")
@@ -822,6 +835,10 @@ def get_status_components() -> Dict[str, object]:
         "mode": snapshot.get("mode"),
         "safe_mode": snapshot.get("safe_mode"),
         "dry_run_mode": snapshot.get("dry_run_mode"),
+        "profile": snapshot.get("profile"),
+        "is_live": snapshot.get("is_live"),
+        "is_testnet": snapshot.get("is_testnet"),
+        "environment": snapshot.get("environment"),
         "hold_active": snapshot.get("hold_active"),
         "hold_reason": snapshot.get("hold_reason"),
         "two_man_resume_required": snapshot.get("two_man_resume_required"),
@@ -845,6 +862,10 @@ def get_status_slo() -> Dict[str, object]:
         "mode": snapshot.get("mode"),
         "safe_mode": snapshot.get("safe_mode"),
         "dry_run_mode": snapshot.get("dry_run_mode"),
+        "profile": snapshot.get("profile"),
+        "is_live": snapshot.get("is_live"),
+        "is_testnet": snapshot.get("is_testnet"),
+        "environment": snapshot.get("environment"),
         "hold_active": snapshot.get("hold_active"),
         "two_man_resume_required": snapshot.get("two_man_resume_required"),
         "resume_pending": snapshot.get("resume_pending"),

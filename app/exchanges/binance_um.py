@@ -53,6 +53,16 @@ def _store_credentials() -> tuple[str | None, str | None]:
     return None, None
 
 
+def _first_env(names: list[str | None]) -> str | None:
+    for name in names:
+        if not name:
+            continue
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
 class BinanceUMClient:
     """Minimal USD-M Futures client targeting Binance testnet."""
 
@@ -68,8 +78,22 @@ class BinanceUMClient:
         self._fees_cache: Dict[str, Dict[str, float]] = {}
         self._client: Optional[httpx.Client] = None
         store_key, store_secret = _store_credentials()
-        env_key = os.getenv("BINANCE_UM_API_KEY_TESTNET") if store_key is None else None
-        env_secret = os.getenv("BINANCE_UM_API_SECRET_TESTNET") if store_secret is None else None
+        key_candidates = []
+        secret_candidates = []
+        if getattr(config, "api_key_env", None):
+            key_candidates.append(config.api_key_env)
+        if getattr(config, "api_secret_env", None):
+            secret_candidates.append(config.api_secret_env)
+        if config.testnet:
+            key_candidates.extend(["BINANCE_TESTNET_API_KEY", "BINANCE_UM_API_KEY_TESTNET"])
+            secret_candidates.extend(
+                ["BINANCE_TESTNET_API_SECRET", "BINANCE_UM_API_SECRET_TESTNET"]
+            )
+        else:
+            key_candidates.append("BINANCE_UM_API_KEY")
+            secret_candidates.append("BINANCE_UM_API_SECRET")
+        env_key = _first_env(key_candidates) if store_key is None else None
+        env_secret = _first_env(secret_candidates) if store_secret is None else None
         self._api_key = store_key or env_key
         self._api_secret = store_secret or env_secret
         self._watchdog = get_broker_watchdog()

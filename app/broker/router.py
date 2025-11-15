@@ -111,9 +111,21 @@ class ExecutionRouter:
                 "okx_perp",
                 safe_mode=self.safe_mode or self.dry_run_only,
                 required_env=(
-                    "OKX_API_KEY_TESTNET",
-                    "OKX_API_SECRET_TESTNET",
-                    "OKX_API_PASSPHRASE_TESTNET",
+                    ("OKX_TESTNET_API_KEY", "OKX_API_KEY_TESTNET"),
+                    ("OKX_TESTNET_API_SECRET", "OKX_API_SECRET_TESTNET"),
+                    (
+                        "OKX_TESTNET_API_PASSPHRASE",
+                        "OKX_API_PASSPHRASE_TESTNET",
+                    ),
+                ),
+            ),
+            "bybit-perp": TestnetBroker(
+                "bybit-perp",
+                "bybit_perp",
+                safe_mode=self.safe_mode or self.dry_run_only,
+                required_env=(
+                    ("BYBIT_TESTNET_API_KEY", "BYBIT_API_KEY_TESTNET"),
+                    ("BYBIT_TESTNET_API_SECRET", "BYBIT_API_SECRET_TESTNET"),
                 ),
             ),
         }
