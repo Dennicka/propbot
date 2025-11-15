@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+
 def test_live_guard_endpoint_smoke(client, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALLOW_LIVE_TRADING", "true")
     monkeypatch.setenv("LIVE_TRADING_ALLOWED_VENUES", "binance_perp,okx_perp")
