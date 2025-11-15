@@ -1,4 +1,4 @@
-profile: testnet
+profile: testnet.okx
 control:
   safe_mode: true
   dry_run: true
@@ -16,11 +16,17 @@ api:
   base_url: http://127.0.0.1:8000
 guards:
   cancel_on_disconnect: true
-  rate_limit: { place_per_min: 300, cancel_per_min: 600 }
+  rate_limit:
+    place_per_min: 300
+    cancel_per_min: 600
   clock_skew_guard_ms: 150
   snapshot_diff_check: true
-  kill_caps: { enabled: true, flatten_on_breach: true }
-  runaway_breaker: { place_per_min: 300, cancel_per_min: 600 }
+  kill_caps:
+    enabled: true
+    flatten_on_breach: true
+  runaway_breaker:
+    place_per_min: 300
+    cancel_per_min: 600
   maintenance_calendar: []
 pretrade:
   allow_autofix: true
@@ -31,19 +37,8 @@ exposure_caps:
     per_side_max_abs_usdt:
       LONG: 1500
       SHORT: 1500
-  per_symbol:
-    ETHUSDT:
-      max_abs_usdt: 3000
-      per_side_max_abs_usdt:
-        LONG: 2000
-        SHORT: 2000
-  per_venue:
-    binanceusdm:
-      ETHUSDT:
-        max_abs_usdt: 2000
-    okx:
-      ETHUSDT:
-        max_abs_usdt: 1500
+  per_symbol: {}
+  per_venue: {}
 maintenance:
   windows:
     - from: "02:00"
@@ -53,9 +48,8 @@ maintenance:
 guardrails:
   testnet_block_highrisk: true
   blocklist:
-    - "BTCUSDT.perp"
-    - "ETHUSDT.perp"
-watchdog:
+    - "BTC-USDT-SWAP"
+    - "ETH-USDT-SWAP"
 market:
   ws:
     hb_timeout_s: 3.0
@@ -87,10 +81,11 @@ market:
       degraded: 0.01
       down: 0.05
 risk:
+  max_day_drawdown_bps: 300
   notional_caps:
-    per_symbol_usd: 2000
-    per_venue_usd: 5000
-    total_usd: 8000
+    per_symbol_usd: 1200
+    per_venue_usd: 3500
+    total_usd: 5500
   cross_venue_delta_abs_max_usd: 200
   runaway:
     max_cancels_per_min: 600
@@ -108,6 +103,8 @@ execution:
     cancel_grace_sec: 3
     max_retries: 3
     backoff_sec: [1, 2, 5]
+obs:
+  metrics_interval_sec: 5
 recon:
   enabled: true
   interval_s: 20
@@ -125,17 +122,6 @@ readiness:
 status_thresholds_file: status_thresholds.yaml
 derivatives:
   venues:
-    - id: binance_um
-      testnet: true
-      api_key_env: "BINANCE_TESTNET_API_KEY"
-      api_secret_env: "BINANCE_TESTNET_API_SECRET"
-      symbols: ["BTCUSDT", "ETHUSDT"]
-      leverage: 10
-      margin_type: isolated
-      position_mode: hedge
-      routing:
-        rest: "https://testnet.binancefuture.com"
-        ws: "wss://stream.binancefuture.com"
     - id: okx_perp
       testnet: true
       api_key_env: "OKX_TESTNET_API_KEY"
@@ -147,13 +133,9 @@ derivatives:
       position_mode: hedge
       routing:
         rest: "https://www.okx.com"
-        ws: "wss://ws.okx.com"
+        ws: "wss://ws.okx.com/ws/v5/public"
   arbitrage:
-    pairs:
-      - long: { venue: binance_um, symbol: "BTCUSDT" }
-        short: { venue: okx_perp, symbol: "BTC-USDT-SWAP" }
-      - long: { venue: okx_perp, symbol: "ETH-USDT-SWAP" }
-        short: { venue: binance_um, symbol: "ETHUSDT" }
+    pairs: []
     min_edge_bps: 6
     max_latency_ms: 250
     max_leg_slippage_bps: 3
@@ -161,10 +143,12 @@ derivatives:
     post_only_maker: true
     partial_fill_policy: reject_if_unhedged
   fees:
-    source: "auto"
+    source: "manual"
     manual:
-      binance_um: { maker_bps: 1.8, taker_bps: 3.6, vip_rebate_bps: 0.0 }
-      okx_perp: { maker_bps: 2.0, taker_bps: 5.0, vip_rebate_bps: 0.0 }
+      okx_perp:
+        maker_bps: 2.0
+        taker_bps: 5.0
+        vip_rebate_bps: 0.0
   funding:
     include_next_window: true
     avoid_window_minutes: 5
@@ -173,17 +157,6 @@ tca:
   impact:
     k: 25.0
   tiers:
-    binance_um:
-      - tier: VIP0
-        maker_bps: 1.8
-        taker_bps: 3.6
-        rebate_bps: 0.0
-        notional_from: 0
-      - tier: VIP5
-        maker_bps: 0.8
-        taker_bps: 3.0
-        rebate_bps: 0.1
-        notional_from: 1000000
     okx_perp:
       - tier: VIP0
         maker_bps: 2.0

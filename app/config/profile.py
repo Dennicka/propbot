@@ -4,7 +4,21 @@ import os
 from dataclasses import dataclass
 from typing import Literal, Tuple
 
-ProfileName = Literal["paper", "testnet", "live"]
+ProfileName = Literal[
+    "paper",
+    "testnet",
+    "testnet.binance",
+    "testnet.okx",
+    "testnet.bybit",
+    "live",
+]
+
+_TESTNET_PROFILES: Tuple[str, ...] = (
+    "testnet",
+    "testnet.binance",
+    "testnet.okx",
+    "testnet.bybit",
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +36,9 @@ _DEFAULT_PROFILE: ProfileName = "paper"
 _VALID_PROFILES: dict[str, ProfileName] = {
     "paper": "paper",
     "testnet": "testnet",
+    "testnet.binance": "testnet.binance",
+    "testnet.okx": "testnet.okx",
+    "testnet.bybit": "testnet.bybit",
     "live": "live",
 }
 
@@ -32,7 +49,29 @@ def _normalise_profile(raw: str | None) -> ProfileName:
     if raw is None:
         return _DEFAULT_PROFILE
     lowered = raw.strip().lower()
-    return _VALID_PROFILES.get(lowered, _DEFAULT_PROFILE)
+    if lowered in _VALID_PROFILES:
+        return _VALID_PROFILES[lowered]
+    if lowered.startswith("testnet"):
+        # Collapse unknown testnet variants to the generic testnet profile.
+        return "testnet"
+    return _DEFAULT_PROFILE
+
+
+def normalise_profile_category(raw: str | None) -> str:
+    """Collapse ``raw`` profile string to a coarse category.
+
+    The function returns one of ``paper``, ``testnet`` or ``live`` and defaults to
+    ``paper`` when ``raw`` is empty.
+    """
+
+    if raw is None:
+        return "paper"
+    lowered = raw.strip().lower()
+    if lowered.startswith("testnet"):
+        return "testnet"
+    if lowered.startswith("live"):
+        return "live"
+    return "paper"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -72,13 +111,13 @@ def load_profile_from_env() -> TradingProfile:
             is_canary=canary_active,
             display_name=display_name if canary_active else "paper",
         )
-    if profile_name == "testnet":
+    if profile_name in _TESTNET_PROFILES:
         return TradingProfile(
-            name="testnet",
+            name=profile_name,
             allow_trading=True,
             strict_flags=True,
             is_canary=canary_active,
-            display_name=display_name if canary_active else "testnet",
+            display_name=display_name if canary_active else profile_name,
         )
     return TradingProfile(
         name="live",
@@ -95,10 +134,27 @@ def is_live(profile: TradingProfile) -> bool:
     return profile.name == "live"
 
 
+def is_testnet(profile: TradingProfile) -> bool:
+    """Return ``True`` when the provided profile targets a testnet environment."""
+
+    return profile.name in _TESTNET_PROFILES
+
+
+def is_testnet_name(value: str | None) -> bool:
+    """Return ``True`` if ``value`` designates a testnet profile."""
+
+    if value is None:
+        return False
+    return value.strip().lower().startswith("testnet")
+
+
 __all__ = [
     "TradingProfile",
     "load_profile_from_env",
     "is_live",
+    "is_testnet",
+    "is_testnet_name",
     "resolve_canary_state",
     "is_canary_mode_enabled",
+    "normalise_profile_category",
 ]

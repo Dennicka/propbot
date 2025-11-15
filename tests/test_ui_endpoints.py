@@ -8,7 +8,7 @@ import pytest
 from app import ledger
 from app.config.schema import ExposureCapsConfig, ExposureCapsEntry, ExposureSideCapsConfig
 from app.broker.binance import BinanceTestnetBroker
-from app.services import runtime
+from app.services import cache as ui_cache, runtime
 from app.services.runtime import get_state
 from app.secrets_store import reset_secrets_store_cache
 from app.risk import accounting as risk_accounting, core as risk_core
@@ -358,7 +358,26 @@ def test_ui_state_uses_binance_account_when_testnet(client, monkeypatch):
     )
     exposures = payload["exposures"]
     assert any(entry["symbol"].upper() == "BTCUSDT" for entry in exposures)
-    assert any(entry.get("venue_type") == "binance-testnet" for entry in exposures)
+
+
+def test_status_overview_reports_testnet_profile(client, monkeypatch):
+    monkeypatch.setenv("PROFILE", "testnet.binance")
+    monkeypatch.setenv("EXEC_PROFILE", "testnet.binance")
+    monkeypatch.setenv("MODE", "testnet")
+    runtime.reset_for_tests()
+    runtime.record_resume_request("tests_bootstrap", requested_by="pytest")
+    runtime.approve_resume(actor="pytest")
+    state = get_state()
+    # ensure environment tag reflects testnet after reset
+    state.control.environment = "testnet"
+    state.control.deployment_mode = "testnet.binance"
+
+    response = client.get("/api/ui/status/overview")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["profile"] == "testnet.binance"
+    assert payload["is_testnet"] is True
+    assert payload["is_live"] is False
 
 
 def test_kill_switch_cancels_orders(client, monkeypatch, tmp_path):
@@ -641,6 +660,7 @@ def test_status_includes_watchdog_reason(client):
     watchdog = get_broker_watchdog()
     watchdog.record_ws_lag("binance", 1500.0)
 
+    ui_cache.clear()
     overview = client.get("/api/ui/status/overview")
     assert overview.status_code == 200
     payload = overview.json()

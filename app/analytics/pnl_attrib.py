@@ -9,15 +9,9 @@ from functools import lru_cache
 from typing import Any
 
 from ..config import load_app_config
+from ..services.runtime import resolve_profile_config_path
 from ..risk.core import FeatureFlags
 from ..tca.cost_model import TierInfo, TierTable
-
-_DEFAULT_CONFIG_PATHS = {
-    "paper": "configs/config.paper.yaml",
-    "testnet": "configs/config.testnet.yaml",
-    "live": "configs/config.live.yaml",
-}
-
 
 getcontext().prec = 28
 
@@ -42,7 +36,7 @@ def _resolve_config_path() -> str | None:
         or os.getenv("ENV")
         or "paper"
     )
-    return _DEFAULT_CONFIG_PATHS.get(profile.lower(), _DEFAULT_CONFIG_PATHS["paper"])
+    return resolve_profile_config_path(profile)
 
 
 @lru_cache(maxsize=None)

@@ -10,6 +10,10 @@ VENUE_ALIASES = {
     "okx-perp": "okx-perp",
     "okx_perp": "okx-perp",
     "okx_perp_testnet": "okx-perp-testnet",
+    "bybit": "bybit-perp",
+    "bybit-perp": "bybit-perp",
+    "bybit_perp": "bybit-perp",
+    "bybit_perp_testnet": "bybit-perp-testnet",
     "paper": "paper",
 }
 

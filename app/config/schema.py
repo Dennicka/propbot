@@ -160,6 +160,10 @@ class DerivVenueConfig(BaseModel):
     margin_type: str = "isolated"
     position_mode: str = "hedge"
     routing: DerivRoutingConfig
+    testnet: bool = False
+    api_key_env: str | None = None
+    api_secret_env: str | None = None
+    api_passphrase_env: str | None = None
 
     @field_validator("position_mode")
     def validate_mode(cls, v: str) -> str:
