@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import logging
-
-import pytest
-
+from app.alerts.pipeline import RECON_ISSUES_DETECTED
 from app.alerts.recon import emit_recon_alerts
+from app.alerts.registry import REGISTRY
 from app.recon.models import ReconIssue, ReconSnapshot
 
 
@@ -21,13 +19,14 @@ def _empty_snapshot(*, issues: list[ReconIssue]) -> ReconSnapshot:
     )
 
 
-def test_emit_recon_alerts_no_issues(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO):
-        emit_recon_alerts(_empty_snapshot(issues=[]))
-    assert not caplog.records
+def test_emit_recon_alerts_no_issues() -> None:
+    REGISTRY.clear()
+    emit_recon_alerts(_empty_snapshot(issues=[]))
+    assert not REGISTRY.last()
 
 
-def test_emit_recon_alerts_logs_severities(caplog: pytest.LogCaptureFixture) -> None:
+def test_emit_recon_alerts_records_highest_severity() -> None:
+    REGISTRY.clear()
     issues = [
         ReconIssue(
             severity="error",
@@ -48,9 +47,14 @@ def test_emit_recon_alerts_logs_severities(caplog: pytest.LogCaptureFixture) -> 
             message="Order pending",
         ),
     ]
-    with caplog.at_level(logging.INFO):
-        emit_recon_alerts(_empty_snapshot(issues=issues))
+    emit_recon_alerts(_empty_snapshot(issues=issues))
 
-    levels = {record.levelno for record in caplog.records}
-    assert logging.ERROR in levels
-    assert logging.WARNING in levels
+    records = REGISTRY.last()
+    assert records
+    record = records[-1]
+    assert record.level == "ERROR"
+    assert record.source == "recon"
+    details = dict(record.details)
+    assert details.get("event_type") == RECON_ISSUES_DETECTED
+    context = details.get("context", {})
+    assert context.get("issue_count") == len(issues)

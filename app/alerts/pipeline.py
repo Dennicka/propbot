@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from datetime import datetime, timezone
 import threading
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from .levels import AlertLevel
 from .manager import notify
@@ -11,21 +11,25 @@ from .registry import OpsAlert, OpsAlertsRegistry, OPS_ALERT_SEVERITIES
 
 RISK_LIMIT_BREACHED = "risk_limit_breached"
 PNL_CAP_BREACHED = "pnl_cap_breached"
+RECON_ISSUES_DETECTED = "recon_issues_detected"
+
+
+def _normalise_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _normalise_mapping(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_normalise_value(item) for item in value]
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _normalise_mapping(payload: Mapping[str, object]) -> dict[str, object]:
     normalised: dict[str, object] = {}
     for key, value in payload.items():
-        if isinstance(value, Mapping):
-            normalised[key] = _normalise_mapping(value)
-            continue
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            normalised[key] = value
-            continue
-        if isinstance(value, Decimal):
-            normalised[key] = format(value, "f")
-            continue
-        normalised[key] = str(value)
+        normalised[key] = _normalise_value(value)
     return normalised
 
 
@@ -166,6 +170,7 @@ def get_ops_alerts_pipeline(*, registry: OpsAlertsRegistry | None = None) -> Ops
 __all__ = [
     "OpsAlertsPipeline",
     "PNL_CAP_BREACHED",
+    "RECON_ISSUES_DETECTED",
     "RISK_LIMIT_BREACHED",
     "get_ops_alerts_pipeline",
 ]
