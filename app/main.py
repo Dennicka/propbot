@@ -24,6 +24,7 @@ from .routers import (
     recon,
     ui_ops_report,
     ui_partial_hedge,
+    ui_runtime,
     ui_recon,
     ui_router_decisions,
     ui_secrets,
@@ -252,6 +253,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_universe.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_ops_report.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_partial_hedge.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(ui_runtime.router)
     app.include_router(ui_pnl_attrib.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_recon.router, prefix="/api/ui/recon", tags=["ui"])
     app.include_router(ui_router_decisions.router)

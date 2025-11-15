@@ -13,6 +13,8 @@ from .binance import BinanceLiveBroker, BinanceTestnetBroker
 from .paper import PaperBroker
 from .testnet import TestnetBroker
 from .. import ledger, risk_governor
+from ..config.profile import is_live
+from ..runtime.live_guard import LiveTradingDisabledError, LiveTradingGuard
 from ..services import portfolio, risk
 from ..golden.recorder import golden_replay_enabled
 from ..services.runtime import (
@@ -20,6 +22,7 @@ from ..services.runtime import (
     get_market_data,
     get_safety_status,
     get_state,
+    get_profile,
     is_hold_active,
     register_order_attempt,
     set_open_orders,
@@ -85,6 +88,9 @@ class ExecutionRouter:
         self.dry_run_only = state.control.dry_run
         self.two_man_rule = state.control.two_man_rule
         self.market_data = get_market_data()
+        profile = get_profile()
+        self._live_guard = LiveTradingGuard(runtime_profile=profile.name)
+        self._is_live_profile = is_live(profile)
         environment = str(
             state.control.environment or state.control.deployment_mode or "paper"
         ).lower()
@@ -258,6 +264,7 @@ class ExecutionRouter:
         reduce_only: bool,
         plan_key: str,
         index: int,
+        strategy_id: str | None,
     ) -> Dict[str, object]:
         attempt = 0
         last_error: Exception | None = None
@@ -269,6 +276,22 @@ class ExecutionRouter:
                     venue=venue, symbol=symbol, side=side, original=price_to_use
                 )
             try:
+                if self._is_live_profile and not self.dry_run_only:
+                    try:
+                        self._live_guard.ensure_live_allowed(
+                            venue_id=venue,
+                            strategy_id=strategy_id,
+                        )
+                    except LiveTradingDisabledError as guard_exc:
+                        LOGGER.error(
+                            "Live trading blocked by guard",
+                            extra={
+                                "venue": venue,
+                                "strategy_id": strategy_id,
+                                "error": str(guard_exc),
+                            },
+                        )
+                        raise
                 price_for_notional = price_to_use if price_to_use is not None else price
                 try:
                     notional_value = abs(float(qty) * float(price_for_notional or 0.0))
@@ -318,6 +341,8 @@ class ExecutionRouter:
                 record_risk_order_success(venue=venue, category="accepted")
                 return order
             except HoldActiveError:
+                raise
+            except LiveTradingDisabledError:
                 raise
             except asyncio.TimeoutError as exc:
                 last_error = exc
@@ -413,6 +438,7 @@ class ExecutionRouter:
             hold_reason = await risk_governor.validate(context="order_execution")
             if hold_reason:
                 raise HoldActiveError(hold_reason)
+            strategy_id = getattr(plan, "strategy_id", None) or getattr(plan, "strategy", None)
             for index, leg in enumerate(plan.legs):
                 broker = self._resolve_broker(leg.exchange)
                 venue = self._venue_for_exchange(leg.exchange)
@@ -428,6 +454,7 @@ class ExecutionRouter:
                     reduce_only=reduce_only,
                     plan_key=plan_key,
                     index=index,
+                    strategy_id=strategy_id,
                 )
                 orders.append(order)
             open_orders = await self._refresh_open_orders()
@@ -454,6 +481,15 @@ class ExecutionRouter:
         reduce_only: bool = False,
     ) -> Dict[str, object]:
         broker = self.broker_for_venue(venue)
+        if self._is_live_profile and not self.dry_run_only:
+            try:
+                self._live_guard.ensure_live_allowed(venue_id=venue, strategy_id=None)
+            except LiveTradingDisabledError as exc:
+                LOGGER.error(
+                    "Live trading blocked by guard",
+                    extra={"venue": venue, "strategy_id": None, "error": str(exc)},
+                )
+                raise
         order = await broker.create_order(
             venue=venue,
             symbol=symbol,
@@ -520,6 +556,15 @@ class ExecutionRouter:
             raise HoldActiveError(reason or "RISK_THROTTLED")
         await broker.cancel(venue=venue, order_id=order_id)
         replacement_id = client_order_id or f"{existing.get('idemp_key') or order_id}:replace"
+        if self._is_live_profile and not self.dry_run_only:
+            try:
+                self._live_guard.ensure_live_allowed(venue_id=venue, strategy_id=None)
+            except LiveTradingDisabledError as exc:
+                LOGGER.error(
+                    "Live trading blocked by guard",
+                    extra={"venue": venue, "strategy_id": None, "error": str(exc)},
+                )
+                raise
         order = await broker.create_order(
             venue=venue,
             symbol=symbol_value,
