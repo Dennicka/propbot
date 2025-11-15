@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Iterable, Tuple, cast
 
 from ..utils.decimal import to_decimal
+from ..strategies.registry import StrategyId
 
 
 def _to_decimal(value: object) -> Decimal:
@@ -26,6 +27,7 @@ class PositionPnlSnapshot:
 
     symbol: str
     venue: str
+    strategy_id: StrategyId | None = None
     size: Decimal = Decimal("0")
     entry_price: Decimal = Decimal("0")
     mark_price: Decimal = Decimal("0")
@@ -35,10 +37,12 @@ class PositionPnlSnapshot:
     funding_paid: Decimal = Decimal("0")
     gross_pnl: Decimal | None = None
     net_pnl: Decimal | None = None
+    notional_usd: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         self.symbol = str(self.symbol or "").upper()
         self.venue = str(self.venue or "").lower()
+        self.strategy_id = str(self.strategy_id) if self.strategy_id else None
         self.size = _to_decimal(self.size)
         self.entry_price = _to_decimal(self.entry_price)
         self.mark_price = _to_decimal(self.mark_price)
@@ -46,6 +50,7 @@ class PositionPnlSnapshot:
         self.unrealized_pnl = _to_decimal(self.unrealized_pnl)
         self.fees_paid = _to_decimal(self.fees_paid)
         self.funding_paid = _to_decimal(self.funding_paid)
+        self.notional_usd = _to_decimal(self.notional_usd)
 
         gross = self.gross_pnl
         if gross is None:
@@ -114,8 +119,97 @@ def aggregate_portfolio_pnl(
     )
 
 
+@dataclass(slots=True)
+class StrategyPnlSnapshot:
+    strategy_id: StrategyId
+    gross_pnl: Decimal
+    net_pnl: Decimal
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    fees_paid: Decimal
+    funding_paid: Decimal
+    positions_count: int
+    notional_usd: Decimal
+
+
+@dataclass(slots=True)
+class StrategyExposureSnapshot:
+    strategy_id: StrategyId
+    notional_usd: Decimal
+    net_qty: Decimal | None
+    positions_count: int
+
+
+def build_strategy_pnl_snapshots(
+    positions: Iterable[PositionPnlSnapshot],
+) -> list[StrategyPnlSnapshot]:
+    class _Accumulator:
+        __slots__ = (
+            "gross_pnl",
+            "net_pnl",
+            "realized_pnl",
+            "unrealized_pnl",
+            "fees_paid",
+            "funding_paid",
+            "positions_count",
+            "notional_usd",
+        )
+
+        def __init__(self) -> None:
+            self.gross_pnl = Decimal("0")
+            self.net_pnl = Decimal("0")
+            self.realized_pnl = Decimal("0")
+            self.unrealized_pnl = Decimal("0")
+            self.fees_paid = Decimal("0")
+            self.funding_paid = Decimal("0")
+            self.positions_count = 0
+            self.notional_usd = Decimal("0")
+
+    buckets: dict[StrategyId, _Accumulator] = {}
+
+    for position in positions:
+        strategy_id = position.strategy_id
+        if not strategy_id:
+            continue
+
+        bucket = buckets.get(strategy_id)
+        if bucket is None:
+            bucket = _Accumulator()
+            buckets[strategy_id] = bucket
+
+        bucket.gross_pnl += position.gross_pnl
+        bucket.net_pnl += position.net_pnl
+        bucket.realized_pnl += position.realized_pnl
+        bucket.unrealized_pnl += position.unrealized_pnl
+        bucket.fees_paid += position.fees_paid
+        bucket.funding_paid += position.funding_paid
+        bucket.notional_usd += position.notional_usd.copy_abs()
+        bucket.positions_count += 1
+
+    snapshots: list[StrategyPnlSnapshot] = []
+    for strategy_id, bucket in sorted(buckets.items()):
+        snapshots.append(
+            StrategyPnlSnapshot(
+                strategy_id=strategy_id,
+                gross_pnl=bucket.gross_pnl,
+                net_pnl=bucket.net_pnl,
+                realized_pnl=bucket.realized_pnl,
+                unrealized_pnl=bucket.unrealized_pnl,
+                fees_paid=bucket.fees_paid,
+                funding_paid=bucket.funding_paid,
+                positions_count=bucket.positions_count,
+                notional_usd=bucket.notional_usd,
+            )
+        )
+
+    return snapshots
+
+
 __all__ = [
     "PositionPnlSnapshot",
     "PortfolioPnlSnapshot",
+    "StrategyPnlSnapshot",
+    "StrategyExposureSnapshot",
     "aggregate_portfolio_pnl",
+    "build_strategy_pnl_snapshots",
 ]

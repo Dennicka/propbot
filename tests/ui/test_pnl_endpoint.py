@@ -96,3 +96,32 @@ def test_ui_pnl_zero_portfolio_returns_zeroes(monkeypatch) -> None:
     assert payload["gross_pnl"] == "0"
     assert payload["net_pnl"] == "0"
     assert payload["positions"] == []
+    assert payload["by_strategy"] == []
+
+
+def test_ui_pnl_includes_by_strategy_block(monkeypatch) -> None:
+    positions = (
+        PositionPnlSnapshot(
+            symbol="BTCUSDT",
+            venue="binance",
+            strategy_id="test_strategy",
+            realized_pnl=Decimal("1"),
+            unrealized_pnl=Decimal("2"),
+            notional_usd=Decimal("100"),
+        ),
+    )
+
+    monkeypatch.setattr(ui_pnl, "_load_position_snapshots", lambda: positions)
+
+    response = client.get("/api/ui/pnl")
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert "by_strategy" in payload
+    assert isinstance(payload["by_strategy"], list)
+    assert len(payload["by_strategy"]) == 1
+
+    item = payload["by_strategy"][0]
+    assert item["strategy_id"] == "test_strategy"
+    assert "net_pnl" in item
+    assert "notional_usd" in item
