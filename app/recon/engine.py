@@ -1,158 +1,291 @@
-"""Offline reconciliation pass between ledger and outbox state."""
+"""Reconciliation helpers comparing internal and external exchange state."""
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-from pathlib import Path
-from typing import Dict, List
+from decimal import Decimal
+from typing import Iterable, Sequence
 
-from app.alerts.events import evt_recon_issues
-from app.db import ledger
-from app.metrics.core import counter as metrics_counter, gauge as metrics_gauge
-from app.metrics.recon import RECON_ISSUES_TOTAL
-from app.ops.hooks import ops_alert
-from app.health.watchdog import get_watchdog
+from app.recon.models import (
+    ExchangeBalanceSnapshot,
+    ExchangeOrderSnapshot,
+    ExchangePositionSnapshot,
+    ReconIssue,
+    ReconSnapshot,
+    VenueId,
+)
 
-try:  # pragma: no cover - optional dependency guard
-    from app.outbox.journal import OutboxJournal
-except ImportError:  # pragma: no cover - fallback when outbox is unavailable
-    OutboxJournal = None  # type: ignore[assignment]
-
-_RECON_REPORT_PATH_ENV = "RECON_REPORT_PATH"
-_RECON_FAIL_AGE_ENV = "RECON_FAIL_AGE_SEC"
-_OUTBOX_PATH_ENV = "OUTBOX_PATH"
-
-_RECON_RUNS_TOTAL = metrics_counter("propbot_recon_runs_total")
-_RECON_PENDING_STALE = metrics_gauge("propbot_recon_pending_stale")
-
-_FINAL_STATUSES = {
-    "FINAL",
-    "FILLED",
-    "REJECTED",
-    "CANCELED",
-    "CANCELLED",
-    "FAILED",
-    "EXPIRED",
-}
+from .engine_legacy import (
+    _load_outbox,  # noqa: F401 - legacy compat
+    _report_path,  # noqa: F401 - legacy compat
+    ledger,  # noqa: F401 - legacy compat
+    run_recon,  # noqa: F401 - legacy compat
+)
 
 
-def _parse_int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
+def reconcile_balances(
+    venue_id: VenueId,
+    internal: Iterable[ExchangeBalanceSnapshot],
+    external: Iterable[ExchangeBalanceSnapshot],
+    *,
+    tolerance: Decimal = Decimal("0.0001"),
+) -> list[ReconIssue]:
+    """Compare internal vs external balances and record mismatches."""
 
+    internal_map: dict[tuple[str], ExchangeBalanceSnapshot] = {
+        (balance.asset,): balance for balance in internal
+    }
+    external_map: dict[tuple[str], ExchangeBalanceSnapshot] = {
+        (balance.asset,): balance for balance in external
+    }
 
-def _report_path() -> Path:
-    raw = os.getenv(_RECON_REPORT_PATH_ENV, "data/recon/last_report.json")
-    target = Path(raw)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    return target
+    issues: list[ReconIssue] = []
+    all_assets = set(internal_map.keys()) | set(external_map.keys())
 
+    for key in all_assets:
+        asset = key[0]
+        internal_balance = internal_map.get(key)
+        external_balance = external_map.get(key)
 
-def _write_report(path: Path, payload: Dict[str, object]) -> None:
-    directory = path.parent
-    directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=str(directory), delete=False
-    ) as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.flush()
-        os.fsync(handle.fileno())
-        tmp_name = handle.name
-    os.replace(tmp_name, path)
-
-
-def _status_counts(statuses: Dict[str, str]) -> Dict[str, int]:
-    counts = {"PENDING": 0, "ACKED": 0, "FINAL": 0, "FAILED": 0}
-    for status in statuses.values():
-        key = status.strip().upper()
-        if key == "PENDING":
-            counts["PENDING"] += 1
-        elif key == "ACKED":
-            counts["ACKED"] += 1
-        elif key == "FAILED":
-            counts["FAILED"] += 1
-        else:
-            counts["FINAL"] += 1
-    return counts
-
-
-def _load_outbox() -> Dict[str, tuple[float, str, str]]:
-    if OutboxJournal is None:
-        return {}
-    outbox_path = os.getenv(_OUTBOX_PATH_ENV, "data/journal/outbox.jsonl")
-    journal = OutboxJournal(outbox_path)
-    mapping = getattr(journal, "_by_intent", {})
-    if not isinstance(mapping, dict):
-        return {}
-    return {str(key): value for key, value in mapping.items()}
-
-
-def _ledger_status_for_issue(ledger_status: str) -> str:
-    return ledger_status.strip().upper()
-
-
-def run_recon(now: float) -> Dict[str, object]:
-    statuses = ledger.fetch_orders_status()
-    counts = _status_counts(statuses)
-    stale_age = _parse_int_env(_RECON_FAIL_AGE_ENV, 10)
-    stale_orders = ledger.get_stale_pending(now, stale_age)
-    issues: List[Dict[str, object]] = []
-    for order_id in stale_orders:
-        issues.append({"kind": "pending-stale", "order_id": order_id})
-
-    outbox_records = _load_outbox()
-    if outbox_records:
-        for intent_key, (_, status, order_id) in outbox_records.items():
-            ledger_status = statuses.get(order_id)
-            if not ledger_status:
-                continue
-            ledger_status_key = _ledger_status_for_issue(ledger_status)
-            outbox_status = status.strip().upper()
-            if outbox_status == "FINAL" and ledger_status_key not in _FINAL_STATUSES:
-                issues.append(
-                    {
-                        "kind": "mismatch-final",
-                        "intent_key": intent_key,
-                        "order_id": order_id,
-                        "ledger_status": ledger_status_key,
-                    }
+        if internal_balance is None:
+            issues.append(
+                ReconIssue(
+                    severity="warning",
+                    kind="missing_internal",
+                    venue_id=venue_id,
+                    symbol=None,
+                    asset=asset,
+                    message="Balance present on exchange but missing internally",
+                    internal_value=None,
+                    external_value=str(external_balance.total) if external_balance else None,
                 )
-            elif outbox_status == "ACKED" and ledger_status_key not in _FINAL_STATUSES.union(
-                {"ACKED"}
-            ):
-                issues.append(
-                    {
-                        "kind": "mismatch-acked",
-                        "intent_key": intent_key,
-                        "order_id": order_id,
-                        "ledger_status": ledger_status_key,
-                    }
+            )
+            continue
+
+        if external_balance is None:
+            issues.append(
+                ReconIssue(
+                    severity="warning",
+                    kind="missing_external",
+                    venue_id=venue_id,
+                    symbol=None,
+                    asset=asset,
+                    message="Balance present internally but missing on exchange",
+                    internal_value=str(internal_balance.total),
+                    external_value=None,
                 )
+            )
+            continue
 
-    report = {"counts": counts, "issues": issues}
+        diff = (internal_balance.total - external_balance.total).copy_abs()
+        if diff > tolerance:
+            issues.append(
+                ReconIssue(
+                    severity="error",
+                    kind="balance_mismatch",
+                    venue_id=venue_id,
+                    symbol=None,
+                    asset=asset,
+                    message=f"Balance mismatch for asset={asset}",
+                    internal_value=str(internal_balance.total),
+                    external_value=str(external_balance.total),
+                )
+            )
 
-    _RECON_RUNS_TOTAL.inc()
-    _RECON_PENDING_STALE.set(float(len(stale_orders)))
-    for item in issues:
-        kind = str(item.get("kind", "unknown"))
-        RECON_ISSUES_TOTAL.labels(kind=kind, code="orders", severity="WARN").inc()
-
-    _write_report(_report_path(), report)
-    if issues:
-        sample = [str(entry.get("kind", "")) for entry in issues[:3]]
-        ops_alert(evt_recon_issues(len(issues), sample))
-
-    watchdog = get_watchdog()
-    watchdog.mark_recon_run()
-    watchdog.mark_ledger_update()
-    return report
+    return issues
 
 
-__all__ = ["run_recon"]
+def reconcile_positions(
+    venue_id: VenueId,
+    internal: Iterable[ExchangePositionSnapshot],
+    external: Iterable[ExchangePositionSnapshot],
+    *,
+    qty_tolerance: Decimal = Decimal("0.0001"),
+    notional_tolerance: Decimal = Decimal("1"),
+) -> list[ReconIssue]:
+    """Compare internal vs external positions and record mismatches."""
+
+    internal_map: dict[tuple[str], ExchangePositionSnapshot] = {
+        (position.symbol,): position for position in internal
+    }
+    external_map: dict[tuple[str], ExchangePositionSnapshot] = {
+        (position.symbol,): position for position in external
+    }
+
+    issues: list[ReconIssue] = []
+    all_symbols = set(internal_map.keys()) | set(external_map.keys())
+
+    for key in all_symbols:
+        symbol = key[0]
+        internal_position = internal_map.get(key)
+        external_position = external_map.get(key)
+
+        if internal_position is None:
+            issues.append(
+                ReconIssue(
+                    severity="warning",
+                    kind="missing_internal",
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    asset=None,
+                    message="Position present on exchange but missing internally",
+                    internal_value=None,
+                    external_value=str(external_position.qty) if external_position else None,
+                )
+            )
+            continue
+
+        if external_position is None:
+            issues.append(
+                ReconIssue(
+                    severity="warning",
+                    kind="missing_external",
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    asset=None,
+                    message="Position present internally but missing on exchange",
+                    internal_value=str(internal_position.qty),
+                    external_value=None,
+                )
+            )
+            continue
+
+        qty_diff = (internal_position.qty - external_position.qty).copy_abs()
+        notional_diff = (internal_position.notional - external_position.notional).copy_abs()
+        if qty_diff > qty_tolerance or notional_diff > notional_tolerance:
+            issues.append(
+                ReconIssue(
+                    severity="error",
+                    kind="position_mismatch",
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    asset=None,
+                    message=f"Position mismatch for symbol={symbol}",
+                    internal_value=f"qty={internal_position.qty} notional={internal_position.notional}",
+                    external_value=f"qty={external_position.qty} notional={external_position.notional}",
+                )
+            )
+
+    return issues
+
+
+def reconcile_orders(
+    venue_id: VenueId,
+    internal: Iterable[ExchangeOrderSnapshot],
+    external: Iterable[ExchangeOrderSnapshot],
+) -> list[ReconIssue]:
+    """Compare internal vs external open orders and record mismatches."""
+
+    def _order_key(order: ExchangeOrderSnapshot) -> tuple[str, str | None]:
+        identifier = order.client_order_id or order.exchange_order_id
+        return (order.symbol, identifier)
+
+    internal_map: dict[tuple[str, str | None], ExchangeOrderSnapshot] = {}
+    for order in internal:
+        internal_map[_order_key(order)] = order
+
+    external_map: dict[tuple[str, str | None], ExchangeOrderSnapshot] = {}
+    for order in external:
+        external_map[_order_key(order)] = order
+
+    issues: list[ReconIssue] = []
+    all_keys = set(internal_map.keys()) | set(external_map.keys())
+
+    for key in all_keys:
+        internal_order = internal_map.get(key)
+        external_order = external_map.get(key)
+        symbol = key[0]
+
+        if internal_order is None:
+            issues.append(
+                ReconIssue(
+                    severity="warning",
+                    kind="missing_internal",
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    asset=None,
+                    message="Order present on exchange but missing internally",
+                    internal_value=None,
+                    external_value=_format_order_value(external_order),
+                )
+            )
+            continue
+
+        if external_order is None:
+            issues.append(
+                ReconIssue(
+                    severity="warning",
+                    kind="missing_external",
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    asset=None,
+                    message="Order present internally but missing on exchange",
+                    internal_value=_format_order_value(internal_order),
+                    external_value=None,
+                )
+            )
+            continue
+
+        if (
+            internal_order.qty != external_order.qty
+            or internal_order.price != external_order.price
+            or internal_order.side != external_order.side
+        ):
+            issues.append(
+                ReconIssue(
+                    severity="error",
+                    kind="order_mismatch",
+                    venue_id=venue_id,
+                    symbol=symbol,
+                    asset=None,
+                    message=f"Order mismatch for symbol={symbol}",
+                    internal_value=_format_order_value(internal_order),
+                    external_value=_format_order_value(external_order),
+                )
+            )
+
+    return issues
+
+
+def _format_order_value(order: ExchangeOrderSnapshot | None) -> str | None:
+    if order is None:
+        return None
+    identifier = order.client_order_id or order.exchange_order_id or "?"
+    return f"id={identifier} side={order.side} qty={order.qty} price={order.price}"
+
+
+def build_recon_snapshot(
+    venue_id: VenueId,
+    *,
+    balances_internal: Sequence[ExchangeBalanceSnapshot],
+    balances_external: Sequence[ExchangeBalanceSnapshot],
+    positions_internal: Sequence[ExchangePositionSnapshot],
+    positions_external: Sequence[ExchangePositionSnapshot],
+    orders_internal: Sequence[ExchangeOrderSnapshot],
+    orders_external: Sequence[ExchangeOrderSnapshot],
+) -> ReconSnapshot:
+    """Construct a reconciliation snapshot aggregating all issue types."""
+
+    issues: list[ReconIssue] = []
+    issues.extend(reconcile_balances(venue_id, balances_internal, balances_external))
+    issues.extend(reconcile_positions(venue_id, positions_internal, positions_external))
+    issues.extend(reconcile_orders(venue_id, orders_internal, orders_external))
+
+    return ReconSnapshot(
+        venue_id=venue_id,
+        balances_internal=balances_internal,
+        balances_external=balances_external,
+        positions_internal=positions_internal,
+        positions_external=positions_external,
+        open_orders_internal=orders_internal,
+        open_orders_external=orders_external,
+        issues=issues,
+    )
+
+
+__all__ = [
+    "reconcile_balances",
+    "reconcile_positions",
+    "reconcile_orders",
+    "build_recon_snapshot",
+    "run_recon",
+]
