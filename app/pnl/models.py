@@ -121,6 +121,8 @@ def aggregate_portfolio_pnl(
 
 @dataclass(slots=True)
 class StrategyPnlSnapshot:
+    """Aggregated PnL metrics for a strategy across all open positions."""
+
     strategy_id: StrategyId
     gross_pnl: Decimal
     net_pnl: Decimal
@@ -134,6 +136,8 @@ class StrategyPnlSnapshot:
 
 @dataclass(slots=True)
 class StrategyExposureSnapshot:
+    """Exposure view for a strategy derived from its open positions."""
+
     strategy_id: StrategyId
     notional_usd: Decimal
     net_qty: Decimal | None
@@ -142,6 +146,8 @@ class StrategyExposureSnapshot:
 
 @dataclass(slots=True)
 class StrategyPerformanceSnapshot:
+    """Historical trade performance statistics for a single strategy."""
+
     strategy_id: StrategyId
     trades_count: int
     winning_trades: int

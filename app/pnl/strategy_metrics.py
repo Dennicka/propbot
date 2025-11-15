@@ -69,6 +69,8 @@ def _parse_timestamp(value: object) -> float:
 
 
 def compute_max_drawdown(equity_curve: Sequence[Decimal]) -> Decimal:
+    """Return the peak-to-trough drawdown for an equity curve."""
+
     if not equity_curve:
         return _DECIMAL_ZERO
     peak = equity_curve[0]
@@ -86,6 +88,8 @@ def compute_max_drawdown(equity_curve: Sequence[Decimal]) -> Decimal:
 def build_strategy_performance(
     trades: Iterable[TradeRecord],
 ) -> list[StrategyPerformanceSnapshot]:
+    """Aggregate trade history into performance metrics per strategy."""
+
     buckets: dict[StrategyId, list[TradeRecord]] = {}
     for trade in trades:
         strategy_id = (trade.strategy_id or "").strip()
@@ -195,6 +199,8 @@ def _normalise_price(value: object) -> Decimal:
 
 
 def get_recent_trades(limit: int = 1000) -> list[TradeRecord]:
+    """Fetch and normalise recent ledger fills into trade records."""
+
     rows = ledger.fetch_recent_fills(limit)
     if not rows:
         return []
