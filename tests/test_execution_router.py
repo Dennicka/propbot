@@ -31,6 +31,8 @@ class DummyMarketData:
             "bid": float(book.get("bid", 0.0)),
             "ask": float(book.get("ask", 0.0)),
             "ts": float(book.get("ts", time.time())),
+            "bid_qty": float(book.get("bid_qty", 0.0)),
+            "ask_qty": float(book.get("ask_qty", 0.0)),
         }
 
 
@@ -53,8 +55,20 @@ def _patch_runtime(monkeypatch):
 def test_choose_venue_prefers_best_effective_price(monkeypatch, _patch_runtime):
     market_data = _patch_runtime
     market_data.books = {
-        "binance": {"bid": 100.0, "ask": 100.0, "ts": time.time()},
-        "okx": {"bid": 99.4, "ask": 99.4, "ts": time.time()},
+        "binance": {
+            "bid": 100.0,
+            "ask": 100.0,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
+        "okx": {
+            "bid": 99.4,
+            "ask": 99.4,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
     }
     binance = DummyClient(mark_price=100.0, available=10_000.0)
     okx = DummyClient(mark_price=99.4, available=10_000.0)
@@ -77,8 +91,20 @@ def test_choose_venue_prefers_best_effective_price(monkeypatch, _patch_runtime):
 def test_choose_venue_marks_insufficient_liquidity(monkeypatch, _patch_runtime):
     market_data = _patch_runtime
     market_data.books = {
-        "binance": {"bid": 100.0, "ask": 100.5, "ts": time.time()},
-        "okx": {"bid": 101.0, "ask": 101.5, "ts": time.time()},
+        "binance": {
+            "bid": 100.0,
+            "ask": 100.5,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
+        "okx": {
+            "bid": 101.0,
+            "ask": 101.5,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
     }
     binance = DummyClient(mark_price=100.0, available=500.0)
     okx = DummyClient(mark_price=101.0, available=5.0)
@@ -103,8 +129,20 @@ def test_choose_venue_marks_insufficient_liquidity(monkeypatch, _patch_runtime):
 def test_choose_venue_scoring_prefers_best_ask(monkeypatch, _patch_runtime):
     market_data = _patch_runtime
     market_data.books = {
-        "binance": {"bid": 99.0, "ask": 100.0, "ts": time.time()},
-        "okx": {"bid": 99.5, "ask": 101.0, "ts": time.time()},
+        "binance": {
+            "bid": 99.0,
+            "ask": 100.0,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
+        "okx": {
+            "bid": 99.5,
+            "ask": 101.0,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
     }
     binance = DummyClient(mark_price=100.0, available=10_000.0)
     okx = DummyClient(mark_price=101.0, available=10_000.0)
@@ -128,8 +166,20 @@ def test_choose_venue_scoring_prefers_best_ask(monkeypatch, _patch_runtime):
 def test_choose_venue_scoring_prefers_best_bid(monkeypatch, _patch_runtime):
     market_data = _patch_runtime
     market_data.books = {
-        "binance": {"bid": 110.0, "ask": 111.0, "ts": time.time()},
-        "okx": {"bid": 108.0, "ask": 109.0, "ts": time.time()},
+        "binance": {
+            "bid": 110.0,
+            "ask": 111.0,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
+        "okx": {
+            "bid": 108.0,
+            "ask": 109.0,
+            "ts": time.time(),
+            "bid_qty": 50.0,
+            "ask_qty": 50.0,
+        },
     }
     binance = DummyClient(mark_price=110.0, available=10_000.0)
     okx = DummyClient(mark_price=108.0, available=10_000.0)
