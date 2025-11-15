@@ -79,6 +79,10 @@ from ..util.venues import VENUE_ALIASES
 from ..risk.budgets import get_risk_budgets
 from ..risk.limits import RiskGovernor, load_config_from_env
 from ..strategies.budgets import StrategyBudgetCheckInput, check_strategy_budget
+from ..strategies.lifecycle import (
+    StrategyLifecycleContext,
+    check_strategy_lifecycle,
+)
 from ..strategies.registry import StrategyId, get_strategy_registry
 from .timeouts import DeadlineTracker
 from ..sor.plan import Leg, RoutePlan
@@ -1160,6 +1164,52 @@ class SmartRouter:
                     return _router_response(
                         {"ok": False, "reason": "readiness-agg", "detail": detail}
                     )
+            runtime_profile_name = getattr(profile, "name", "unknown") if profile else "unknown"
+            lifecycle_ctx = StrategyLifecycleContext(
+                strategy_id=strategy,
+                runtime_profile=runtime_profile_name,
+                router_flagset=None,
+                extra={"venue": venue, "symbol": symbol},
+            )
+            lifecycle_decision = check_strategy_lifecycle(lifecycle_ctx)
+            if not lifecycle_decision.allowed:
+                LOGGER.warning(
+                    "smart_router.strategy_lifecycle_blocked",
+                    extra={
+                        "event": "smart_router_strategy_lifecycle_blocked",
+                        "component": "smart_router",
+                        "details": {
+                            "client_order_id": client_order_id,
+                            "strategy": strategy,
+                            "symbol": symbol,
+                            "reason": lifecycle_decision.reason,
+                            "mode": lifecycle_decision.mode,
+                            "priority": lifecycle_decision.priority,
+                            "profile": runtime_profile_name,
+                        },
+                    },
+                )
+                metrics_reason = "strategy-lifecycle"
+                ops_alert(
+                    evt_router_block(
+                        reason="strategy-lifecycle",
+                        strategy=strategy,
+                        symbol=symbol,
+                        extra={
+                            "mode": lifecycle_decision.mode,
+                            "priority": lifecycle_decision.priority,
+                            "detail": lifecycle_decision.reason,
+                        },
+                    )
+                )
+                return _router_response(
+                    {
+                        "client_order_id": client_order_id,
+                        "status": "strategy_lifecycle_blocked",
+                        "reason": "strategy-lifecycle",
+                        "detail": lifecycle_decision.reason,
+                    }
+                )
             strategy_budget_notional = Decimal("0")
             try:
                 price_for_strategy_budget = Decimal("0") if price is None else Decimal(str(price))

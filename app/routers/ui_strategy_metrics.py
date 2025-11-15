@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from ..pnl.strategy_metrics import build_strategy_performance, get_recent_trades
 from ..pnl.models import StrategyPerformanceSnapshot
-from ..strategies.registry import get_strategy_registry
+from ..strategies.registry import StrategyMode, get_strategy_registry
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -16,6 +16,9 @@ router = APIRouter(prefix="/api/ui", tags=["ui"])
 class UiStrategyPerformance(BaseModel):
     strategy_id: str
     strategy_name: str | None = None
+    enabled: bool | None = None
+    mode: StrategyMode | None = None
+    priority: int | None = None
     trades_count: int
     winning_trades: int
     losing_trades: int
@@ -33,9 +36,15 @@ def _to_ui_model(
     registry = get_strategy_registry()
     info = registry.get(snapshot.strategy_id)
     name = info.name if info is not None else None
+    enabled = info.enabled if info is not None else None
+    mode = info.mode if info is not None else None
+    priority = info.priority if info is not None else None
     return UiStrategyPerformance(
         strategy_id=snapshot.strategy_id,
         strategy_name=name,
+        enabled=enabled,
+        mode=mode,
+        priority=priority,
         trades_count=snapshot.trades_count,
         winning_trades=snapshot.winning_trades,
         losing_trades=snapshot.losing_trades,
