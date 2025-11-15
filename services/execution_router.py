@@ -18,10 +18,13 @@ from app.router.sor_scoring import (
     Side,
     choose_best_venue,
 )
+from app.router.sor_log import append_router_decision, make_log_entry
+from app.metrics.router import sor_decisions_total
 from app.services.runtime import (
     get_liquidity_status,
     get_market_data,
     get_state,
+    get_profile,
     is_dry_run_mode,
 )
 from app.util.venues import VENUE_ALIASES
@@ -280,6 +283,39 @@ def choose_venue(side: str, symbol: str, size: float) -> Dict[str, object]:
             }
     if scoring_info is None:
         scoring_info = {"best": None, "score": None, "reason": "no_candidates"}
+
+    strategy_raw = (
+        getattr(control, "strategy", None)
+        or getattr(control, "default_strategy", None)
+        or getattr(state, "strategy", None)
+        or getattr(state, "strategy_id", None)
+    )
+    strategy_id = str(strategy_raw) if strategy_raw is not None else None
+    try:
+        runtime_profile_name = getattr(get_profile(), "name", "unknown")
+    except RuntimeError:
+        runtime_profile_name = "unknown"
+
+    decision_entry = make_log_entry(
+        symbol=symbol_normalised,
+        strategy_id=strategy_id,
+        runtime_profile=runtime_profile_name,
+        candidates=scoring_candidates,
+        chosen=best_scoring,
+    )
+    append_router_decision(decision_entry)
+
+    metric_strategy_id = strategy_id or "unknown"
+    if decision_entry.chosen_venue_id is None:
+        sor_decisions_total.labels(
+            strategy_id=metric_strategy_id, venue_id="none", result="none"
+        ).inc()
+    else:
+        sor_decisions_total.labels(
+            strategy_id=metric_strategy_id,
+            venue_id=decision_entry.chosen_venue_id,
+            result="selected",
+        ).inc()
 
     smart_router_info: Dict[str, object] = {"enabled": False, "scoring": scoring_info}
     if smart_router_feature_enabled():
