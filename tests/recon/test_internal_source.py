@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
+from app import ledger
 from app.recon.internal_source import InternalStateSource
 
 
@@ -82,3 +84,75 @@ async def test_internal_source_loads_internal_state(monkeypatch: pytest.MonkeyPa
     assert second_order.side == "sell"
     assert second_order.client_order_id == "order-2"
     assert second_order.exchange_order_id == "ex-2"
+
+
+@pytest.mark.asyncio
+async def test_internal_source_reads_from_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    ledger_path = tmp_path / "ledger.db"
+    monkeypatch.setattr(ledger, "LEDGER_PATH", ledger_path)
+    ledger.init_db()
+    ledger.reset()
+
+    ts = datetime.now(timezone.utc).isoformat()
+    filled_order_id = ledger.record_order(
+        venue="binance",  # internal ledger venue name
+        symbol="BTCUSDT",
+        side="buy",
+        qty=1.5,
+        price=20_000.0,
+        status="filled",
+        client_ts=ts,
+        exchange_ts=ts,
+        idemp_key="filled-order",
+    )
+    ledger.record_fill(
+        order_id=filled_order_id,
+        venue="binance",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=1.5,
+        price=20_000.0,
+        fee=15.0,
+        ts=ts,
+    )
+    ledger.update_order_status(filled_order_id, "filled")
+
+    ledger.record_order(
+        venue="binance",
+        symbol="BTCUSDT",
+        side="buy",
+        qty=0.25,
+        price=21_000.0,
+        status="open",
+        client_ts=ts,
+        exchange_ts=None,
+        idemp_key="open-order",
+    )
+
+    source = InternalStateSource()
+
+    balances = await source.load_balances("binance")
+    positions = await source.load_positions("binance")
+    orders = await source.load_open_orders("binance")
+
+    assert len(balances) == 1
+    balance = balances[0]
+    assert balance.asset == "USDT"
+    assert balance.total == Decimal("-30015")
+    assert balance.available == Decimal("-30015")
+
+    assert len(positions) == 1
+    position = positions[0]
+    assert position.symbol == "BTCUSDT"
+    assert position.qty == Decimal("1.5")
+    assert position.entry_price == Decimal("20000")
+    assert position.notional == Decimal("30000")
+
+    assert len(orders) == 1
+    order = orders[0]
+    assert order.client_order_id == "open-order"
+    assert order.qty == Decimal("0.25")
+    assert order.price == Decimal("21000")
+    assert order.side == "buy"
+
+    ledger.reset()
