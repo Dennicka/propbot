@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
 from app.metrics.live_guard import live_trading_guard_state
+
+logger = logging.getLogger(__name__)
 
 RuntimeProfileName = str  # "paper", "testnet.binance", "live"
 VenueId = str
@@ -95,8 +98,12 @@ class LiveTradingGuard:
         state_val = {"test_only": 0, "disabled": 1, "enabled": 2}[cfg.state]
         try:
             live_trading_guard_state.labels(runtime_profile=cfg.runtime_profile).set(state_val)
-        except Exception:  # pragma: no cover - defensive metrics update
-            pass
+        except Exception as exc:  # pragma: no cover - defensive metrics update
+            logger.warning(
+                "Failed to update live_trading_guard_state metric for profile %s: %s",
+                getattr(cfg, "runtime_profile", "unknown"),
+                exc,
+            )
 
     def get_config_view(self) -> LiveGuardConfigView:
         """Return current configuration snapshot for UI/metrics."""
