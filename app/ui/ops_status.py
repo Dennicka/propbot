@@ -7,10 +7,16 @@ from pydantic import BaseModel
 
 from app.config.profile import is_live
 from app.runtime.live_guard import LiveTradingGuard
+from app.runtime.promotion import get_promotion_status
 from app.risk.daily_loss import is_daily_loss_cap_breached
 from app.services.health_state import evaluate_health
 from app.services.live_readiness import compute_readiness
 from app.services.runtime import get_profile
+
+try:  # pragma: no cover - optional settings module
+    from app.settings import settings as app_settings
+except ImportError:  # pragma: no cover - optional settings module
+    app_settings = None
 
 
 class OpsStatusSnapshot(BaseModel):
@@ -27,6 +33,9 @@ class OpsStatusSnapshot(BaseModel):
     health_reason: str | None = None
     readiness_reason: str | None = None
     live_trading_reason: str | None = None
+    promotion_stage: str | None = None
+    promotion_reason: str | None = None
+    promotion_allowed_next_stages: list[str] | None = None
 
 
 def _join_reasons(reasons: Iterable[str]) -> str | None:
@@ -104,6 +113,8 @@ async def build_ops_status_snapshot(*, app: FastAPI | None = None) -> OpsStatusS
     else:
         live_reason = guard_view.reason or guard_view.state
 
+    promotion = get_promotion_status(app_settings)
+
     return OpsStatusSnapshot(
         runtime_profile=runtime_profile,
         is_live_profile=live_profile,
@@ -115,6 +126,9 @@ async def build_ops_status_snapshot(*, app: FastAPI | None = None) -> OpsStatusS
         health_reason=health_reason,
         readiness_reason=readiness_reason,
         live_trading_reason=live_reason,
+        promotion_stage=promotion.stage,
+        promotion_reason=promotion.reason,
+        promotion_allowed_next_stages=list(promotion.allowed_next_stages),
     )
 
 

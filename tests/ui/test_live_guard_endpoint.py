@@ -15,3 +15,6 @@ def test_live_guard_endpoint_smoke(client, monkeypatch: pytest.MonkeyPatch) -> N
     assert payload["state"] in {"enabled", "disabled", "test_only"}
     assert isinstance(payload["allowed_venues"], list)
     assert isinstance(payload["allowed_strategies"], list)
+    assert "promotion_stage" in payload
+    assert "promotion_reason" in payload
+    assert "promotion_allowed_next_stages" in payload
