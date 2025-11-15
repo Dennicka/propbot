@@ -35,6 +35,7 @@ from .routers import ui_universe
 from .routers import ui_strategy
 from .routers import ui_strategy_metrics
 from .routers import ui_status
+from .routers import ui_ops_status
 from .routers import ui_trades
 from .routers import ui_risk
 from .routers import ui_pnl_attrib
@@ -265,6 +266,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy_metrics.router)
     app.include_router(ui_status.router, prefix="/api/ui/status")
+    app.include_router(ui_ops_status.router, prefix="/api/ui/status")
     app.include_router(ui_alerts.router)
     app.include_router(ui_trades.router)
     app.include_router(ui_risk.router, prefix="/api/ui", tags=["ui"])
@@ -275,7 +277,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)
     from .opsbot import setup_notifier as setup_ops_notifier
 
-    @app.get("/api/ui/status")
+    @app.get("/api/ui/status/full")
     async def get_ui_status() -> dict[str, Any]:
         """Ops snapshot aggregating router, risk, readiness, watchdog, and alerts."""
 

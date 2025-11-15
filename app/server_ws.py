@@ -26,6 +26,7 @@ from .routers import (
     health,
     ui_config,
     opportunities,
+    ui_ops_status,
     ui_status,
     ui_stream,
     ui_recon,
@@ -68,6 +69,7 @@ app.include_router(health.router, prefix="/api")
 app.include_router(live.router, prefix="")
 app.include_router(opportunities.router, prefix="/api")
 app.include_router(ui_config.router, prefix="/api/ui")
+app.include_router(ui_ops_status.router, prefix="/api/ui/status")
 app.include_router(ui_recon.router, prefix="/api/ui/recon")
 app.include_router(ui_stream.router, prefix="/api/ui")
 app.include_router(ui_status.router, prefix="/api/ui/status")
@@ -95,7 +97,7 @@ app.include_router(hedge.router, prefix="/api/hedge")
 setup_recon_runner(app)
 
 
-@app.get("/api/ui/status")
+@app.get("/api/ui/status/full")
 async def get_ui_status() -> dict[str, Any]:
     """Ops snapshot aggregating router, risk, readiness, watchdog, and alerts."""
 
