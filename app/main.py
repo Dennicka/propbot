@@ -30,6 +30,7 @@ from .routers import (
 )
 from .routers import ui_universe
 from .routers import ui_strategy
+from .routers import ui_strategy_metrics
 from .routers import ui_status
 from .routers import ui_trades
 from .routers import ui_risk
@@ -255,6 +256,7 @@ def create_app() -> FastAPI:
     app.include_router(recon.router)
     app.include_router(exchange_watchdog.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_strategy.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(ui_strategy_metrics.router)
     app.include_router(ui_status.router, prefix="/api/ui/status")
     app.include_router(ui_alerts.router)
     app.include_router(ui_trades.router)

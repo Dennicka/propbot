@@ -41,6 +41,7 @@ from .routers import (
     ui_ops_report,
     ui_partial_hedge,
     ui_universe,
+    ui_strategy_metrics,
     arb,
     deriv,
     hedge,
@@ -77,6 +78,7 @@ app.include_router(ui_universe.router, prefix="/api/ui")
 app.include_router(ui_risk.router, prefix="/api/ui")
 app.include_router(ui_ops_report.router, prefix="/api/ui")
 app.include_router(ui_partial_hedge.router, prefix="/api/ui")
+app.include_router(ui_strategy_metrics.router)
 app.include_router(ui_alerts.router)
 app.include_router(metrics_latency.router, prefix="/metrics")
 app.include_router(arb.router, prefix="/api/arb")

@@ -439,9 +439,20 @@ def fetch_recent_fills(limit: int = 20) -> List[Dict[str, object]]:
     conn = _connect()
     rows = conn.execute(
         """
-        SELECT id, order_id, venue, symbol, side, qty, price, fee, ts
-        FROM fills
-        ORDER BY id DESC
+        SELECT
+            f.id,
+            f.order_id,
+            f.venue,
+            f.symbol,
+            f.side,
+            f.qty,
+            f.price,
+            f.fee,
+            f.ts,
+            o.idemp_key
+        FROM fills AS f
+        JOIN orders AS o ON o.id = f.order_id
+        ORDER BY f.id DESC
         LIMIT ?
         """,
         (int(limit),),
@@ -454,9 +465,20 @@ def fetch_fills_since(since: datetime | str | None = None) -> List[Dict[str, obj
     if since is None:
         rows = conn.execute(
             """
-            SELECT id, order_id, venue, symbol, side, qty, price, fee, ts
-            FROM fills
-            ORDER BY ts ASC
+            SELECT
+                f.id,
+                f.order_id,
+                f.venue,
+                f.symbol,
+                f.side,
+                f.qty,
+                f.price,
+                f.fee,
+                f.ts,
+                o.idemp_key
+            FROM fills AS f
+            JOIN orders AS o ON o.id = f.order_id
+            ORDER BY f.ts ASC
             """
         ).fetchall()
         return [dict(row) for row in rows]
@@ -466,10 +488,21 @@ def fetch_fills_since(since: datetime | str | None = None) -> List[Dict[str, obj
         ts_value = str(since)
     rows = conn.execute(
         """
-        SELECT id, order_id, venue, symbol, side, qty, price, fee, ts
-        FROM fills
-        WHERE ts >= ?
-        ORDER BY ts ASC
+        SELECT
+            f.id,
+            f.order_id,
+            f.venue,
+            f.symbol,
+            f.side,
+            f.qty,
+            f.price,
+            f.fee,
+            f.ts,
+            o.idemp_key
+        FROM fills AS f
+        JOIN orders AS o ON o.id = f.order_id
+        WHERE f.ts >= ?
+        ORDER BY f.ts ASC
         """,
         (ts_value,),
     ).fetchall()

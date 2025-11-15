@@ -656,6 +656,30 @@ def ensure_active_request(session: Session, intent: OrderIntent, request_id: str
     return intent
 
 
+def strategies_by_request_ids(
+    session: Session, request_ids: Iterable[str]
+) -> dict[str, str | None]:
+    cleaned: set[str] = set()
+    for value in request_ids:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            cleaned.add(text)
+    if not cleaned:
+        return {}
+    rows = session.execute(
+        select(OrderRequestLedger.request_id, OrderIntent.strategy)
+        .join(OrderIntent, OrderIntent.intent_id == OrderRequestLedger.intent_id)
+        .where(OrderRequestLedger.request_id.in_(cleaned))
+    ).all()
+    mapping: dict[str, str | None] = {}
+    for request_id, strategy in rows:
+        key = str(request_id)
+        mapping[key] = str(strategy) if strategy else None
+    return mapping
+
+
 __all__ = [
     "CancelIntent",
     "CancelIntentState",
@@ -681,6 +705,7 @@ __all__ = [
     "open_intent_count",
     "session_scope",
     "snapshot",
+    "strategies_by_request_ids",
     "update_cancel_state",
     "update_intent_state",
 ]

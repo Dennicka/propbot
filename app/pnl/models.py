@@ -140,6 +140,20 @@ class StrategyExposureSnapshot:
     positions_count: int
 
 
+@dataclass(slots=True)
+class StrategyPerformanceSnapshot:
+    strategy_id: StrategyId
+    trades_count: int
+    winning_trades: int
+    losing_trades: int
+    gross_pnl: Decimal
+    net_pnl: Decimal
+    average_trade_pnl: Decimal
+    winrate: float
+    turnover_notional: Decimal
+    max_drawdown: Decimal | None
+
+
 def build_strategy_pnl_snapshots(
     positions: Iterable[PositionPnlSnapshot],
 ) -> list[StrategyPnlSnapshot]:
@@ -209,6 +223,7 @@ __all__ = [
     "PositionPnlSnapshot",
     "PortfolioPnlSnapshot",
     "StrategyPnlSnapshot",
+    "StrategyPerformanceSnapshot",
     "StrategyExposureSnapshot",
     "aggregate_portfolio_pnl",
     "build_strategy_pnl_snapshots",
