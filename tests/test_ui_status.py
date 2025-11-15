@@ -90,7 +90,7 @@ def test_ui_status_snapshot_endpoint(client, monkeypatch):
     monkeypatch.setattr("app.main.alerts_registry", dummy_alerts)
     monkeypatch.setattr("app.main.build_ui_config_snapshot", lambda: config_snapshot)
 
-    response = client.get("/api/ui/status")
+    response = client.get("/api/ui/status/full")
     assert response.status_code == 200
     payload = response.json()
 

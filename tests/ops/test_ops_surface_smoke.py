@@ -20,7 +20,7 @@ def test_health_endpoint_smoke() -> None:
 
 
 def test_ui_status_smoke() -> None:
-    resp = client.get("/api/ui/status")
+    resp = client.get("/api/ui/status/full")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, dict)
