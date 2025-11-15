@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from typing import Any
+
 from app.alerts.recon import emit_recon_alerts
 from app.recon.engine import build_recon_snapshot
 from app.recon.external_source import ExternalStateSource
@@ -40,6 +42,19 @@ class ReconService:
         self._external = external_source or ExternalStateSource()
 
     async def run_for_venue(self, venue_id: VenueId) -> ReconSnapshot:
+        profile_name: str | None = None
+        try:
+            from app.services.runtime import get_runtime_profile_snapshot
+
+            snapshot: dict[str, Any] = get_runtime_profile_snapshot()
+            profile_name = str(snapshot.get("name")) if snapshot else None
+        except Exception:  # pragma: no cover - runtime may not be initialised in tests
+            profile_name = None
+
+        LOGGER.info(
+            "recon.run_for_venue",
+            extra={"venue_id": venue_id, "runtime_profile": profile_name},
+        )
         balances_internal = await self._internal.load_balances(venue_id)
         positions_internal = await self._internal.load_positions(venue_id)
         orders_internal = await self._internal.load_open_orders(venue_id)
