@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -7,6 +8,8 @@ from pydantic import BaseModel
 
 from ..services import runtime
 from app.recon.service import ReconService
+from app.recon.runner import ReconRunner
+from app.recon.runner_registry import get_recon_runner
 
 router = APIRouter()
 
@@ -28,6 +31,20 @@ class UiReconSnapshot(BaseModel):
     issues_count: int
     errors_count: int
     warnings_count: int
+
+
+class UiReconRunnerVenueStatus(BaseModel):
+    venue_id: str
+    state: Literal["ok", "degraded", "failed", "unknown"]
+    last_run_ts: datetime | None = None
+    last_errors: int
+    last_warnings: int
+    last_issues_count: int
+    last_error_message: str | None = None
+
+
+class UiReconRunnerStatus(BaseModel):
+    venues: list[UiReconRunnerVenueStatus]
 
 
 @router.get("/status")
@@ -81,4 +98,25 @@ async def get_recon_snapshot(
         issues_count=len(issues),
         errors_count=errors,
         warnings_count=warnings,
+    )
+
+
+@router.get("/runner-status", response_model=UiReconRunnerStatus)
+async def get_recon_runner_status(
+    runner: ReconRunner = Depends(get_recon_runner),
+) -> UiReconRunnerStatus:
+    statuses = runner.get_all_statuses()
+    return UiReconRunnerStatus(
+        venues=[
+            UiReconRunnerVenueStatus(
+                venue_id=status.venue_id,
+                state=status.state,
+                last_run_ts=status.last_run_ts,
+                last_errors=status.last_errors,
+                last_warnings=status.last_warnings,
+                last_issues_count=status.last_issues_count,
+                last_error_message=status.last_error_message,
+            )
+            for status in statuses
+        ]
     )

@@ -67,6 +67,7 @@ from .recon import (
     RECON_LAST_SEVERITY,
     RECON_STATUS_GAUGE,
 )
+from .recon_runner import recon_venue_state
 from .pretrade import PRETRADE_AUTOFIX_TOTAL, PRETRADE_BLOCKS_TOTAL, PRETRADE_CHECKS_TOTAL
 from .risk_governor import (
     increment_window as increment_risk_window,
@@ -93,6 +94,7 @@ __all__ = [
     "RECON_LAST_RUN_TS",
     "RECON_LAST_STATUS",
     "RECON_LAST_SEVERITY",
+    "recon_venue_state",
     "RISK_BREACHES_COUNTER",
     "TRADES_EXECUTED_COUNTER",
     "WATCHDOG_STATE_GAUGE",
