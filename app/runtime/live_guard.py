@@ -3,8 +3,14 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal, Sequence
 
+from app.approvals.live_toggle import (
+    LiveToggleAction,
+    LiveToggleStatus,
+    get_live_toggle_store,
+)
 from app.metrics.live_guard import live_trading_guard_state
 
 logger = logging.getLogger(__name__)
@@ -26,6 +32,14 @@ class LiveGuardConfigView:
     allowed_venues: Sequence[VenueId]
     allowed_strategies: Sequence[str]
     reason: str | None = None
+    approvals_enabled: bool | None = None
+    approvals_last_request_id: str | None = None
+    approvals_last_action: LiveToggleAction | None = None
+    approvals_last_status: LiveToggleStatus | None = None
+    approvals_last_updated_at: datetime | None = None
+    approvals_requestor_id: str | None = None
+    approvals_approver_id: str | None = None
+    approvals_resolution_reason: str | None = None
 
 
 class LiveTradingDisabledError(RuntimeError):
@@ -64,33 +78,65 @@ class LiveTradingGuard:
         env_allow = self._parse_bool(os.getenv(self._allow_live_env_var))
         allowed_venues = self._parse_list(os.getenv(self._allowed_venues_env_var))
         allowed_strategies = self._parse_list(os.getenv(self._allowed_strategies_env_var))
+        approvals_state = get_live_toggle_store().get_effective_state()
 
-        if profile.startswith("paper") or profile.startswith("testnet"):
+        def _build_config(
+            *,
+            state: LiveGuardState,
+            allow_live: bool,
+            allowed_venues_value: Sequence[str],
+            allowed_strategies_value: Sequence[str],
+            reason: str | None,
+        ) -> LiveGuardConfigView:
             return LiveGuardConfigView(
                 runtime_profile=profile,
+                state=state,
+                allow_live_trading=allow_live,
+                allowed_venues=allowed_venues_value,
+                allowed_strategies=allowed_strategies_value,
+                reason=reason,
+                approvals_enabled=approvals_state.enabled,
+                approvals_last_request_id=approvals_state.last_request_id,
+                approvals_last_action=approvals_state.last_action,
+                approvals_last_status=approvals_state.last_status,
+                approvals_last_updated_at=approvals_state.last_updated_at,
+                approvals_requestor_id=approvals_state.requestor_id,
+                approvals_approver_id=approvals_state.approver_id,
+                approvals_resolution_reason=approvals_state.resolution_reason,
+            )
+
+        if profile.startswith("paper") or profile.startswith("testnet"):
+            return _build_config(
                 state="test_only",
-                allow_live_trading=False,
-                allowed_venues=[],
-                allowed_strategies=[],
+                allow_live=False,
+                allowed_venues_value=[],
+                allowed_strategies_value=[],
                 reason="Runtime profile is not live (paper/testnet only)",
             )
 
         if not env_allow:
-            return LiveGuardConfigView(
-                runtime_profile=profile,
+            return _build_config(
                 state="disabled",
-                allow_live_trading=False,
-                allowed_venues=[],
-                allowed_strategies=[],
+                allow_live=False,
+                allowed_venues_value=[],
+                allowed_strategies_value=[],
                 reason=f"{self._allow_live_env_var}=false or unset",
             )
 
-        return LiveGuardConfigView(
-            runtime_profile=profile,
+        if not approvals_state.enabled:
+            return _build_config(
+                state="disabled",
+                allow_live=False,
+                allowed_venues_value=allowed_venues,
+                allowed_strategies_value=allowed_strategies,
+                reason="two-man approvals not granted",
+            )
+
+        return _build_config(
             state="enabled",
-            allow_live_trading=True,
-            allowed_venues=allowed_venues,
-            allowed_strategies=allowed_strategies,
+            allow_live=True,
+            allowed_venues_value=allowed_venues,
+            allowed_strategies_value=allowed_strategies,
             reason=None,
         )
 

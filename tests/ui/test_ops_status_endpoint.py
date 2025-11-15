@@ -18,6 +18,8 @@ def test_ops_status_snapshot_endpoint(client, monkeypatch):
             "market_data_ok",
             "live_trading_allowed",
             "pnl_cap_hit",
+            "live_approvals_enabled",
+            "live_approvals_last_status",
             "health_reason",
             "readiness_reason",
             "live_trading_reason",

@@ -24,6 +24,8 @@ class LiveSafetySnapshot(BaseModel):
     promotion_stage: str | None = None
     promotion_reason: str | None = None
     promotion_allowed_next_stages: list[str] | None = None
+    live_approvals_enabled: bool | None = None
+    live_approvals_last_status: str | None = None
 
 
 def _derive_guard_state(config: LiveGuardConfigView) -> str:
@@ -56,4 +58,6 @@ def build_live_safety_snapshot(
         promotion_stage=promotion.stage,
         promotion_reason=promotion.reason,
         promotion_allowed_next_stages=list(promotion.allowed_next_stages),
+        live_approvals_enabled=config.approvals_enabled,
+        live_approvals_last_status=config.approvals_last_status,
     )
