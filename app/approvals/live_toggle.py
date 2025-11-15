@@ -28,6 +28,20 @@ class LiveToggleRequest:
     resolution_reason: Optional[str]
 
 
+@dataclass(slots=True)
+class LiveToggleEffectiveState:
+    """Aggregated state for live approvals."""
+
+    enabled: bool
+    last_action: LiveToggleAction | None
+    last_status: LiveToggleStatus | None
+    last_updated_at: Optional[datetime]
+    last_request_id: Optional[str]
+    requestor_id: Optional[str]
+    approver_id: Optional[str]
+    resolution_reason: Optional[str]
+
+
 class LiveToggleStore:
     """Простой in-memory store для заявок на live-тоггл (two-man rule)."""
 
@@ -120,6 +134,33 @@ class LiveToggleStore:
             request.updated_at = now
             return request
 
+    def get_effective_state(self) -> LiveToggleEffectiveState:
+        with self._lock:
+            if not self._requests:
+                return LiveToggleEffectiveState(
+                    enabled=False,
+                    last_action=None,
+                    last_status=None,
+                    last_updated_at=None,
+                    last_request_id=None,
+                    requestor_id=None,
+                    approver_id=None,
+                    resolution_reason=None,
+                )
+            latest_request = max(self._requests.values(), key=lambda item: item.updated_at)
+
+        enabled = latest_request.status == "approved" and latest_request.action == "enable_live"
+        return LiveToggleEffectiveState(
+            enabled=enabled,
+            last_action=latest_request.action,
+            last_status=latest_request.status,
+            last_updated_at=latest_request.updated_at,
+            last_request_id=latest_request.id,
+            requestor_id=latest_request.requestor_id,
+            approver_id=latest_request.approver_id,
+            resolution_reason=latest_request.resolution_reason,
+        )
+
 
 _live_toggle_store = LiveToggleStore()
 
@@ -130,6 +171,7 @@ def get_live_toggle_store() -> LiveToggleStore:
 
 __all__ = [
     "LiveToggleAction",
+    "LiveToggleEffectiveState",
     "LiveToggleRequest",
     "LiveToggleStatus",
     "LiveToggleStore",

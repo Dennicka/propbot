@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.approvals.live_toggle import LiveToggleEffectiveState
 from app.runtime.live_guard import LiveTradingDisabledError, LiveTradingGuard
 
 
@@ -13,6 +14,24 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "LIVE_TRADING_ALLOWED_STRATEGIES",
     ]:
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _mock_approvals(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Store:
+        def get_effective_state(self) -> LiveToggleEffectiveState:
+            return LiveToggleEffectiveState(
+                enabled=True,
+                last_action="enable_live",
+                last_status="approved",
+                last_updated_at=None,
+                last_request_id="req",
+                requestor_id="alice",
+                approver_id="bob",
+                resolution_reason="approved for tests",
+            )
+
+    monkeypatch.setattr("app.runtime.live_guard.get_live_toggle_store", lambda: _Store())
 
 
 def test_live_guard_blocks_live_when_env_flag_not_set() -> None:

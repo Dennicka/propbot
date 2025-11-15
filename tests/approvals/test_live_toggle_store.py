@@ -57,3 +57,56 @@ def test_reject_request_from_other_user_changes_status() -> None:
     assert result.status == "rejected"
     assert result.approver_id == "user2"
     assert result.resolution_reason == "not now"
+
+
+def test_effective_state_no_requests_disabled() -> None:
+    store = LiveToggleStore()
+
+    state = store.get_effective_state()
+
+    assert state.enabled is False
+    assert state.last_action is None
+    assert state.last_status is None
+    assert state.last_updated_at is None
+    assert state.last_request_id is None
+    assert state.requestor_id is None
+    assert state.approver_id is None
+    assert state.resolution_reason is None
+
+
+def test_effective_state_last_approved_enable_wins() -> None:
+    store = LiveToggleStore()
+    first = store.create_request(action="disable_live", requestor_id="user1")
+    store.reject_request(request_id=first.id, approver_id="ops", resolution_reason="deny")
+
+    second = store.create_request(action="enable_live", requestor_id="user2")
+    store.approve_request(request_id=second.id, approver_id="ops2", resolution_reason="ok")
+
+    state = store.get_effective_state()
+
+    assert state.enabled is True
+    assert state.last_action == "enable_live"
+    assert state.last_status == "approved"
+    assert state.last_request_id == second.id
+    assert state.requestor_id == "user2"
+    assert state.approver_id == "ops2"
+    assert state.resolution_reason == "ok"
+
+
+def test_effective_state_last_approved_disable_wins() -> None:
+    store = LiveToggleStore()
+    enable = store.create_request(action="enable_live", requestor_id="user1")
+    store.approve_request(request_id=enable.id, approver_id="ops1")
+
+    disable = store.create_request(action="disable_live", requestor_id="user1")
+    store.approve_request(request_id=disable.id, approver_id="ops2", resolution_reason="off")
+
+    state = store.get_effective_state()
+
+    assert state.enabled is False
+    assert state.last_action == "disable_live"
+    assert state.last_status == "approved"
+    assert state.last_request_id == disable.id
+    assert state.requestor_id == "user1"
+    assert state.approver_id == "ops2"
+    assert state.resolution_reason == "off"

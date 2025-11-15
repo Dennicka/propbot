@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends
@@ -27,6 +28,14 @@ class UiLiveGuardConfig(BaseModel):
     promotion_stage: str | None = None
     promotion_reason: str | None = None
     promotion_allowed_next_stages: list[str] | None = None
+    approvals_enabled: bool | None = None
+    approvals_last_request_id: str | None = None
+    approvals_last_action: str | None = None
+    approvals_last_status: str | None = None
+    approvals_last_updated_at: datetime | None = None
+    approvals_requestor_id: str | None = None
+    approvals_approver_id: str | None = None
+    approvals_resolution_reason: str | None = None
 
 
 class UiPromotionStatus(BaseModel):
@@ -58,6 +67,14 @@ async def get_live_guard_config(
         promotion_stage=promotion.stage,
         promotion_reason=promotion.reason,
         promotion_allowed_next_stages=list(promotion.allowed_next_stages),
+        approvals_enabled=cfg.approvals_enabled,
+        approvals_last_request_id=cfg.approvals_last_request_id,
+        approvals_last_action=cfg.approvals_last_action,
+        approvals_last_status=cfg.approvals_last_status,
+        approvals_last_updated_at=cfg.approvals_last_updated_at,
+        approvals_requestor_id=cfg.approvals_requestor_id,
+        approvals_approver_id=cfg.approvals_approver_id,
+        approvals_resolution_reason=cfg.approvals_resolution_reason,
     )
 
 

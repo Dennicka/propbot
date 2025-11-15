@@ -19,6 +19,8 @@ def test_live_safety_endpoint_snapshot(client, monkeypatch: pytest.MonkeyPatch) 
             "promotion_stage",
             "promotion_reason",
             "promotion_allowed_next_stages",
+            "live_approvals_enabled",
+            "live_approvals_last_status",
         ]
     ).issubset(payload.keys())
 
@@ -26,3 +28,5 @@ def test_live_safety_endpoint_snapshot(client, monkeypatch: pytest.MonkeyPatch) 
     assert isinstance(payload["is_live_profile"], bool)
     assert isinstance(payload["live_trading_allowed"], bool)
     assert isinstance(payload["live_trading_guard_state"], str)
+    assert "live_approvals_enabled" in payload
+    assert "live_approvals_last_status" in payload

@@ -29,6 +29,8 @@ class OpsStatusSnapshot(BaseModel):
     market_data_ok: bool | None = None
     live_trading_allowed: bool | None = None
     pnl_cap_hit: bool | None = None
+    live_approvals_enabled: bool | None = None
+    live_approvals_last_status: str | None = None
 
     health_reason: str | None = None
     readiness_reason: str | None = None
@@ -123,6 +125,8 @@ async def build_ops_status_snapshot(*, app: FastAPI | None = None) -> OpsStatusS
         market_data_ok=market_data_ok,
         live_trading_allowed=live_allowed,
         pnl_cap_hit=bool(is_daily_loss_cap_breached()),
+        live_approvals_enabled=guard_view.approvals_enabled,
+        live_approvals_last_status=guard_view.approvals_last_status,
         health_reason=health_reason,
         readiness_reason=readiness_reason,
         live_trading_reason=live_reason,
