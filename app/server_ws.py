@@ -11,13 +11,14 @@ from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
 
 from app.alerts.registry import REGISTRY as alerts_registry
+from app.api.ui import alerts as ui_alerts
 from app.market.watchdog import watchdog as market_watchdog
 from app.ops.status_snapshot import build_ops_snapshot, ops_snapshot_to_dict
 from app.readiness.live import registry
+from app.recon.background import setup_recon_runner
 from app.risk.risk_governor import get_risk_governor
 from app.services import runtime
 from app.ui.config_snapshot import build_ui_config_snapshot
-from app.api.ui import alerts as ui_alerts
 
 from .util.logging import setup_logging
 from .services.status import get_status_overview, get_status_components, get_status_slo
@@ -86,6 +87,8 @@ app.include_router(metrics_latency.router, prefix="/metrics")
 app.include_router(arb.router, prefix="/api/arb")
 app.include_router(deriv.router, prefix="/api/deriv")
 app.include_router(hedge.router, prefix="/api/hedge")
+
+setup_recon_runner(app)
 
 
 @app.get("/api/ui/status")

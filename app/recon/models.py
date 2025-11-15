@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal, Sequence
 
 VenueId = str
 Symbol = str
+
+ReconRunnerVenueState = Literal["ok", "degraded", "failed", "unknown"]
 
 ReconIssueSeverity = Literal["info", "warning", "error"]
 ReconIssueKind = Literal[
@@ -84,9 +87,23 @@ class ReconSnapshot:
     issues: Sequence[ReconIssue]
 
 
+@dataclass(slots=True)
+class ReconVenueStatus:
+    """Aggregated recon status for a single venue."""
+
+    venue_id: VenueId
+    state: ReconRunnerVenueState
+    last_run_ts: datetime | None
+    last_errors: int
+    last_warnings: int
+    last_issues_count: int
+    last_error_message: str | None = None
+
+
 __all__ = [
     "VenueId",
     "Symbol",
+    "ReconRunnerVenueState",
     "ReconIssueSeverity",
     "ReconIssueKind",
     "ExchangeBalanceSnapshot",
@@ -94,4 +111,5 @@ __all__ = [
     "ExchangeOrderSnapshot",
     "ReconIssue",
     "ReconSnapshot",
+    "ReconVenueStatus",
 ]
