@@ -26,6 +26,7 @@ from .routers import (
     ui_partial_hedge,
     ui_runtime,
     ui_live_safety,
+    ui_live_approvals,
     ui_recon,
     ui_router_decisions,
     ui_secrets,
@@ -41,6 +42,7 @@ from .routers import ui_risk
 from .routers import ui_pnl_attrib
 from .routers import exchange_watchdog
 from .routers.dashboard import router as dashboard_router
+from .routers import ops_live_toggle
 from .api.ui import alerts as ui_alerts
 from .api.ui import pretrade as ui_pretrade
 from .api.ui import readiness as ui_readiness
@@ -256,6 +258,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_ops_report.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_partial_hedge.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_live_safety.router, prefix="/api/ui", tags=["ui"])
+    app.include_router(ui_live_approvals.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_runtime.router)
     app.include_router(ui_pnl_attrib.router, prefix="/api/ui", tags=["ui"])
     app.include_router(ui_recon.router, prefix="/api/ui/recon", tags=["ui"])
@@ -273,6 +276,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_pretrade.router)
     app.include_router(ui_readiness.router)
     app.include_router(ui_system_status.router)
+    app.include_router(ops_live_toggle.router)
     app.include_router(arb.router, prefix="/api/arb", tags=["arb"])
     app.include_router(dashboard_router)
     from .opsbot import setup_notifier as setup_ops_notifier
